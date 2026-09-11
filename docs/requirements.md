@@ -35,6 +35,7 @@
 | 项目 | 选型 |
 |---|---|
 | 框架 | Python + FastAPI |
+| 包管理 | uv（uv.lock 锁文件 + 内建虚拟环境，保证可复现） |
 | ORM | SQLAlchemy 2.0（async） |
 | 驱动 | asyncpg |
 | 迁移 | Alembic |
@@ -154,18 +155,21 @@ kima/
 9. **客户端状态**：不引 zustand。导航/选中状态走 URL 参数，服务端数据走 react-query，仅 AI 侧栏开关、主题等极少量全局 UI 状态用 React Context。
 10. **样式**：SCSS + CSS Modules（`.module.scss`）。设计令牌用 CSS 自定义属性（`:root`）而非 SCSS 变量，以支持将来暗色主题/换肤的运行时切换。
 11. **词法检索**：PostgreSQL 中文全文检索扩展（pg_jieba，备选 zhparser），与 pgvector 同库。理由：dense 与 lexical 单一数据源、事务一致，是生产级做法；自建 Postgres 镜像编译扩展更能体现工程能力（面向面试展示）。注意 `ts_rank` 为 PG 全文检索打分，非严格 Okapi BM25。
+12. **Postgres 镜像节奏**：模块 1 先用官方 `pgvector/pgvector` 镜像跑通链路，词法检索的 pg_jieba 自建镜像推迟到模块 5 再编译。理由：降低起步复杂度与调试成本，先验证其余链路，基础设施一次性定型反而拖慢节奏。
+13. **Python 包管理**：uv。理由：极快、有锁文件（uv.lock）、内建虚拟环境，最契合「可复现、可运维」的工程展示目标。
+14. **集成抽象形态**：LLM / Embedding / MinerU 三接口统一用 **async + Protocol**（结构化鸭子类型）。理由：与 FastAPI / asyncpg 的 async 生态一致，LLM/Embedding 的 IO 调用不阻塞事件循环；Protocol 避免继承耦合。
 
 ---
 
 ## 8. 待办 / 下一步
 
-**模块 1：基础设施**（下次对话开始）：
+**模块 1：基础设施**（已拆细对齐，可开工）：
 
-1. 前后端脚手架（Vite 项目 + FastAPI 项目结构）
-2. `docker-compose.yml`（PostgreSQL + pgvector）
-3. 数据模型骨架 + Alembic 迁移
-4. LLM（DeepSeek）/ Embedding（SiliconFlow）/ MinerU 三个抽象接口
-5. 前端布局骨架（左导航 + 主内容区 + 右侧 AI 侧栏）
-6. 健康检查与配置管理（环境变量注入）
+- **1.1 仓库骨架**：monorepo 根（`docker-compose.yml` / `.gitignore` / `.env.example` / `README.md`）+ `backend/pyproject.toml` + `frontend/package.json`；`ruff`（Py）+ `eslint/prettier`（TS）
+- **1.2 后端脚手架**：`app/` 分层目录 + `main.py`；`pydantic-settings` 读环境变量；`/health` 健康检查（含 DB ping）；结构化日志
+- **1.3 数据库**：docker-compose 起官方 `pgvector/pgvector` 镜像；SQLAlchemy 2.0 async engine + session；Alembic 初始化 + 首个基线迁移
+- **1.4 三个抽象接口**（`integrations/`，async + Protocol）：`LLMClient` / `EmbeddingClient` / `DocumentParser`，各配 fake 实现打通链路
+- **1.5 前端骨架**：Vite + React 18 + TS + react-router + react-query + SCSS Modules；左导航 + 主区 + 右侧 AI 侧栏（Context 开关）；`:root` 设计令牌；空路由占位
+- **1.6 验收**：`docker compose up` 一键跑通 / `/health` 含 DB OK / Alembic upgrade 成功 / 前端 dev server 渲染布局
 
-> 详细实现方案在开始模块 1 前会先拆细、与用户逐项对齐后再写代码。
+> 已锁定：Postgres 先用官方 pgvector 镜像（词法 pg_jieba 模块 5 再自建）；包管理 uv；集成抽象 async + Protocol。
