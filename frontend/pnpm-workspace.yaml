@@ -1,0 +1,8 @@
+# pnpm 11+ 的 pnpm 自身配置放在这里（.npmrc 只读 auth/registry，会被忽略）。
+# 关闭 minimumReleaseAge：本项目依赖由 pnpm-lock.yaml + CI 锁定，无需 24h 发布冷却。
+packages:
+  - .
+allowBuilds:
+  '@parcel/watcher': true
+  esbuild: true
+minimumReleaseAge: 0

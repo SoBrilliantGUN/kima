@@ -1,0 +1,21 @@
+.panel {
+  width: 0;
+  overflow: hidden;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+  transition: width 0.2s ease;
+}
+
+.open {
+  width: 320px;
+}
+
+.header {
+  padding: var(--space-4);
+  font-weight: var(--font-weight-bold);
+}
+
+.body {
+  padding: var(--space-4);
+  color: var(--color-text-secondary);
+}
