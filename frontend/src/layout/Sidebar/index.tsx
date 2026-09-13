@@ -1,7 +1,7 @@
 import type { ComponentType } from 'react'
 import { NavLink } from 'react-router-dom'
 
-import { BookIcon, FileTextIcon, GlobeIcon, SparkleIcon, type IconProps } from '@/components/icons'
+import { BookIcon, FileTextIcon, SparkleIcon, type IconProps } from '@/components/icons'
 import styles from './index.module.scss'
 
 interface NavItem {
@@ -15,7 +15,6 @@ const items: NavItem[] = [
   { to: '/', label: 'kima', end: true, Icon: SparkleIcon },
   { to: '/knowledge-bases', label: '知识库', Icon: BookIcon },
   { to: '/notes', label: '笔记', Icon: FileTextIcon },
-  { to: '/browse', label: '浏览', Icon: GlobeIcon },
 ]
 
 export function Sidebar() {
