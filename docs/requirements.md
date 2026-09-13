@@ -1,7 +1,7 @@
 # kima — 项目需求与技术方案
 
 > 记录日期：2026-09-10
-> 状态：需求已全部锁定，等待从「模块 1：基础设施」开始实现
+> 状态：需求已锁定；模块 1（基础设施）、模块 2（知识库管理）已实现，下一步「模块 3：笔记/编辑器」
 > 本文档记录本次讨论的完整结论，作为后续逐模块实现的需求基线
 
 ---
@@ -103,14 +103,14 @@ kima/
 
 依赖关系：知识库是地基 → 文档/笔记填内容 → 向量化产出检索能力 → 问答/搜索消费它。
 
-| # | 模块 | 说明 |
-|---|---|---|
-| 1 | **基础设施** | 前后端脚手架、Docker 起 Postgres(pgvector)、Alembic、LLM/Embedding/MinerU 三个抽象接口、前端布局骨架 |
-| 2 | **知识库管理** | 知识库 CRUD + 前端页面 |
-| 3 | **笔记/编辑器** | 笔记 CRUD + TipTap Markdown 编辑器 |
-| 4 | **文档解析与归档** | 接入 MinerU API：上传 PDF/URL/Word → 解析 → 分块 → 向量化入库 |
-| 5 | **AI 智能问答** | Advanced RAG（查询改写 + 混合检索 + RRF + rerank + 生成引用），预留 Agent 接口 |
-| 6 | **全局搜索** | 跨知识库/笔记混合检索（复用模块 4 的向量能力） |
+| # | 模块 | 说明 | 状态 |
+|---|---|---|---|
+| 1 | **基础设施** | 前后端脚手架、Docker 起 Postgres(pgvector)、Alembic、LLM/Embedding/MinerU 三个抽象接口、前端布局骨架 | ✅ 完成 |
+| 2 | **知识库管理** | 知识库 CRUD + 前端页面 | ✅ 完成 |
+| 3 | **笔记/编辑器** | 笔记 CRUD + TipTap Markdown 编辑器 | 待做 |
+| 4 | **文档解析与归档** | 接入 MinerU API：上传 PDF/URL/Word → 解析 → 分块 → 向量化入库 | 待做 |
+| 5 | **AI 智能问答** | Advanced RAG（查询改写 + 混合检索 + RRF + rerank + 生成引用），预留 Agent 接口 | 待做 |
+| 6 | **全局搜索** | 跨知识库/笔记混合检索（复用模块 4 的向量能力） | 待做 |
 
 ### 模块 5 RAG 细节（Advanced RAG）
 
@@ -144,32 +144,29 @@ kima/
 
 ## 7. 关键决策记录（含理由）
 
-1. **前端视觉**：结构沿用 ima（左导航 + 主区 + 右侧 AI 侧栏），配色/字体/细节做自己的设计语言。
-2. **AI 面板形态**：全局右侧侧栏（copilot 形态，任何页面可呼出，可针对当前知识库/文档提问）。
+1. **前端视觉**：界面尽量复刻 ima（窄图标侧栏 + 知识库页「左列表 + 右问答」+ 简洁白蓝视觉），仅删减单用户不适用的功能（共享知识库/知识库广场/微信生态导入/成员权限/多端同步等），不做自己的设计语言。
+2. **AI 助手形态**：复刻 ima，无独立「AI」按钮。AI 由两处承载——① `kima` 首页 tab（全局 AI 问答主页，模块 5 实现）；② 知识库页右侧常驻问答面板（针对当前知识库/文档提问）。全局「浮窗 copilot」（上下文感知的 Agent 形态）作为后补、暂不做。理由：ima 的 AI 入口是「ima 首页 tab + 知识库右问答 + 浮窗 copilot」，并不存在顶栏「AI」按钮；原「全局可呼出侧栏」是与 ima 不符的过度设计。
 3. **RAG 路线**：v1 直接做 Advanced RAG（查询改写 + 向量/词法混合检索 + RRF + rerank + 生成引用），Agentic 用 LangGraph 后补，不用 LlamaIndex。理由：数据管道自定义，LlamaIndex 价值有限；LangGraph 是 Agentic 正统编排，将来只在编排层替换即可。
 4. **MinerU 接入**：走托管 API，避免本地重模型。后端抽象为可配置解析客户端。
 5. **编辑器**：Markdown 编辑器（TipTap），不做类 Notion 块级编辑器（工作量大，后续可迭代）。
 6. **文档类型**：PDF、网页链接、Word/文本；图片 OCR 可选（MinerU 自带 OCR，顺带处理）。
 7. **存储**：PostgreSQL + pgvector（而非 SQLite+ChromaDB），生产级、可平滑演进。
 8. **用户体系**：单用户无鉴权，但数据库/接口层预留 user 维度以便后续升级多用户。
-9. **客户端状态**：不引 zustand。导航/选中状态走 URL 参数，服务端数据走 react-query，仅 AI 侧栏开关、主题等极少量全局 UI 状态用 React Context。
-10. **样式**：SCSS + CSS Modules（`.module.scss`）。设计令牌用 CSS 自定义属性（`:root`）而非 SCSS 变量，以支持将来暗色主题/换肤的运行时切换。
+9. **客户端状态**：不引 zustand。导航/选中状态走 URL 参数，服务端数据走 react-query；AI 面板是否显示由路由（是否知识库页）推导，无全局 UI 状态（不引 Context）。
+10. **样式**：SCSS + CSS Modules（`.module.scss`）。设计令牌用 CSS 自定义属性（`:root`）统一管理（不做暗色主题）。
 11. **词法检索**：PostgreSQL 中文全文检索扩展（pg_jieba，备选 zhparser），与 pgvector 同库。理由：dense 与 lexical 单一数据源、事务一致，是生产级做法；自建 Postgres 镜像编译扩展更能体现工程能力（面向面试展示）。注意 `ts_rank` 为 PG 全文检索打分，非严格 Okapi BM25。
 12. **Postgres 镜像节奏**：模块 1 先用官方 `pgvector/pgvector` 镜像跑通链路，词法检索的 pg_jieba 自建镜像推迟到模块 5 再编译。理由：降低起步复杂度与调试成本，先验证其余链路，基础设施一次性定型反而拖慢节奏。
 13. **Python 包管理**：uv。理由：极快、有锁文件（uv.lock）、内建虚拟环境，最契合「可复现、可运维」的工程展示目标。
 14. **集成抽象形态**：LLM / Embedding / MinerU 三接口统一用 **async + Protocol**（结构化鸭子类型）。理由：与 FastAPI / asyncpg 的 async 生态一致，LLM/Embedding 的 IO 调用不阻塞事件循环；Protocol 避免继承耦合。
+15. **导航信息架构对齐 ima**：侧栏一级导航复刻 ima 的单用户裁剪版，顺序为 `kima`（首页 = AI 问答主页，默认落地页）/ `知识库` / `笔记` / `浏览`。其中「问答」并入 `kima` 首页、「搜索」降为知识库内检索能力（模块 6 仍做、不占顶层 tab）、「浏览」先以占位页呈现（功能后置到模块 4/5）、「发现」因多用户裁掉。理由：决策 #1 只复刻了视觉（窄图标栏），未复刻信息架构；ima 侧栏是「产品功能入口」而非「模块清单」，命名/结构应与产品对齐。
+16. **知识库页三栏布局**：复刻 ima 的 master-detail 三栏——`[图标导航 64px] [知识库列表 300px] [内容列表 550px] [问答面板 剩余空间]`，三栏同屏。选中知识库走 URL（`/knowledge-bases/:id`，`/knowledge-bases` 重定向到第一个）；内容列表展示当前知识库的内容（见 #18），问答面板针对当前知识库提问。
+17. **默认知识库 + 删除规则**：应用启动（lifespan）时幂等预置「我的知识库」（`#5B8DEF`），保证始终至少一个知识库；**不能删除最后一个知识库**（后端 409 `last_knowledge_base` + 前端隐藏删除按钮）。
+18. **文档 = 笔记（同一类内容）**：文档和笔记是同一类东西，**不分 tab**——笔记即 markdown 文档，与 pdf/html/网页剪藏等统一放在同一列表。数据模型在模块 3/4 落地时据此设计（倾向合并为单一内容概念，用 `type` 区分 markdown/pdf/…）。
 
 ---
 
 ## 8. 待办 / 下一步
 
-**模块 1：基础设施**（已拆细对齐，可开工）：
-
-- **1.1 仓库骨架**：monorepo 根（`docker-compose.yml` / `.gitignore` / `.env.example` / `README.md`）+ `backend/pyproject.toml` + `frontend/package.json`；`ruff`（Py）+ `eslint/prettier`（TS）
-- **1.2 后端脚手架**：`app/` 分层目录 + `main.py`；`pydantic-settings` 读环境变量；`/health` 健康检查（含 DB ping）；结构化日志
-- **1.3 数据库**：docker-compose 起官方 `pgvector/pgvector` 镜像；SQLAlchemy 2.0 async engine + session；Alembic 初始化 + 首个基线迁移
-- **1.4 三个抽象接口**（`integrations/`，async + Protocol）：`LLMClient` / `EmbeddingClient` / `DocumentParser`，各配 fake 实现打通链路
-- **1.5 前端骨架**：Vite + React 18 + TS + react-router + react-query + SCSS Modules；左导航 + 主区 + 右侧 AI 侧栏（Context 开关）；`:root` 设计令牌；空路由占位
-- **1.6 验收**：`docker compose up` 一键跑通 / `/health` 含 DB OK / Alembic upgrade 成功 / 前端 dev server 渲染布局
-
-> 已锁定：Postgres 先用官方 pgvector 镜像（词法 pg_jieba 模块 5 再自建）；包管理 uv；集成抽象 async + Protocol。
+- 模块 1（基础设施）✅ 已实现 — 详见 `docs/module-1-infrastructure.md`
+- 模块 2（知识库管理）✅ 已实现 — 详见 `docs/module-2-knowledge-bases.md`
+- **下一步：模块 3（笔记/编辑器）** — 笔记 CRUD + TipTap Markdown 编辑器

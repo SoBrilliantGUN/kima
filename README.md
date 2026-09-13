@@ -45,7 +45,7 @@ docker exec kima-db pg_isready -U kima -d kima
 cd backend
 uv sync                        # 安装依赖（首次）
 cp .env.example .env           # 按需改 DATABASE_URL 等
-uv run alembic upgrade head    # 建 baseline（含 CREATE EXTENSION vector）
+uv run alembic upgrade head    # 建表（baseline + knowledge_bases，含 CREATE EXTENSION vector）
 uv run uvicorn app.main:app --reload
 ```
 
@@ -57,12 +57,22 @@ pnpm install
 pnpm dev
 ```
 
-浏览器打开 http://localhost:5173 （默认跳转到知识库占位页）。
+浏览器打开 http://localhost:5173 （默认显示 kima 首页；知识库在 /knowledge-bases）。
 
 ## 健康检查
 
 - `GET /health/live` — 进程存活，恒 200
 - `GET /health/ready` — 依赖就绪，DB 可达 200 / 不可达 503
+
+## 知识库 API（模块 2）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/knowledge-bases?limit=&offset=` | 列表（分页） |
+| POST | `/api/knowledge-bases` | 新建（名称唯一，重复 409） |
+| GET | `/api/knowledge-bases/{id}` | 详情 |
+| PATCH | `/api/knowledge-bases/{id}` | 更新 |
+| DELETE | `/api/knowledge-bases/{id}` | 删除 |
 
 ## 质量门禁
 
@@ -81,10 +91,10 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时自动跑以上检查 + docke
 | 模块 | 内容 | 状态 |
 |---|---|---|
 | 1 | 基础设施（脚手架 + DB + 三个集成抽象 + 前端布局） | ✅ 完成 |
-| 2 | 知识库管理 CRUD | 待做 |
+| 2 | 知识库管理 CRUD | ✅ 完成 |
 | 3 | 笔记 / TipTap 编辑器 | 待做 |
 | 4 | 文档解析与归档（MinerU） | 待做 |
 | 5 | AI 智能问答（Advanced RAG） | 待做 |
 | 6 | 全局搜索 | 待做 |
 
-详细需求见 `docs/requirements.md`，模块 1 设计见 `docs/module-1-infrastructure.md`。
+详细需求见 `docs/requirements.md`；模块 1 设计见 `docs/module-1-infrastructure.md`，模块 2 设计见 `docs/module-2-knowledge-bases.md`。

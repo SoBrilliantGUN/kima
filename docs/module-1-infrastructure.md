@@ -19,7 +19,7 @@
 | 1 | `docker compose up -d` 拉起 pgvector 容器且 `pg_isready` 通过，`vector` 扩展已建 |
 | 2 | `uv sync` 后后端可启动，`GET /health/live` 返回 `200`，`GET /health/ready` 返回 `200` 且 `database: ok` |
 | 3 | `uv run alembic upgrade head` 成功（生成 `alembic_version` 表 + `CREATE EXTENSION vector`） |
-| 4 | 前端 `pnpm dev` 启动，布局骨架正常渲染，AI 侧栏可开合 |
+| 4 | 前端 `pnpm dev` 启动，布局骨架正常渲染（窄图标侧栏 + 主内容区） |
 | 5 | 三个集成接口的 fake 实现通过 mypy 静态检查与冒烟测试 |
 | 6 | CI 全绿：`ruff` + `mypy` + `pytest`（后端）、`eslint` + `tsc --noEmit`（前端）零告警；`README.md` 记录一键启动步骤 |
 
@@ -81,35 +81,36 @@ backend/
 frontend/
 ├── package.json             # pnpm 管理
 ├── pnpm-lock.yaml
-├── vite.config.ts           # dev proxy /health → 后端 8000
-├── tsconfig.json
+├── vite.config.ts           # @ 别名（→ src）+ dev proxy /health、/api → 后端 8000
+├── tsconfig.json            # baseUrl/paths 配 @/* → src/*
 ├── index.html
 └── src/
     ├── main.tsx             # 挂载 + QueryClientProvider + RouterProvider
-    ├── App.tsx
+    ├── App.tsx              # 渲染 AppLayout
     ├── router.tsx           # 路由表
     ├── styles/
     │   ├── tokens.css       # :root 设计令牌（CSS 自定义属性）
     │   └── global.scss      # reset + 全局基础样式
     ├── api/
     │   ├── client.ts        # 类型化 fetch 封装（baseURL、错误处理）
-    │   └── types.ts         # 与后端 schema 对齐的 TS 类型
-    ├── context/
-    │   └── UiContext.tsx    # AI 侧栏开关、主题（暗色预留）
-    ├── layout/
-    │   ├── AppLayout.tsx    # 三段式布局容器
-    │   ├── AppLayout.module.scss
-    │   ├── Sidebar.tsx      # 左导航
-    │   ├── Sidebar.module.scss
-    │   ├── AiPanel.tsx      # 右侧 AI 侧栏
-    │   └── AiPanel.module.scss
+    │   ├── types.ts         # 与后端 schema 对齐的 TS 类型
+    │   └── knowledgeBases.ts # 知识库端点封装（模块 2）
     ├── hooks/
-    │   └── useHealth.ts     # react-query 调用 /health/ready 示例
+    │   ├── useHealth.ts     # react-query 调用 /health/ready
+    │   └── useKnowledgeBases.ts # 知识库 hooks（模块 2）
+    ├── layout/
+    │   ├── AppLayout/
+    │   │   ├── index.tsx    # 两段式布局容器（Sidebar + main）
+    │   │   └── index.module.scss
+    │   └── Sidebar/
+    │       ├── index.tsx    # 64px 窄图标侧栏
+    │       └── index.module.scss
     └── pages/
-        ├── KnowledgeBases.tsx   # 占位页
-        ├── Notes.tsx            # 占位页
-        ├── Search.tsx           # 占位页
-        └── Chat.tsx             # 占位页
+        ├── Home/            # kima 首页（AI 问答主页，模块 5 实现）
+        ├── Browse/          # 浏览（模块 4/5 实现）
+        ├── Notes/           # 笔记（模块 3 实现）
+        ├── KnowledgeBasePage/ # 知识库三栏页（模块 2）
+        └── KnowledgeBaseRedirect/ # /knowledge-bases 重定向（模块 2）
 ```
 
 ### 2.3 仓库根（新增 CI）
@@ -350,38 +351,38 @@ def get_document_parser(settings: Settings) -> DocumentParser: ...
 
 ## 8. 前端布局与设计令牌
 
-### 8.1 三段式布局（`layout/AppLayout`）
+### 8.1 两段式布局（`layout/AppLayout`）
 
 ```
-┌──────────┬──────────────────────┬──────────┐
-│ Sidebar  │   <Outlet/> 主内容    │ AiPanel  │
-│ 左导航    │  （知识库/笔记/搜索/  │ 右侧 AI   │
-│          │   问答 页面渲染处）    │ 侧栏(可收) │
-└──────────┴──────────────────────┴──────────┘
+┌──────────┬──────────────────────────┐
+│ Sidebar  │   <Outlet/> 主内容区      │
+│ 64px 窄  │  （各页面渲染处，布局由   │
+│ 图标侧栏  │   页面自己声明）         │
+└──────────┴──────────────────────────┘
 ```
 
-- `Sidebar`：固定宽度，导航项走 `NavLink`（`/knowledge-bases` `/notes` `/search` `/chat`），选中态用 `NavLink` 的 `isActive`。
-- `AiPanel`：默认收起（右侧滑入），开关状态存 `UiContext`；展开时占位「AI 问答」文案。
-- `UiContext`：`{ aiPanelOpen, setAiPanelOpen, theme, setTheme }`，仅此极少量全局 UI 状态，其余走 URL + react-query。
+- `AppLayout`：只做「Sidebar + main 内容槽位」，不判断路径、不关心页面样式；每个页面自己声明布局（普通页自带留白滚动，全屏页自管 flex 填满）。
+- `Sidebar`：64px 窄图标侧栏，导航项走 `NavLink`（`/`(kima) `/knowledge-bases` `/notes` `/browse`），选中态用 `isActive`（首页 `end` 精确匹配）。
+- 无独立 AI 侧栏：AI 由 `kima` 首页 tab 与知识库页右侧问答面板承载（见 requirements 决策 #2）。
 
 ### 8.2 路由（`router.tsx`）
 
 | 路径 | 页面 | 说明 |
 |---|---|---|
-| `/` | — | redirect → `/knowledge-bases` |
-| `/knowledge-bases` | KnowledgeBases | 占位 |
-| `/notes` | Notes | 占位 |
-| `/search` | Search | 占位 |
-| `/chat` | Chat | 占位 |
+| `/` | Home | kima 首页（AI 问答主页，模块 5 实现） |
+| `/knowledge-bases` | KnowledgeBaseRedirect | 重定向到第一个知识库 |
+| `/knowledge-bases/:id` | KnowledgeBasePage | 知识库三栏页 |
+| `/notes` | Notes | 笔记（模块 3 实现） |
+| `/browse` | Browse | 浏览（模块 4/5 实现） |
 
 ### 8.3 设计令牌（`styles/tokens.css`）
 
-`:root` 定义 CSS 自定义属性：颜色（`--color-bg` / `--color-surface` / `--color-text` / `--color-primary` 等）、间距刻度（`--space-1..8`）、字号/字重、圆角、阴影。暗色主题通过切换 `[data-theme="dark"]` 重定义变量实现，模块 1 只搭好令牌与 `data-theme` 挂点，不实现暗色。
+`:root` 定义 CSS 自定义属性：颜色（`--color-bg` / `--color-surface` / `--color-text` / `--color-primary` 等）、间距刻度（`--space-1..8`）、字号/字重、圆角、阴影。不做暗色主题（见 requirements 决策 #10）。
 
 ### 8.4 API client（`api/client.ts`）
 
 - 类型化 `fetch` 封装：`baseURL`（dev 下经 Vite proxy 指向后端）、统一 JSON 解析与错误抛出（`/health/*` 裸路径 + 业务 `/api` 前缀在 client 中统一处理）。
-- `types.ts` 与后端 `schemas/` 逐字段对齐（模块 1 仅 `HealthResponse`）。
+- `types.ts` 与后端 `schemas/` 逐字段对齐（`HealthResponse`、`KnowledgeBase` 等，随模块补充）。
 
 ---
 
