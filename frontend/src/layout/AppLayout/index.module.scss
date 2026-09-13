@@ -1,0 +1,12 @@
+.layout {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  height: 100vh;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
