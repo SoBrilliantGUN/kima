@@ -1,21 +1,22 @@
-import { createBrowserRouter, Navigate } from 'react-router-dom'
+import { createBrowserRouter } from 'react-router-dom'
 
-import App from './App'
-import Chat from './pages/Chat'
-import KnowledgeBases from './pages/KnowledgeBases'
-import Notes from './pages/Notes'
-import Search from './pages/Search'
+import App from '@/App'
+import Browse from '@/pages/Browse'
+import Home from '@/pages/Home'
+import KnowledgeBasePage from '@/pages/KnowledgeBasePage'
+import KnowledgeBaseRedirect from '@/pages/KnowledgeBaseRedirect'
+import Notes from '@/pages/Notes'
 
 export const router = createBrowserRouter([
   {
     path: '/',
     element: <App />,
     children: [
-      { index: true, element: <Navigate to="/knowledge-bases" replace /> },
-      { path: 'knowledge-bases', element: <KnowledgeBases /> },
+      { index: true, element: <Home /> },
+      { path: 'knowledge-bases', element: <KnowledgeBaseRedirect /> },
+      { path: 'knowledge-bases/:id', element: <KnowledgeBasePage /> },
       { path: 'notes', element: <Notes /> },
-      { path: 'search', element: <Search /> },
-      { path: 'chat', element: <Chat /> },
+      { path: 'browse', element: <Browse /> },
     ],
   },
 ])
