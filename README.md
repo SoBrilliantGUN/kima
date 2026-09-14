@@ -45,7 +45,7 @@ docker exec kima-db pg_isready -U kima -d kima
 cd backend
 uv sync                        # 安装依赖（首次）
 cp .env.example .env           # 按需改 DATABASE_URL 等
-uv run alembic upgrade head    # 建表（baseline + knowledge_bases，含 CREATE EXTENSION vector）
+uv run alembic upgrade head    # 建表（baseline + knowledge_bases + notes + note_knowledge_bases，含 CREATE EXTENSION vector）
 uv run uvicorn app.main:app --reload
 ```
 
@@ -74,6 +74,19 @@ pnpm dev
 | PATCH | `/api/knowledge-bases/{id}` | 更新 |
 | DELETE | `/api/knowledge-bases/{id}` | 删除 |
 
+## 笔记 API（模块 3）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/notes/from-url` | 网页笔记（抓取正文 + DeepSeek 摘要） |
+| POST | `/api/notes` | 新建空白笔记 |
+| GET | `/api/notes?limit=&offset=` | 列表（分页） |
+| GET | `/api/notes/{id}` | 详情 |
+| PATCH | `/api/notes/{id}` | 更新（标题/正文，自动保存） |
+| DELETE | `/api/notes/{id}` | 删除 |
+| POST | `/api/notes/{id}/knowledge-bases` | 添加到知识库（幂等） |
+| GET | `/api/knowledge-bases/{id}/contents` | 知识库内容列表（关联笔记） |
+
 ## 质量门禁
 
 ```bash
@@ -92,9 +105,9 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时自动跑以上检查 + docke
 |---|---|---|
 | 1 | 基础设施（脚手架 + DB + 三个集成抽象 + 前端布局） | ✅ 完成 |
 | 2 | 知识库管理 CRUD | ✅ 完成 |
-| 3 | 笔记 / TipTap 编辑器 | 待做 |
+| 3 | 笔记 / TipTap 编辑器 | ✅ 完成 |
 | 4 | 文档解析与归档（MinerU） | 待做 |
 | 5 | AI 智能问答（Advanced RAG） | 待做 |
 | 6 | 全局搜索 | 待做 |
 
-详细需求见 `docs/requirements.md`；模块 1 设计见 `docs/module-1-infrastructure.md`，模块 2 设计见 `docs/module-2-knowledge-bases.md`。
+详细需求见 `docs/requirements.md`；模块 1 设计见 `docs/module-1-infrastructure.md`，模块 2 设计见 `docs/module-2-knowledge-bases.md`，模块 3 设计见 `docs/module-3-notes.md`。
