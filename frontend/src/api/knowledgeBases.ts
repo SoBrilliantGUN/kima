@@ -1,5 +1,6 @@
 import { api } from '@/api/client'
 import type {
+  ContentListResponse,
   KnowledgeBase,
   KnowledgeBaseCreate,
   KnowledgeBaseListResponse,
@@ -27,4 +28,8 @@ export function updateKnowledgeBase(
 
 export function deleteKnowledgeBase(id: string): Promise<void> {
   return api.delete<void>(`/api/knowledge-bases/${id}`)
+}
+
+export function listKbContents(id: string): Promise<ContentListResponse> {
+  return api.get<ContentListResponse>(`/api/knowledge-bases/${id}/contents`)
 }

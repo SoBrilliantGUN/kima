@@ -5,6 +5,7 @@ import Home from '@/pages/Home'
 import KnowledgeBasePage from '@/pages/KnowledgeBasePage'
 import KnowledgeBaseRedirect from '@/pages/KnowledgeBaseRedirect'
 import Notes from '@/pages/Notes'
+import NotesRedirect from '@/pages/NotesRedirect'
 
 export const router = createBrowserRouter([
   {
@@ -14,7 +15,8 @@ export const router = createBrowserRouter([
       { index: true, element: <Home /> },
       { path: 'knowledge-bases', element: <KnowledgeBaseRedirect /> },
       { path: 'knowledge-bases/:id', element: <KnowledgeBasePage /> },
-      { path: 'notes', element: <Notes /> },
+      { path: 'notes', element: <NotesRedirect /> },
+      { path: 'notes/:id', element: <Notes /> },
     ],
   },
 ])

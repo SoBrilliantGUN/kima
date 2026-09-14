@@ -5,12 +5,12 @@ import {
   deleteKnowledgeBase,
   getKnowledgeBase,
   listKnowledgeBases,
+  listKbContents,
   updateKnowledgeBase,
 } from '@/api/knowledgeBases'
 import type { KnowledgeBaseCreate, KnowledgeBaseUpdate } from '@/api/types'
+import { KNOWLEDGE_BASES } from './common'
 
-// 知识库查询键的公共前缀字符串，列表与详情共用；搜索它即可看清全部影响范围
-const KNOWLEDGE_BASES = 'knowledge-bases'
 // 分页每页数量
 const PAGE_SIZE = 50
 
@@ -68,5 +68,14 @@ export function useDeleteKnowledgeBase() {
   return useMutation({
     mutationFn: (id: string) => deleteKnowledgeBase(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [KNOWLEDGE_BASES] }),
+  })
+}
+
+/** 获取某知识库的内容列表（当前含关联笔记，模块 4 增文档）。 */
+export function useKbContents(kbId: string | undefined) {
+  return useQuery({
+    queryKey: [KNOWLEDGE_BASES, kbId, 'contents'],
+    queryFn: () => listKbContents(kbId!),
+    enabled: kbId !== undefined,
   })
 }
