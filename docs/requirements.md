@@ -1,7 +1,7 @@
 # kima — 项目需求与技术方案
 
 > 记录日期：2026-09-10
-> 状态：需求已锁定；模块 1（基础设施）、模块 2（知识库管理）、模块 3（笔记/编辑器）已实现，下一步「模块 4：文档解析与归档」
+> 状态：需求已锁定；模块 1（基础设施）、模块 2（知识库管理）、模块 3（笔记/编辑器）已实现，模块 4（文档解析与归档）方案已定稿（待实现）
 > 本文档记录本次讨论的完整结论，作为后续逐模块实现的需求基线
 
 ---
@@ -108,7 +108,7 @@ kima/
 | 1 | **基础设施** | 前后端脚手架、Docker 起 Postgres(pgvector)、Alembic、LLM/Embedding/MinerU 三个抽象接口、前端布局骨架 | ✅ 完成 |
 | 2 | **知识库管理** | 知识库 CRUD + 前端页面 | ✅ 完成 |
 | 3 | **笔记/编辑器** | 笔记 CRUD + TipTap Markdown 编辑器（网页笔记采集 + 空白笔记 + 添加到知识库 + 知识库内容列表） | ✅ 完成 |
-| 4 | **文档解析与归档** | 接入 MinerU API：上传 PDF/URL/Word → 解析 → 分块 → 向量化入库 | 待做 |
+| 4 | **文档解析与归档** | 上传 PDF/URL/Word → 解析 → 内容感知父子分块 → 向量化入库（详见 `docs/module-4-documents.md`） | 方案定稿（待实现） |
 | 5 | **AI 智能问答** | Advanced RAG（查询改写 + 混合检索 + RRF + rerank + 生成引用），预留 Agent 接口 | 待做 |
 | 6 | **全局搜索** | 跨知识库/笔记混合检索（复用模块 4 的向量能力） | 待做 |
 
@@ -135,8 +135,8 @@ kima/
 |---|---|
 | `knowledge_bases` | id、名称、描述、图标/颜色、created_at、updated_at |
 | `documents` | id、kb_id、标题、来源类型(pdf/url/word)、source_url、file_path、状态(pending/processing/done/error)、正文、metadata |
-| `document_chunks` | id、document_id、kb_id、chunk_index、content、embedding(vector)、token_count |
-| `notes` | id、标题、type(markdown/url)、content_markdown、summary、source_url、created_at、updated_at |
+| `document_chunks` | id、document_id、kb_id、parent_id(自引用，父子切割)、chunk_index、content、metadata、embedding(vector，child 有/parent 无)、token_count |
+| `notes` | id、标题、content_markdown、created_at、updated_at |
 | `note_knowledge_bases` | note_id(fk→notes)、knowledge_base_id(fk→knowledge_bases)、created_at；唯一(note_id, knowledge_base_id) |
 | `chat_conversations` | id、kb_id、标题、created_at |
 | `chat_messages` | id、conversation_id、role、content、citations(jsonb)、created_at |
@@ -166,6 +166,8 @@ kima/
 
 19. **网页笔记（模块 3 先导 slice，2026-09-13）**：笔记 tab 内「新建 → 网页 → 贴 URL → 服务端抓取解析 → 生成笔记」，结果 = 标题（自动取 `og:title`/`<title>`）+ 摘要（DeepSeek 生成，失败降级截正文前 200 字）+ 可折叠正文（网页转 **Markdown**，图片不抓、保留原图链接）。采集**同步**（前端 loading + 超时）；保存后进「阅读态」（标题+摘要+可折叠正文），TipTap 编辑正文留到模块 3 其余部分；`notes.type` 用 `markdown`/`url` 区分，本次只做 `url`；删除笔记本次一并做。抓取采用「静态 trafilatura + Playwright 无头浏览器回退」两段式，覆盖 SPA 页面（详见 `docs/module-3-notes.md` §3.1）。
 
+20. **模块 4 修订（2026-09-14，详见 `docs/module-4-documents.md`）**：① 网页笔记推翻——URL 统一归入文档（`documents.source_type=pdf/word/url`），不再有网页笔记；`notes` 删 `type`/`summary`/`source_url` 三列、删 `from-url` 端点。② 文档解析按类型分发——PDF→MinerU、Word→本地、URL→复用 WebFetcher。③ 父子切割 small-to-big——`document_chunks` 自引用 `parent_id`，parent 大块存上下文不向量化、child 小块向量化，检索命中 child 回 parent。④ 内容感知分块 5 splitter（结构化递归兜底 + 表格 + 代码 AST + 法律条例 + FAQ 问答对）。⑤ 异步 DB 轮询 worker + 自建重试退避。⑥ 原文件阅读器（PDF 内嵌/Word 下载/URL 打开原网页），解析 markdown 全程不可见。⑦ 笔记向量化留模块 5。
+
 ---
 
 ## 8. 待办 / 下一步
@@ -173,4 +175,5 @@ kima/
 - 模块 1（基础设施）✅ 已实现 — 详见 `docs/module-1-infrastructure.md`
 - 模块 2（知识库管理）✅ 已实现 — 详见 `docs/module-2-knowledge-bases.md`
 - 模块 3（笔记/编辑器）✅ 已实现 — 详见 `docs/module-3-notes.md`
-- **下一步：模块 4（文档解析与归档）** — 接入 MinerU：上传 PDF/URL/Word → 解析 → 分块 → 向量化入库
+- 模块 4（文档解析与归档）📝 方案已定稿（待实现） — 详见 `docs/module-4-documents.md`：上传 PDF/URL/Word → 解析 → 内容感知父子分块 → 向量化入库
+- **下一步：实现模块 4（文档解析与归档）**

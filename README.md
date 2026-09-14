@@ -106,8 +106,10 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时自动跑以上检查 + docke
 | 1 | 基础设施（脚手架 + DB + 三个集成抽象 + 前端布局） | ✅ 完成 |
 | 2 | 知识库管理 CRUD | ✅ 完成 |
 | 3 | 笔记 / TipTap 编辑器 | ✅ 完成 |
-| 4 | 文档解析与归档（MinerU） | 待做 |
+| 4 | 文档解析与归档（PDF/URL/Word → 解析 → 分块 → 向量化） | 📝 方案定稿（待实现） |
 | 5 | AI 智能问答（Advanced RAG） | 待做 |
 | 6 | 全局搜索 | 待做 |
 
-详细需求见 `docs/requirements.md`；模块 1 设计见 `docs/module-1-infrastructure.md`，模块 2 设计见 `docs/module-2-knowledge-bases.md`，模块 3 设计见 `docs/module-3-notes.md`。
+详细需求见 `docs/requirements.md`；模块 1 设计见 `docs/module-1-infrastructure.md`，模块 2 设计见 `docs/module-2-knowledge-bases.md`，模块 3 设计见 `docs/module-3-notes.md`，模块 4 设计见 `docs/module-4-documents.md`。
+
+> 模块 4 已定稿（`docs/module-4-documents.md`）：将新增文档 API（PDF/Word/URL → 解析 → 内容感知父子分块 → 向量化入库，异步处理）；同时**删除网页笔记**——`POST /api/notes/from-url` 端点与 `notes` 表的 `type`/`summary`/`source_url` 三列将在模块 4 移除（URL 统一归入文档）。上表「笔记 API」的 from-url 在当前代码中仍存在，待模块 4 实现后移除。

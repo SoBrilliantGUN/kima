@@ -4,6 +4,8 @@
 > 状态：已评审定稿，可直接开工
 > 上游基线：`docs/requirements.md`（决策 #15/#16/#18/#19）· `docs/module-2-knowledge-bases.md`
 
+> ⚠️ **模块 4 修订（2026-09-14）**：本模块的「网页笔记」能力已在模块 4 被推翻——URL 统一归入文档（`documents.source_type=url`），不再有网页笔记；`notes` 表的 `type`/`summary`/`source_url` 三列、`POST /notes/from-url` 端点、`WebNoteFormModal`、「新建→网页」入口、url 摘要块均在模块 4 删除，笔记收敛为纯 Markdown 空白笔记。`WebFetcher` 保留给 URL 文档复用。阅读本模块时以 `docs/module-4-documents.md` §12 为准。
+
 本模块交付「**笔记**」完整能力：
 
 - **网页笔记**：`URL → 抓取 → 提取 Markdown 正文 → DeepSeek 摘要 → 存为全局笔记`
