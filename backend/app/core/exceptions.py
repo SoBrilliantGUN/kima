@@ -18,3 +18,8 @@ class NotFoundError(DomainError):
 class ConflictError(DomainError):
     status_code = 409
     code = "conflict"
+
+
+class FetchError(DomainError):
+    status_code = 422
+    code = "fetch_failed"

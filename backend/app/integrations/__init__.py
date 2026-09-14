@@ -2,7 +2,7 @@ from functools import lru_cache
 
 from app.core.config import Settings
 from app.integrations.embedding import EmbeddingClient, FakeEmbeddingClient
-from app.integrations.llm import FakeLLMClient, LLMClient
+from app.integrations.llm import DeepSeekLLMClient, FakeLLMClient, LLMClient
 from app.integrations.parser import DocumentParser, FakeDocumentParser
 
 __all__ = [
@@ -16,13 +16,17 @@ __all__ = [
 
 
 def get_llm_client(settings: Settings) -> LLMClient:
-    return _llm_client(settings.llm_provider, settings.llm_model)
+    return _llm_client(
+        settings.llm_provider, settings.llm_model, settings.llm_base_url, settings.llm_api_key
+    )
 
 
 @lru_cache(maxsize=1)
-def _llm_client(provider: str, model: str) -> LLMClient:
+def _llm_client(provider: str, model: str, base_url: str, api_key: str) -> LLMClient:
     if provider == "fake":
         return FakeLLMClient()
+    if provider == "deepseek":
+        return DeepSeekLLMClient(base_url=base_url, api_key=api_key, model=model)
     raise ValueError(f"Unsupported LLM provider: {provider}")
 
 

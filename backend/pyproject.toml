@@ -11,6 +11,9 @@ dependencies = [
     "alembic>=1.14",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
+    "httpx>=0.28",
+    "trafilatura>=2.0",
+    "playwright>=1.49",
 ]
 
 [dependency-groups]
@@ -37,6 +40,10 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["trafilatura", "trafilatura.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -4,13 +4,16 @@ import uuid
 
 from fastapi import APIRouter, Response, status
 
-from app.api.deps import KnowledgeBaseServiceDep
+from app.api.deps import KnowledgeBaseServiceDep, NoteServiceDep
 from app.schemas.knowledge_base import (
+    ContentItem,
+    ContentList,
     KnowledgeBaseCreate,
     KnowledgeBaseList,
     KnowledgeBaseRead,
     KnowledgeBaseUpdate,
 )
+from app.schemas.note import NoteRead
 from app.services.knowledge_base import LIST_LIMIT_DEFAULT
 
 router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"])
@@ -45,6 +48,18 @@ async def get_knowledge_base(
 ) -> KnowledgeBaseRead:
     kb = await service.get(kb_id)
     return KnowledgeBaseRead.model_validate(kb)
+
+
+@router.get("/{kb_id}/contents", response_model=ContentList)
+async def list_knowledge_base_contents(
+    kb_id: uuid.UUID,
+    note_service: NoteServiceDep,
+) -> ContentList:
+    notes = await note_service.list_by_kb(kb_id)
+    return ContentList(
+        items=[ContentItem(type="note", note=NoteRead.model_validate(note)) for note in notes],
+        total=len(notes),
+    )
 
 
 @router.patch("/{kb_id}", response_model=KnowledgeBaseRead)

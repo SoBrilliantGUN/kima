@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.core.db import async_session_factory
 from app.core.exceptions import DomainError
 from app.core.logging import RequestIdMiddleware, setup_logging
+from app.integrations.web import start_browser, stop_browser
 from app.repositories.knowledge_base import SqlAlchemyKnowledgeBaseRepository
 from app.services.knowledge_base import KnowledgeBaseService
 
@@ -25,7 +26,9 @@ async def seed_default_knowledge_base() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await seed_default_knowledge_base()
+    await start_browser()
     yield
+    await stop_browser()
 
 
 def create_app() -> FastAPI:

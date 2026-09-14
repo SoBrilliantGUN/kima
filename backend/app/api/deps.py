@@ -17,11 +17,21 @@ from app.integrations import get_document_parser, get_embedding_client, get_llm_
 from app.integrations.embedding import EmbeddingClient
 from app.integrations.llm import LLMClient
 from app.integrations.parser import DocumentParser
+from app.integrations.web import (
+    FallbackWebFetcher,
+    PlaywrightWebFetcher,
+    TrafilaturaWebFetcher,
+    WebFetcher,
+    get_browser,
+)
 from app.repositories.knowledge_base import (
     KnowledgeBaseRepository,
     SqlAlchemyKnowledgeBaseRepository,
 )
+from app.repositories.note import NoteRepository, SqlAlchemyNoteRepository
 from app.services.knowledge_base import KnowledgeBaseService
+from app.services.llm import Summarizer
+from app.services.note import NoteService
 
 
 def get_settings_dep() -> Settings:
@@ -62,14 +72,48 @@ def get_kb_service(
     return KnowledgeBaseService(repo)
 
 
+def get_web_fetcher_dep() -> WebFetcher:
+    """返回网页抓取器：先静态 trafilatura，正文为空时回退到 Playwright 渲染 SPA。"""
+    browser = get_browser()
+    spa = PlaywrightWebFetcher(browser) if browser is not None else None
+    return FallbackWebFetcher(TrafilaturaWebFetcher(), spa)
+
+
+def get_note_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> NoteRepository:
+    """用当前数据库会话构造笔记仓库的 SQLAlchemy 实现。"""
+    return SqlAlchemyNoteRepository(session)
+
+
+def get_summarizer_dep(
+    llm: Annotated[LLMClient, Depends(get_llm_client_dep)],
+) -> Summarizer:
+    """用 LLM 客户端构造摘要生成器（LLM 相关操作统一经此注入）。"""
+    return Summarizer(llm)
+
+
+def get_note_service(
+    repo: Annotated[NoteRepository, Depends(get_note_repository)],
+    kb_repo: Annotated[KnowledgeBaseRepository, Depends(get_kb_repository)],
+    web_fetcher: Annotated[WebFetcher, Depends(get_web_fetcher_dep)],
+    summarizer: Annotated[Summarizer, Depends(get_summarizer_dep)],
+) -> NoteService:
+    """构造笔记服务，注入仓库、知识库仓库、抓取器与摘要生成器。"""
+    return NoteService(repo, kb_repo, web_fetcher, summarizer)
+
+
 # Annotated 类型别名：把「类型 + 依赖函数」打包，路由签名直接使用这些名字完成注入。
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 DBSessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 LLMClientDep = Annotated[LLMClient, Depends(get_llm_client_dep)]
 EmbeddingClientDep = Annotated[EmbeddingClient, Depends(get_embedding_client_dep)]
 DocumentParserDep = Annotated[DocumentParser, Depends(get_document_parser_dep)]
+WebFetcherDep = Annotated[WebFetcher, Depends(get_web_fetcher_dep)]
 KnowledgeBaseRepositoryDep = Annotated[KnowledgeBaseRepository, Depends(get_kb_repository)]
 KnowledgeBaseServiceDep = Annotated[KnowledgeBaseService, Depends(get_kb_service)]
+NoteRepositoryDep = Annotated[NoteRepository, Depends(get_note_repository)]
+NoteServiceDep = Annotated[NoteService, Depends(get_note_service)]
 
 __all__ = [
     "SettingsDep",
@@ -77,6 +121,9 @@ __all__ = [
     "LLMClientDep",
     "EmbeddingClientDep",
     "DocumentParserDep",
+    "WebFetcherDep",
     "KnowledgeBaseRepositoryDep",
     "KnowledgeBaseServiceDep",
+    "NoteRepositoryDep",
+    "NoteServiceDep",
 ]

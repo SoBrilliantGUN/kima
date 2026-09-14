@@ -1,7 +1,10 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.schemas.note import NoteRead
 
 COLOR_PATTERN = r"^#[0-9A-Fa-f]{6}$"
 
@@ -65,4 +68,16 @@ class KnowledgeBaseRead(BaseModel):
 
 class KnowledgeBaseList(BaseModel):
     items: list[KnowledgeBaseRead]
+    total: int
+
+
+class ContentItem(BaseModel):
+    """知识库内容列表的异构条目，靠 `type` 判别。模块 4 增 `document`。"""
+
+    type: Literal["note"]
+    note: NoteRead | None = None
+
+
+class ContentList(BaseModel):
+    items: list[ContentItem]
     total: int
