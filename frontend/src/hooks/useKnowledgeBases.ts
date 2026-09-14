@@ -62,12 +62,16 @@ export function useUpdateKnowledgeBase() {
   })
 }
 
-/** 删除指定知识库，成功后使列表缓存失效 */
+/**
+ * 删除指定知识库，成功后只失效列表缓存。
+ * 使用 exact 精确匹配列表，避免连带失效已删除知识库的详情/内容查询而触发 404。
+ */
 export function useDeleteKnowledgeBase() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => deleteKnowledgeBase(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: [KNOWLEDGE_BASES] }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: [KNOWLEDGE_BASES], exact: true }),
   })
 }
 

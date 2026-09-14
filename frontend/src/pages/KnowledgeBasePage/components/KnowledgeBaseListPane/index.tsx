@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import type { KnowledgeBase, KnowledgeBaseCreate } from '@/api/types'
+import { useInView } from '@/hooks/useInView'
 import {
   useCreateKnowledgeBase,
   useDeleteKnowledgeBase,
@@ -15,6 +16,9 @@ interface KnowledgeBaseListPaneProps {
   selectedId?: string
 }
 
+// 提前 200px 触发加载，避免用户滚到底才等待
+const LOAD_MORE_OPTIONS: IntersectionObserverInit = { rootMargin: '200px' }
+
 export function KnowledgeBaseListPane({ selectedId }: KnowledgeBaseListPaneProps) {
   const { data, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage } =
     useKnowledgeBases()
@@ -26,9 +30,17 @@ export function KnowledgeBaseListPane({ selectedId }: KnowledgeBaseListPaneProps
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<KnowledgeBase | null>(null)
 
+  const { ref: loadMoreRef, inView } = useInView<HTMLLIElement>(LOAD_MORE_OPTIONS)
+
   const items = data?.pages.flatMap((page) => page.items) ?? []
   const total = data?.pages[0]?.total ?? 0
   const canDelete = total > 1
+
+  useEffect(() => {
+    if (inView && hasNextPage && !isFetchingNextPage) {
+      void fetchNextPage()
+    }
+  }, [inView, hasNextPage, isFetchingNextPage, fetchNextPage])
 
   function openCreate() {
     setEditing(null)
@@ -103,19 +115,13 @@ export function KnowledgeBaseListPane({ selectedId }: KnowledgeBaseListPaneProps
               </div>
             </li>
           ))}
+          {hasNextPage ? (
+            <li ref={loadMoreRef} className={styles.sentinel}>
+              {isFetchingNextPage ? '加载中…' : null}
+            </li>
+          ) : null}
         </ul>
       )}
-
-      {hasNextPage ? (
-        <button
-          type="button"
-          className={styles.loadMore}
-          onClick={() => void fetchNextPage()}
-          disabled={isFetchingNextPage}
-        >
-          {isFetchingNextPage ? '加载中…' : '加载更多'}
-        </button>
-      ) : null}
 
       {modalOpen ? (
         <KnowledgeBaseFormModal
