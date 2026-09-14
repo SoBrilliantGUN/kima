@@ -139,7 +139,15 @@ class WebFetcher(Protocol):
     async def fetch(self, url: str) -> FetchedPage: ...
 
 
-class TrafilaturaWebFetcher:      # 真实实现
+class TrafilaturaWebFetcher:      # 静态抓取（httpx + trafilatura）
+    async def fetch(self, url: str) -> FetchedPage: ...
+
+
+class PlaywrightWebFetcher:       # SPA 渲染抓取（无头浏览器 + trafilatura）
+    async def fetch(self, url: str) -> FetchedPage: ...
+
+
+class FallbackWebFetcher:         # 先静态、正文为空时回退浏览器
     async def fetch(self, url: str) -> FetchedPage: ...
 
 
@@ -150,7 +158,20 @@ class FakeWebFetcher:             # 测试替身
 - `TrafilaturaWebFetcher.fetch`：`httpx.AsyncClient` GET（带 UA、`timeout=30`、`follow_redirects=True`、响应体大小上限如 5MB）→ **`trafilatura.extract(..., output_format="markdown", include_images=True, with_metadata=True)`** 提取正文。
 - 标题优先级：`og:title` → `<title>` → 兜底 URL；图片**不抓**，Markdown 内保留原图链接（`![...](https://…)`）。
 - `trafilatura.extract` 是 CPU 同步，用 `asyncio.to_thread` 包一层避免阻塞事件循环。
-- **失败判定**：网络错误 / 超时 / 非 HTML / 提取正文为空 → 抛 `FetchError`（见 §6）。
+- **失败判定**：网络错误 / 超时 / 非 HTML → 抛 `FetchError`（见 §6）；**提取正文为空** → 抛内部信号 `EmptyContentError(FetchError)`，触发回退而非直接失败。
+
+**SPA 回退（`FallbackWebFetcher`）**：`httpx` 只拿静态 HTML、不执行 JS，纯客户端渲染（React/Vue）页面拿到的是空壳，正文抽取为空。因此按「先静态 → 空正文回退浏览器」两段式：
+
+```
+FallbackWebFetcher.fetch(url)
+  ├─ TrafilaturaWebFetcher.fetch(url)  ── 成功（有正文）→ 返回
+  └─ 抛 EmptyContentError              ── PlaywrightWebFetcher.fetch(url) 渲染后再抽取
+```
+
+- 只对 `EmptyContentError` 回退；HTTP 错误（404/超时）直接抛 `FetchError`（浏览器渲染也救不回死链，不回退）。
+- `PlaywrightWebFetcher.fetch`：无头 Chromium `new_page` → `goto(wait_until="domcontentloaded", timeout=30s)` → `wait_for_load_state("networkidle", timeout=5s)`（超时继续，容忍有持续网络活动的 SPA）→ 额外 `wait_for_timeout(1s)` 缓冲 → `page.content()` 拿渲染后 HTML → 同样交 trafilatura 抽取。
+- **浏览器生命周期**：模块级单例，`main.py` 的 lifespan 启动/关闭共享 Chromium（避免每请求重复启动 ~2s 开销）；启动失败记录日志并降级——`get_browser()` 返回 `None`，此时 `FallbackWebFetcher` 的 spa 侧为 `None`，静态抓取仍可用、SPA 抓取不可用，不影响应用启动。
+- 部署需在新环境执行 `playwright install chromium`（浏览器二进制不进 git/镜像）。
 
 ### 3.2 摘要 LLM（`integrations/llm.py`，扩展）
 
@@ -181,7 +202,7 @@ repositories/note.py               # NoteRepository(Protocol) + SqlAlchemyNoteRe
 services/note.py                   # NoteService
 api/routes/notes.py                # 7 个笔记端点
 api/routes/knowledge_bases.py      # + GET /knowledge-bases/{kb_id}/contents
-integrations/web.py                # WebFetcher(Protocol) + Trafilatura + Fake
+integrations/web.py                # WebFetcher(Protocol) + Trafilatura + Playwright + Fallback + Fake
 integrations/llm.py                # + DeepSeekLLMClient
 core/exceptions.py                 # + FetchError
 ```
@@ -340,7 +361,8 @@ class FetchError(DomainError):
     code = "fetch_failed"
 ```
 
-- `TrafilaturaWebFetcher` 抓取/解析失败直接抛 `FetchError("无法抓取该网页")`，由 `main.py` 已有全局 `DomainError` handler 映射为 `{"detail": {"code": "fetch_failed", "message": "无法抓取该网页"}}`。
+- `TrafilaturaWebFetcher` / `PlaywrightWebFetcher` 抓取/解析失败直接抛 `FetchError("无法抓取该网页")`，由 `main.py` 已有全局 `DomainError` handler 映射为 `{"detail": {"code": "fetch_failed", "message": "无法抓取该网页"}}`。
+- `EmptyContentError(FetchError)` 是**内部回退信号**（静态抓取空正文），被 `FallbackWebFetcher` 消化、不外泄；只有回退也失败（或 spa 不可用）才转成 `FetchError` 暴露给 API 层。
 - 前端 `ApiError` 已能解析 `detail.message`，直接展示文案。
 - 复用既有 `NotFoundError`（404）、Pydantic 校验（422 默认结构）。
 
@@ -405,6 +427,7 @@ router.tsx                        # + /notes/:id（打开即编辑，无 ?edit=1
 | Service 单元 | `test_services_note.py` | 注入 `FakeNoteRepository` + `FakeKnowledgeBaseRepository` + `FakeWebFetcher` + `FakeLLMClient`；测 create_from_url（成功/抓取失败/摘要降级/带 kb_id 关联）、create_blank（默认标题/带 kb_id 关联/kb 不存在 404）、update（成功/404/空 body）、list 钳制、get/delete 404、add_to_kb（成功/重复幂等/笔记不存在/库不存在）、list_by_kb（库不存在 404） |
 | API 集成 | `test_api_notes.py` | `app.dependency_overrides` 换 Fake，`AsyncClient` 走 7 端点 + `GET /knowledge-bases/{kb_id}/contents`，断言状态码 + 响应体 + 错误信封 + 分页形状 |
 | 集成 Fake | `tests/fakes.py` 增补 | `FakeNoteRepository`（dict 存储、模拟 list 排序 + associate 幂等 + update + list_by_kb）、`FakeWebFetcher`（返回固定 `FetchedPage`，可配抛 `FetchError`） |
+| Web 抓取单元 | `test_web.py` | 用可控 `_Fetcher` 假实现测 `FallbackWebFetcher` 回退分支（静态成功不回退 / 空正文回退 / HTTP 错误不回退 / spa 不可用抛错）；`PlaywrightWebFetcher` 用 `MagicMock` 假 Browser/Page + monkeypatch `extract_markdown`/`extract_title` 测渲染与抽取（不起真浏览器） |
 
 - `FakeNoteRepository` 与 `SqlAlchemy` 版同签名（满足 Protocol）。
 - 关键用例：from-url 成功→列表含 1 条 type=url；from-url 带 kb_id→关联建立；抓取失败→422 fetch_failed 且不落库；create_blank→201 type=markdown 标题「无标题笔记」；create_blank 带不存在的 kb_id→404 且不建笔记；PATCH 标题/正文→200 且 updated_at 变；空 update body→422；删除→404；重复 add_to_kb→幂等仍 204；非法 URL→422；KB 内容列表→含已关联笔记、未关联不含。
@@ -453,3 +476,4 @@ router.tsx                        # + /notes/:id（打开即编辑，无 ?edit=1
 16. **删除笔记 = 硬删除**，关联随 `ondelete=CASCADE` 清；知识库被删时关联清、笔记本体保留。
 17. **URL 校验**：仅要求 `http/https` + 非空（不强校验域名后缀）。
 18. **正文由 TipTap 渲染/编辑**：不引入 `react-markdown`/`remark-gfm`。
+19. **网页抓取支持 SPA 回退**：`httpx` 不执行 JS，纯客户端渲染页面抽到空正文，故按「先静态 trafilatura → 空正文回退 Playwright 无头浏览器」两段式；仅对空正文（`EmptyContentError`）回退，HTTP 错误不回退；浏览器由 lifespan 启动/关闭的单例共享，启动失败降级为仅静态抓取。
