@@ -127,23 +127,6 @@ export function NoteEditorPane({ noteId }: NoteEditorPaneProps) {
             placeholder="无标题笔记"
           />
 
-          {/* url 类型笔记额外展示 AI 摘要与原文链接 */}
-          {note.type === 'url' ? (
-            <div className={styles.summary}>
-              {note.summary ? <p className={styles.summaryText}>{note.summary}</p> : null}
-              {note.source_url ? (
-                <a
-                  className={styles.sourceLink}
-                  href={note.source_url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {note.source_url}
-                </a>
-              ) : null}
-            </div>
-          ) : null}
-
           <EditorContent editor={editor} className={styles.editor} />
         </div>
       </div>

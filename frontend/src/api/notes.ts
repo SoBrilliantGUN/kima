@@ -3,14 +3,9 @@ import type {
   Note,
   NoteAddToKnowledgeBase,
   NoteCreate,
-  NoteCreateFromUrl,
   NoteListResponse,
   NoteUpdate,
 } from '@/api/types'
-
-export function createNoteFromUrl(payload: NoteCreateFromUrl): Promise<Note> {
-  return api.post<Note>('/api/notes/from-url', payload)
-}
 
 export function createNote(payload: NoteCreate): Promise<Note> {
   return api.post<Note>('/api/notes', payload)

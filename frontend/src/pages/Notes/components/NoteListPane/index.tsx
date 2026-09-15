@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import type { Note } from '@/api/types'
+import { PlusIcon } from '@/components/icons'
 import { useInView } from '@/hooks/useInView'
 import { useCreateNote, useDeleteNote, useNotes } from '@/hooks/useNotes'
 import { forgetNote } from '@/lib/lastNote'
-import { WebNoteFormModal } from '@/pages/Notes/components/WebNoteFormModal'
 import styles from './index.module.scss'
 
 interface NoteListPaneProps {
@@ -21,10 +21,6 @@ export function NoteListPane({ selectedId }: NoteListPaneProps) {
   const deleteMutation = useDeleteNote()
   const navigate = useNavigate()
 
-  const [menuOpen, setMenuOpen] = useState(false)
-  const [webModalOpen, setWebModalOpen] = useState(false)
-  const newWrapRef = useRef<HTMLDivElement>(null)
-
   const { ref: loadMoreRef, inView } = useInView<HTMLLIElement>(LOAD_MORE_OPTIONS)
 
   const items = data?.pages.flatMap((page) => page.items) ?? []
@@ -35,27 +31,9 @@ export function NoteListPane({ selectedId }: NoteListPaneProps) {
     }
   }, [inView, hasNextPage, isFetchingNextPage, fetchNextPage])
 
-  // 点击「新建」下拉以外的区域时收起菜单
-  useEffect(() => {
-    if (!menuOpen) return
-    function handleMouseDown(event: MouseEvent) {
-      if (newWrapRef.current && !newWrapRef.current.contains(event.target as Node)) {
-        setMenuOpen(false)
-      }
-    }
-    window.addEventListener('mousedown', handleMouseDown)
-    return () => window.removeEventListener('mousedown', handleMouseDown)
-  }, [menuOpen])
-
   async function handleCreateBlank() {
-    setMenuOpen(false)
     const note = await createBlank.mutateAsync({})
     navigate(`/notes/${note.id}`)
-  }
-
-  function handleOpenWeb() {
-    setMenuOpen(false)
-    setWebModalOpen(true)
   }
 
   async function handleDelete(note: Note) {
@@ -71,25 +49,15 @@ export function NoteListPane({ selectedId }: NoteListPaneProps) {
     <aside className={styles.pane}>
       <header className={styles.header}>
         <h2 className={styles.title}>笔记</h2>
-        <div className={styles.newWrap} ref={newWrapRef}>
-          <button
-            type="button"
-            className={styles.newButton}
-            onClick={() => setMenuOpen((open) => !open)}
-          >
-            新建
-          </button>
-          {menuOpen ? (
-            <div className={styles.menu}>
-              <button type="button" onClick={handleOpenWeb}>
-                网页
-              </button>
-              <button type="button" onClick={() => void handleCreateBlank()}>
-                空白笔记
-              </button>
-            </div>
-          ) : null}
-        </div>
+        <button
+          type="button"
+          className={styles.newButton}
+          aria-label="新建笔记"
+          title="新建笔记"
+          onClick={() => void handleCreateBlank()}
+        >
+          <PlusIcon />
+        </button>
       </header>
 
       {isLoading ? (
@@ -111,7 +79,6 @@ export function NoteListPane({ selectedId }: NoteListPaneProps) {
                 }
               >
                 <span className={styles.itemTitle}>{note.title}</span>
-                <span className={styles.itemSummary}>{note.summary || ' '}</span>
               </Link>
               <button
                 type="button"
@@ -129,8 +96,6 @@ export function NoteListPane({ selectedId }: NoteListPaneProps) {
           ) : null}
         </ul>
       )}
-
-      {webModalOpen ? <WebNoteFormModal onClose={() => setWebModalOpen(false)} /> : null}
     </aside>
   )
 }

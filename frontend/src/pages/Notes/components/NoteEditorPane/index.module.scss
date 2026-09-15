@@ -35,27 +35,6 @@
   }
 }
 
-.summary {
-  padding: var(--space-3) var(--space-4);
-  border-left: 3px solid var(--color-primary);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg);
-  margin-bottom: var(--space-5);
-}
-
-.summaryText {
-  margin: 0 0 var(--space-2);
-  color: var(--color-text);
-  font-size: var(--font-size-base);
-  line-height: 1.6;
-}
-
-.sourceLink {
-  color: var(--color-primary);
-  font-size: var(--font-size-sm);
-  word-break: break-all;
-}
-
 .editor {
   min-height: 60vh;
 

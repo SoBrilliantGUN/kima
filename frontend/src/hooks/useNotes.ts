@@ -3,18 +3,12 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import {
   addNoteToKnowledgeBase,
   createNote,
-  createNoteFromUrl,
   deleteNote,
   getNote,
   listNotes,
   updateNote,
 } from '@/api/notes'
-import type {
-  NoteAddToKnowledgeBase,
-  NoteCreate,
-  NoteCreateFromUrl,
-  NoteUpdate,
-} from '@/api/types'
+import type { NoteAddToKnowledgeBase, NoteCreate, NoteUpdate } from '@/api/types'
 import { KNOWLEDGE_BASES } from './common'
 
 // 笔记查询键的公共前缀；列表与详情共用
@@ -40,18 +34,6 @@ export function useNote(id: string | undefined) {
     queryKey: [NOTES, id],
     queryFn: () => getNote(id!),
     enabled: id !== undefined,
-  })
-}
-
-/** 从 URL 采集网页生成笔记。 */
-export function useCreateNoteFromUrl() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (payload: NoteCreateFromUrl) => createNoteFromUrl(payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [NOTES] })
-      queryClient.invalidateQueries({ queryKey: [KNOWLEDGE_BASES] })
-    },
   })
 }
 
