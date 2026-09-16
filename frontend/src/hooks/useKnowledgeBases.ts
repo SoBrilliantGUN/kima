@@ -75,11 +75,22 @@ export function useDeleteKnowledgeBase() {
   })
 }
 
-/** 获取某知识库的内容列表（当前含关联笔记，模块 4 增文档）。 */
+/** 获取某知识库的内容列表（含关联笔记与文档）。 */
 export function useKbContents(kbId: string | undefined) {
   return useQuery({
     queryKey: [KNOWLEDGE_BASES, kbId, 'contents'],
     queryFn: () => listKbContents(kbId!),
     enabled: kbId !== undefined,
+    // 有文档处于 pending/processing 时轮询，状态终态（done/error）后停止
+    refetchInterval: (query) => {
+      const items = query.state.data?.items ?? []
+      return items.some(
+        (item) =>
+          item.document &&
+          (item.document.status === 'pending' || item.document.status === 'processing'),
+      )
+        ? 2000
+        : false
+    },
   })
 }

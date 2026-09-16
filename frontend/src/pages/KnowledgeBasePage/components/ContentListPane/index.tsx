@@ -1,40 +1,56 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import type { Note } from '@/api/types'
+import type { Document, DocumentStatus } from '@/api/types'
 import { FilePlusIcon, SearchIcon } from '@/components/icons'
+import { useDeleteDocument, useRetryDocument } from '@/hooks/useDocuments'
 import { useKnowledgeBase, useKbContents } from '@/hooks/useKnowledgeBases'
-import { useCreateNote } from '@/hooks/useNotes'
-import { AddContentMenu } from '@/pages/KnowledgeBasePage/components/AddContentMenu'
-import { WebNoteFormModal } from '@/pages/Notes/components/WebNoteFormModal'
+import { AddContentMenu } from './components/AddContentMenu'
+import { DocumentDropzone } from './components/DocumentDropzone'
+import { UrlInputModal } from './components/UrlInputModal'
 import styles from './index.module.scss'
+
+const STATUS_LABEL: Record<DocumentStatus, string> = {
+  pending: '等待中',
+  processing: '解析中',
+  done: '已完成',
+  error: '失败',
+}
 
 interface ContentListPaneProps {
   kbId?: string
+  onOpenDocument: (documentId: string) => void
+  onCloseDocument: (documentId: string) => void
 }
 
-export function ContentListPane({ kbId }: ContentListPaneProps) {
+export function ContentListPane({
+  kbId,
+  onOpenDocument,
+  onCloseDocument,
+}: ContentListPaneProps) {
   const { data: kb, isLoading, isError } = useKnowledgeBase(kbId)
   const { data: contents } = useKbContents(kbId)
-  const createNote = useCreateNote()
+  const deleteDocument = useDeleteDocument()
+  const retryDocument = useRetryDocument()
   const navigate = useNavigate()
 
   const [menuOpen, setMenuOpen] = useState(false)
-  const [webModalOpen, setWebModalOpen] = useState(false)
+  const [dropzoneOpen, setDropzoneOpen] = useState(false)
+  const [urlModalOpen, setUrlModalOpen] = useState(false)
 
-  const notes = (contents?.items ?? [])
-    .map((item) => item.note)
-    .filter((note): note is Note => note !== null)
+  const items = contents?.items ?? []
 
-  async function handleSelect(type: 'web' | 'note') {
+  function handleSelect(type: 'url' | 'document') {
     setMenuOpen(false)
     if (!kbId) return
-    if (type === 'note') {
-      const note = await createNote.mutateAsync({ knowledge_base_id: kbId })
-      navigate(`/notes/${note.id}`)
-    } else {
-      setWebModalOpen(true)
-    }
+    if (type === 'url') setUrlModalOpen(true)
+    else setDropzoneOpen(true)
+  }
+
+  async function handleDeleteDocument(document: Document) {
+    if (!window.confirm(`确定删除文档「${document.title}」吗？该操作不可恢复。`)) return
+    await deleteDocument.mutateAsync(document.id)
+    onCloseDocument(document.id)
   }
 
   if (isLoading) {
@@ -75,30 +91,71 @@ export function ContentListPane({ kbId }: ContentListPaneProps) {
         </button>
       </div>
 
-      {notes.length === 0 ? (
+      {items.length === 0 ? (
         <div className={styles.empty}>
           <p>知识库里什么也没有</p>
-          <p className={styles.emptyHint}>点「添加内容」新建笔记或采集网页</p>
+          <p className={styles.emptyHint}>点「添加内容」导入文档</p>
         </div>
       ) : (
         <ul className={styles.list}>
-          {notes.map((note) => (
-            <li key={note.id}>
-              <button
-                type="button"
-                className={styles.item}
-                onClick={() => navigate(`/notes/${note.id}`)}
-              >
-                <span className={styles.itemTitle}>{note.title}</span>
-                {note.summary ? <span className={styles.itemSummary}>{note.summary}</span> : null}
-              </button>
-            </li>
-          ))}
+          {items.map((item) => {
+            if (item.type === 'note' && item.note) {
+              return (
+                <li key={item.note.id} className={styles.itemRow}>
+                  <button
+                    type="button"
+                    className={styles.item}
+                    onClick={() => navigate(`/notes/${item.note!.id}`)}
+                  >
+                    <span className={styles.itemTitle}>{item.note.title}</span>
+                    <span className={styles.itemSummary}>笔记</span>
+                  </button>
+                </li>
+              )
+            }
+            if (item.type === 'document' && item.document) {
+              const document = item.document
+              return (
+                <li key={document.id} className={styles.itemRow}>
+                  <button
+                    type="button"
+                    className={styles.item}
+                    onClick={() => onOpenDocument(document.id)}
+                  >
+                    <span className={styles.itemTitle}>{document.title}</span>
+                    <span className={styles.itemSummary}>
+                      <span className={`${styles.badge} ${styles[document.status]}`}>
+                        {STATUS_LABEL[document.status]}
+                      </span>
+                      {document.source_type}
+                    </span>
+                  </button>
+                  {document.status === 'error' ? (
+                    <div className={styles.itemActions}>
+                      <button
+                        type="button"
+                        onClick={() => void retryDocument.mutateAsync(document.id)}
+                      >
+                        重试
+                      </button>
+                      <button type="button" onClick={() => void handleDeleteDocument(document)}>
+                        删除
+                      </button>
+                    </div>
+                  ) : null}
+                </li>
+              )
+            }
+            return null
+          })}
         </ul>
       )}
 
-      {webModalOpen && kbId ? (
-        <WebNoteFormModal onClose={() => setWebModalOpen(false)} knowledgeBaseId={kbId} />
+      {dropzoneOpen && kbId ? (
+        <DocumentDropzone kbId={kbId} onClose={() => setDropzoneOpen(false)} />
+      ) : null}
+      {urlModalOpen && kbId ? (
+        <UrlInputModal kbId={kbId} onClose={() => setUrlModalOpen(false)} />
       ) : null}
     </section>
   )
