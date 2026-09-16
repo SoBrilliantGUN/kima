@@ -1,0 +1,88 @@
+.resizeHandle {
+  position: absolute;
+  z-index: 1;
+  touch-action: none;
+}
+
+.resizeN {
+  top: 0;
+  left: 16px;
+  right: 16px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.resizeS {
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.resizeE {
+  top: 16px;
+  bottom: 16px;
+  right: 0;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.resizeW {
+  top: 16px;
+  bottom: 16px;
+  left: 0;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.resizeNe {
+  top: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nesw-resize;
+}
+
+.resizeNw {
+  top: 0;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+}
+
+.resizeSe {
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+
+  &::after {
+    content: '';
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    width: 10px;
+    height: 10px;
+    background: repeating-linear-gradient(
+      135deg,
+      var(--color-text-secondary) 0 1px,
+      transparent 1px 3px
+    );
+    opacity: 0.45;
+  }
+
+  &:hover::after {
+    opacity: 0.8;
+  }
+}
+
+.resizeSw {
+  bottom: 0;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nesw-resize;
+}
