@@ -9,7 +9,7 @@ import {
   useKnowledgeBases,
   useUpdateKnowledgeBase,
 } from '@/hooks/useKnowledgeBases'
-import { KnowledgeBaseFormModal } from '@/pages/KnowledgeBasePage/components/KnowledgeBaseFormModal'
+import { KnowledgeBaseFormModal } from './components/KnowledgeBaseFormModal'
 import styles from './index.module.scss'
 
 interface KnowledgeBaseListPaneProps {
