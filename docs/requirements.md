@@ -168,6 +168,8 @@ kima/
 
 20. **模块 4 修订（2026-09-14，详见 `docs/module-4-documents.md`）**：① 网页笔记推翻——URL 统一归入文档（`documents.source_type=pdf/word/url`），不再有网页笔记；`notes` 删 `type`/`summary`/`source_url` 三列、删 `from-url` 端点。② 文档解析按类型分发——PDF→MinerU、Word→本地、URL→复用 WebFetcher。③ 父子切割 small-to-big——`document_chunks` 自引用 `parent_id`，parent 大块存上下文不向量化、child 小块向量化，检索命中 child 回 parent。④ 内容感知分块 5 splitter（结构化递归兜底 + 表格 + 代码 AST + 法律条例 + FAQ 问答对）。⑤ 异步 DB 轮询 worker + 自建重试退避。⑥ 原文件阅读器（PDF 内嵌/Word 下载/URL 打开原网页），解析 markdown 全程不可见。⑦ 笔记向量化留模块 5。
 
+21. **模块 4 前端交互修订（2026-09-16）**：① 文档阅读由「路由面板」改为「浮动窗口」——点文档在页面上层打开可拖拽/调整大小/关闭的浮动窗口，可同时开多个、同文档去重聚焦；纯内存态，去掉 `/knowledge-bases/:id/documents/:documentId` 路由；右侧问答面板常驻并针对整个知识库，浮动窗口仅阅读参考。② 上传入口拆分——本地文档用大拖拽批量窗口、URL 用单一链接输入弹窗，二者分离。③ 知识库「添加内容」菜单去掉「笔记」项（笔记不再从知识库新建，列表已有笔记保留）。
+
 ---
 
 ## 8. 待办 / 下一步
@@ -175,5 +177,5 @@ kima/
 - 模块 1（基础设施）✅ 已实现 — 详见 `docs/module-1-infrastructure.md`
 - 模块 2（知识库管理）✅ 已实现 — 详见 `docs/module-2-knowledge-bases.md`
 - 模块 3（笔记/编辑器）✅ 已实现 — 详见 `docs/module-3-notes.md`
-- 模块 4（文档解析与归档）📝 方案已定稿（待实现） — 详见 `docs/module-4-documents.md`：上传 PDF/URL/Word → 解析 → 内容感知父子分块 → 向量化入库
+- 模块 4（文档解析与归档）📝 方案已定稿（待实现） — 详见 `docs/module-4-documents.md`：上传 PDF/URL/Word → 解析 → 内容感知父子分块 → 向量化入库；前端交互已细化（浮动阅读窗口 + 上传入口拆分 + 去笔记入口，见决策 #21）
 - **下一步：实现模块 4（文档解析与归档）**

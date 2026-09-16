@@ -30,7 +30,7 @@
 | 3 | worker 异步 `pending → processing → done/error`；`done` 时父子 chunk 已落库、child 已向量化（parent 不向量化），embedding 维度 = 1024 |
 | 4 | 失败自动重试退避，超 `max_retries` 置 `error`；`POST /{id}/retry` 手动重试；worker 重启能重新拾起 `pending` |
 | 5 | `GET /api/knowledge-bases/{kb_id}/contents` 返回异构条目（`note` + `document`）；文档条目含状态/来源/错误信息 |
-| 6 | 前端：上传/URL 入口 + 列表（状态徽标 + 进度轮询 + 失败重试/删除）+ 原文件阅读器（PDF 内嵌 / Word 下载 / URL 打开原网页） |
+| 6 | 前端：上传/URL 入口（本地文档大拖拽批量窗 + URL 单一链接弹窗，二者分离）+ 列表（状态徽标 + 进度轮询 + 失败重试/删除）+ 浮动阅读窗口（PDF 内嵌 / Word 下载 / URL 打开原网页，可拖拽/调整大小/关闭，多开去重聚焦） |
 | 7 | 三种来源解析产出有效 markdown；分块走内容感知 5 splitter + 父子切割（small-to-big） |
 | 8 | 后端 `ruff` + `mypy(strict)` + `pytest` 全绿；前端 `eslint` + `tsc --noEmit` + `vite build` 全绿；测试不起真库/真网/真 MinerU |
 
@@ -430,6 +430,7 @@ api/types.ts              # Document / DocumentRead / ContentItem(加 document)
 api/documents.ts          # uploadDocument / createDocumentFromUrl / getDocument / retryDocument / deleteDocument / documentFileUrl
 api/notes.ts             # 回改：删 createNoteFromUrl
 hooks/useDocuments.ts     # react-query hooks + 状态轮询（pending/processing 时 refetchInterval）
+hooks/useDocumentWindows.ts # 浮动窗口状态：open/close/focus + 同文档去重聚焦 + 切库清空
 pages/Notes/
   index.tsx               # 回改：删「新建→网页」入口
   components/
@@ -437,24 +438,28 @@ pages/Notes/
     (删 WebNoteFormModal.tsx)
 pages/KnowledgeBasePage/
   components/
-    ContentListPane.tsx   # document 条目：状态徽标 + 进度 + 失败重试/删除 + 点击进阅读器
-    AddContentMenu.tsx    # 回改：「本地文档」解灰；「网页」改为「URL 文档」
-    DocumentUploadModal.tsx # 上传 modal：选 pdf/word 文件 或 贴 URL
-    DocumentReaderPane.tsx  # 原文件阅读器
-router.tsx                # 知识库页内文档阅读路由（选中走 URL）
+    ContentListPane.tsx   # document 条目：状态徽标 + 进度 + 失败重试/删除 + 点击开浮动窗口
+    AddContentMenu.tsx    # 回改：删「笔记」项，仅剩「本地文档」/「URL 文档」
+    DocumentDropzone/     # 本地文档上传：大拖拽窗，批量多文件 + 逐文件进度
+    UrlInputModal/        # URL 文档：单一链接输入弹窗
+    DocumentWindow/       # 浮动文档阅读窗口（拖拽 / 调整大小 / 关闭）
+    (删 DocumentUploadModal.tsx / DocumentReaderPane.tsx)
+router.tsx                # 移除 /documents/:documentId 路由（浮动窗口纯内存，不走 URL）
 ```
 
 ### 9.2 交互与阅读器
 
-- **入口**：知识库「添加内容」下拉 →「本地文档」→ `DocumentUploadModal`（两个输入：**文件**（pdf/word 拖拽/选择）｜**URL**（贴链接））→ 对应 `uploadDocument` / `createDocumentFromUrl`。
-- **列表**：document 条目显示标题 + `source_type` 图标 + 状态徽标（`pending`/`processing` 转圈、`done` 正常、`error` 红）；`error` 悬浮可重试/删除；点击进阅读器。
+- **入口**：知识库「添加内容」下拉两项——
+  - 「本地文档」→ `DocumentDropzone`（大拖拽窗口，支持批量拖入/多选 pdf/word，逐文件上传并显示进度，全部完成仅刷新列表、不自动打开）；
+  - 「URL 文档」→ `UrlInputModal`（单一 http/https 链接输入框，确定后建文档、仅刷新列表）。
+- **列表**：document 条目显示标题 + `source_type` 图标 + 状态徽标（`pending`/`processing` 转圈、`done` 正常、`error` 红）；`error` 悬浮可重试/删除；点击打开浮动阅读窗口。
 - **进度轮询**：`useDocument(id)` 在 `status ∈ {pending, processing}` 时 `refetchInterval` 轮询，`done/error` 停。
-- **阅读器（按 source_type）**：
+- **浮动阅读窗口（`DocumentWindow`）**：点击文档在页面上层打开可拖拽、可调整大小、可关闭的窗口；同一文档去重、重复点击聚焦已有窗口；可同时开多个；纯内存态，切换知识库或刷新即清空。窗口内容按 source_type 渲染：
   - `pdf`：`<iframe src={documentFileUrl(id)}>` 浏览器原生内嵌预览（不引 PDF.js，最简）；
   - `word`：「下载原文件」按钮 → `documentFileUrl(id)`（`attachment` 触发下载/本地 Word 打开）；
   - `url`：「打开原网页」按钮 → `window.open(source_url, "_blank")`。
-- **删除**：二次确认 → `deleteDocument` → `invalidateQueries(['knowledge-bases'])`。
-- **选中走 URL**：知识库页内容区加文档阅读路由（对齐决策 #9「选中状态走 URL」）。
+- **问答面板常驻**：右侧 `QaPanel` 始终可见、针对整个知识库提问；浮动文档窗口仅作阅读参考，不切换问答范围。
+- **删除**：二次确认 → `deleteDocument` → `invalidateQueries(['knowledge-bases'])`；若该文档窗口正打开则一并关闭。
 
 ### 9.3 前端依赖
 
@@ -493,8 +498,8 @@ router.tsx                # 知识库页内文档阅读路由（选中走 URL）
 | T9 | 回改模块 3：notes 删三列/删 from-url/删 WebNoteFormModal/删「新建→网页」/删 url 摘要块 | 网页笔记移除 |
 | T10 | 后端测试（fakes + 分块 + ingest + service + API + worker + notes 回归） | pytest 全绿 |
 | T11 | 前端数据层 `types.ts`/`documents.ts`/`useDocuments.ts` | 数据层 |
-| T12 | 前端 `DocumentUploadModal` + `ContentListPane` 状态/进度/删除 | 上传闭环 |
-| T13 | 前端 `DocumentReaderPane`（PDF 内嵌/Word 下载/URL 打开） | 阅读闭环 |
+| T12 | 前端 `DocumentDropzone` + `UrlInputModal` + `ContentListPane` 状态/进度/删除 | 上传闭环 |
+| T13 | 前端 `DocumentWindow`（浮动窗口，PDF 内嵌/Word 下载/URL 打开）+ `useDocumentWindows` | 阅读闭环 |
 | T14 | 全量质量门禁 + 手工验收 | ruff/mypy/pytest/eslint/tsc/build 全绿 |
 
 ---
@@ -514,3 +519,5 @@ router.tsx                # 知识库页内文档阅读路由（选中走 URL）
 11. **文档列表并入知识库 contents**：不单开 documents 列表端点，`ContentItem` 增 `document` 条目（对齐模块 3 决策 #13）。
 12. **Word 仅 `.docx`**：`.doc` 老格式上传校验拒绝（422）。
 13. **URL 文档不生成摘要**：内容不可见、点开即原网页，列表只显示标题（og:title）。
+14. **文档阅读 = 浮动窗口（非路由面板）**：点文档在页面上层打开可拖拽/调整大小/关闭的浮动窗口，可同时开多个、同文档去重聚焦；纯内存态（去掉 `/knowledge-bases/:id/documents/:documentId` 路由、不持久化，刷新即消失）；右侧 `QaPanel` 常驻并针对整个知识库，文档窗口仅阅读参考。此为「选中走 URL」（决策 #9）在文档阅读场景的例外：知识库/笔记选中仍走 URL，文档阅读改内存浮动窗口。
+15. **上传入口拆分 + 去笔记**：`DocumentUploadModal` 拆为 `DocumentDropzone`（本地文档，大拖拽窗 + 批量多文件 + 逐文件进度）与 `UrlInputModal`（URL 文档，单一链接输入）两个独立组件；「添加内容」菜单去掉「笔记」项（笔记仅不再从知识库新建，列表已有笔记保留）。
