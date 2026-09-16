@@ -120,3 +120,23 @@ export function SendIcon(props: IconProps) {
     </Icon>
   )
 }
+
+export function CloseIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </Icon>
+  )
+}
+
+// kima 品牌标记：与 public/favicon.svg 同构（白色几何图形，底色由外部 CSS 提供）
+export function KimaMarkIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={2.5} {...props}>
+      <path d="M6.5 16 L17.5 16" />
+      <path d="M12 16 L6.5 8" />
+      <path d="M12 16 L17.5 8" />
+    </Icon>
+  )
+}
