@@ -1,22 +1,7 @@
-.overlay {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.4);
-  z-index: 100;
-}
-
 .modal {
   width: 400px;
-  max-width: calc(100vw - 32px);
   max-height: 60vh;
   overflow-y: auto;
-  background: var(--color-surface);
-  border-radius: var(--radius-md);
-  padding: var(--space-5);
-  box-shadow: var(--shadow-sm);
 }
 
 .title {
