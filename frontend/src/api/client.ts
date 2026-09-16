@@ -31,6 +31,18 @@ function extractError(body: unknown, fallback: string): { message: string; code?
   return { message: fallback }
 }
 
+async function handleResponse<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => undefined)
+    const { message, code } = extractError(body, response.statusText)
+    throw new ApiError(response.status, message, code)
+  }
+  if (response.status === 204) {
+    return undefined as T
+  }
+  return response.json() as Promise<T>
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   if (!headers.has('Content-Type')) {
@@ -41,15 +53,13 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers,
   })
-  if (!response.ok) {
-    const body: unknown = await response.json().catch(() => undefined)
-    const { message, code } = extractError(body, response.statusText)
-    throw new ApiError(response.status, message, code)
-  }
-  if (response.status === 204) {
-    return undefined as T
-  }
-  return response.json() as Promise<T>
+  return handleResponse<T>(response)
+}
+
+// multipart 上传：不手动设 Content-Type（交给浏览器带 boundary）
+export async function upload<T>(path: string, body: FormData): Promise<T> {
+  const response = await fetch(`${BASE_URL}${path}`, { method: 'POST', body })
+  return handleResponse<T>(response)
 }
 
 export const api = {

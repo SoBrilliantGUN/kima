@@ -31,22 +31,12 @@ export interface KnowledgeBaseListResponse {
   total: number
 }
 
-export type NoteType = 'markdown' | 'url'
-
 export interface Note {
   id: string
   title: string
-  type: NoteType
   content_markdown: string
-  summary: string | null
-  source_url: string | null
   created_at: string
   updated_at: string
-}
-
-export interface NoteCreateFromUrl {
-  url: string
-  knowledge_base_id?: string | null
 }
 
 export interface NoteCreate {
@@ -68,9 +58,32 @@ export interface NoteAddToKnowledgeBase {
   knowledge_base_id: string
 }
 
+export type DocumentType = 'pdf' | 'word' | 'url'
+
+export type DocumentStatus = 'pending' | 'processing' | 'done' | 'error'
+
+export interface Document {
+  id: string
+  kb_id: string
+  title: string
+  source_type: DocumentType
+  source_url: string | null
+  status: DocumentStatus
+  error_message: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DocumentCreateFromUrl {
+  url: string
+  knowledge_base_id: string
+}
+
 export interface ContentItem {
-  type: 'note'
+  type: 'note' | 'document'
   note: Note | null
+  document: Document | null
 }
 
 export interface ContentListResponse {
