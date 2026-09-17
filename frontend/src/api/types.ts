@@ -80,6 +80,10 @@ export interface DocumentCreateFromUrl {
   knowledge_base_id: string
 }
 
+export interface DocumentContent {
+  markdown: string
+}
+
 export interface ContentItem {
   type: 'note' | 'document'
   note: Note | null

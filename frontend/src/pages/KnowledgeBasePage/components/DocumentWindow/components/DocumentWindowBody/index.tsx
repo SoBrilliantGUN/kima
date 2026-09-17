@@ -1,5 +1,7 @@
 import { documentFileUrl } from '@/api/documents'
 import type { Document } from '@/api/types'
+import { useDocumentContent } from '@/hooks/useDocuments'
+import { MarkdownView } from './components/MarkdownView'
 import styles from './index.module.scss'
 
 interface DocumentWindowBodyProps {
@@ -8,6 +10,12 @@ interface DocumentWindowBodyProps {
 }
 
 export function DocumentWindowBody({ document, isLoading }: DocumentWindowBodyProps) {
+  // word/url 完成后阅读解析出的 markdown；pdf 走 iframe 原文件
+  const needsMarkdown =
+    document?.status === 'done' &&
+    (document.source_type === 'word' || document.source_type === 'url')
+  const { data: content } = useDocumentContent(document?.id, needsMarkdown)
+
   return (
     <div className={styles.body}>
       {isLoading ? (
@@ -29,23 +37,14 @@ export function DocumentWindowBody({ document, isLoading }: DocumentWindowBodyPr
           src={documentFileUrl(document.id)}
           title={document.title}
         />
-      ) : document.source_type === 'word' ? (
-        <div className={styles.placeholder}>
-          <a className={styles.linkButton} href={documentFileUrl(document.id)}>
-            下载原文件
-          </a>
-        </div>
+      ) : content ? (
+        content.markdown.trim() ? (
+          <MarkdownView markdown={content.markdown} />
+        ) : (
+          <div className={styles.placeholder}>无正文内容</div>
+        )
       ) : (
-        <div className={styles.placeholder}>
-          <a
-            className={styles.linkButton}
-            href={document.source_url ?? '#'}
-            target="_blank"
-            rel="noreferrer"
-          >
-            打开原网页
-          </a>
-        </div>
+        <div className={styles.placeholder}>正文加载中…</div>
       )}
     </div>
   )

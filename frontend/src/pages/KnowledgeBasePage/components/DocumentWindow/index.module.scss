@@ -81,7 +81,8 @@
   gap: var(--space-2);
   flex-shrink: 0;
 
-  button {
+  button,
+  a {
     padding: var(--space-1) var(--space-3);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
@@ -89,11 +90,16 @@
     color: var(--color-text);
     cursor: pointer;
     font-size: var(--font-size-sm);
+  }
 
-    &:hover {
-      color: var(--color-primary);
-      border-color: var(--color-primary);
-    }
+  a {
+    text-decoration: none;
+  }
+
+  button:hover,
+  a:hover {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
   }
 
   .close {

@@ -4,6 +4,7 @@ import {
   createDocumentFromUrl,
   deleteDocument,
   getDocument,
+  getDocumentContent,
   retryDocument,
   uploadDocument,
 } from '@/api/documents'
@@ -26,6 +27,15 @@ export function useDocument(id: string | undefined) {
       const status = query.state.data?.status
       return status === 'pending' || status === 'processing' ? POLL_INTERVAL : false
     },
+  })
+}
+
+/** 获取文档 markdown 正文；仅文档完成且需要阅读时启用。 */
+export function useDocumentContent(id: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: [DOCUMENTS, id, 'content'],
+    queryFn: () => getDocumentContent(id!),
+    enabled: id !== undefined && enabled,
   })
 }
 

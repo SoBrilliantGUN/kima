@@ -1,3 +1,4 @@
+import { documentFileUrl } from '@/api/documents'
 import type { DocumentStatus } from '@/api/types'
 import { CloseIcon } from '@/components/icons'
 import { useDeleteDocument, useDocument, useRetryDocument } from '@/hooks/useDocuments'
@@ -62,6 +63,17 @@ export function DocumentWindow({
             <button type="button" onClick={() => void retry.mutateAsync(documentId)}>
               重试
             </button>
+          ) : null}
+          {document?.status === 'done' && document.source_type === 'url' ? (
+            <a href={document.source_url ?? '#'} target="_blank" rel="noreferrer">
+              打开原网页
+            </a>
+          ) : null}
+          {document?.status === 'done' &&
+          (document.source_type === 'pdf' || document.source_type === 'word') ? (
+            <a href={documentFileUrl(document.id)} download>
+              下载原文件
+            </a>
           ) : null}
           {document ? (
             <button type="button" onClick={() => void handleDelete()}>

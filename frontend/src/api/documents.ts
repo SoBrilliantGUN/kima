@@ -1,5 +1,5 @@
 import { api, upload } from '@/api/client'
-import type { Document, DocumentCreateFromUrl } from '@/api/types'
+import type { Document, DocumentContent, DocumentCreateFromUrl } from '@/api/types'
 
 // 上传本地文件到知识库（multipart），后端创建并返回文档
 export function uploadDocument(kbId: string, file: File): Promise<Document> {
@@ -17,6 +17,11 @@ export function createDocumentFromUrl(payload: DocumentCreateFromUrl): Promise<D
 // 获取单个文档详情
 export function getDocument(id: string): Promise<Document> {
   return api.get<Document>(`/api/documents/${id}`)
+}
+
+// 获取文档解析后的 markdown 正文（word/url 阅读用）
+export function getDocumentContent(id: string): Promise<DocumentContent> {
+  return api.get<DocumentContent>(`/api/documents/${id}/content`)
 }
 
 // 解析失败后重试
