@@ -1,15 +1,15 @@
 # 模块 4：文档解析与归档 — 详细设计
 
 > 日期：2026-09-14
-> 状态：已评审定稿，可直接开工
+> 状态：已实现
 > 上游基线：`docs/requirements.md`（决策 #4/#6/#12/#14）· `docs/module-1-infrastructure.md`（DocumentParser / EmbeddingClient Protocol）· `docs/module-3-notes.md`（WebFetcher / ContentList / 知识库三栏）
 
 本模块交付「**文档解析与归档**」完整能力：
 
-- **三种来源**：PDF / Word / 网页(URL)，统一「上传 → 解析为 Markdown（用户不可见）→ 内容感知父子分块 → 向量化入库」
+- **三种来源**：PDF / Word / 网页(URL)，统一「上传 → 解析为 Markdown → 内容感知父子分块 → 向量化入库」
 - **异步处理**：DB 轮询式 worker + 自建重试退避，状态落库、重启可恢复
 - **父子切割（small-to-big）**：child 小块向量化做精确检索，parent 大块存上下文，命中 child 回 parent 出完整上下文
-- **原文件阅读器**：PDF 内嵌预览 / Word 下载 / URL 打开原网页
+- **文档阅读器**：PDF 内嵌预览原文件；Word 与 URL 渲染解析出的 Markdown（可下载原文件 / 打开原网页）
 
 **本模块同步回改模块 3**：彻底删除「网页笔记」——URL 统一归入文档，笔记收敛为纯 Markdown 空白笔记。
 
@@ -28,9 +28,9 @@
 | 1 | `alembic upgrade head`：新增 `documents` + `document_chunks`（自引用 `parent_id` + `embedding vector(1024)` + 部分 HNSW 索引）；`notes` 表 drop `type`/`summary`/`source_url` 三列 |
 | 2 | `POST /api/documents`（文件 pdf/word）+ `POST /api/documents/from-url`（URL）→ 201 `DocumentRead(status=pending)`，文件落盘 / URL 入库 |
 | 3 | worker 异步 `pending → processing → done/error`；`done` 时父子 chunk 已落库、child 已向量化（parent 不向量化），embedding 维度 = 1024 |
-| 4 | 失败自动重试退避，超 `max_retries` 置 `error`；`POST /{id}/retry` 手动重试；worker 重启能重新拾起 `pending` |
+| 4 | 失败自动重试退避，超 `MAX_RETRIES` 置 `error`；`POST /{id}/retry` 手动重试；worker 重启能重新拾起 `pending` |
 | 5 | `GET /api/knowledge-bases/{kb_id}/contents` 返回异构条目（`note` + `document`）；文档条目含状态/来源/错误信息 |
-| 6 | 前端：上传/URL 入口（本地文档大拖拽批量窗 + URL 单一链接弹窗，二者分离）+ 列表（状态徽标 + 进度轮询 + 失败重试/删除）+ 浮动阅读窗口（PDF 内嵌 / Word 下载 / URL 打开原网页，可拖拽/调整大小/关闭，多开去重聚焦） |
+| 6 | 前端：上传/URL 入口（本地文档大拖拽批量窗 + URL 单一链接弹窗，二者分离）+ 列表（状态徽标 + 进度轮询 + 失败重试/删除）+ 浮动阅读窗口（PDF 内嵌 / Word 与 URL 渲染解析 markdown，可拖拽/调整大小/关闭，多开去重聚焦） |
 | 7 | 三种来源解析产出有效 markdown；分块走内容感知 5 splitter + 父子切割（small-to-big） |
 | 8 | 后端 `ruff` + `mypy(strict)` + `pytest` 全绿；前端 `eslint` + `tsc --noEmit` + `vite build` 全绿；测试不起真库/真网/真 MinerU |
 
@@ -45,10 +45,10 @@ pending ──worker 拾起──▶ processing ──成功──▶ done
    ▲                        │
    │                    失败(可重试)──▶ 排期重试(仍 pending, retry_count+1, next_retry_at)
    │                        │
-   └── POST /retry 重置─────┴── 超过 max_retries ──▶ error(终态)
+   └── POST /retry 重置─────┴── 超过 MAX_RETRIES ──▶ error(终态)
 ```
 
-- **重试退避**：`next_retry_at = now + base_delay * 2^(retry_count-1)`；超过 `max_retries` → `error`（终态，靠手动 `POST /retry` 唤醒）。
+- **重试退避**：`next_retry_at = now + base_delay * 2^(retry_count-1)`；超过 `MAX_RETRIES` → `error`（终态，靠手动 `POST /retry` 唤醒）。
 - **恢复性**：状态全程落库；`processing` 中「卡死」的行（超时兜底）会被重新判为可重试，进程重启后 `pending` 行可被重新拾起。
 
 ### 2.2 worker 实现（`app/workers/document_worker.py`）
@@ -77,10 +77,9 @@ pending ──worker 拾起──▶ processing ──成功──▶ done
 | `source_url` | `Text` | 可空（仅 url 类型，点击打开原网页） |
 | `file_path` | `Text` | 可空（仅 pdf/word，本地相对路径） |
 | `status` | `Enum(DocumentStatus)` `native_enum=False` 存 VARCHAR(16) | 非空，`pending`/`processing`/`done`/`error`，默认 `pending` |
-| `content_markdown` | `Text` | 可空（解析产物，**用户不可见**，仅供 RAG） |
+| `content_markdown` | `Text` | 可空（解析产物，供 RAG 分块向量化 + word/url 文档阅读，经 `/content` 端点下发） |
 | `metadata` | `JSONB` | 可空（`file_name`/`mime_type`/`page_count` 等解析器回传） |
-| `retry_count` | `Integer` | 非空，默认 `0` |
-| `max_retries` | `Integer` | 非空，默认 `3` |
+| `retry_count` | `Integer` | 非空，默认 `0`（重试上限为常量 `MAX_RETRIES=3`，非列） |
 | `error_message` | `Text` | 可空（失败原因，前端展示） |
 | `next_retry_at` | `DateTime(timezone)` | 可空（排期重试） |
 | `created_at` / `updated_at` | `DateTime(timezone)` | 继承 `TimestampMixin` |
@@ -110,15 +109,23 @@ pending ──worker 拾起──▶ processing ──成功──▶ done
 
 ```python
 import uuid
+from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
-from sqlalchemy import (
-    JSON, Column, DateTime, Enum, ForeignKey, Integer, String, Text, Uuid, func,
-)
-from sqlalchemy.orm import Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.config import get_settings
 from app.models.base import Base, TimestampMixin
+
+# embedding 维度唯一真源 = settings.embedding_dim（默认 1024，bge-m3）
+EMBEDDING_DIM = get_settings().embedding_dim
+
+# 重试上限：worker 级全局策略，不随文档而异，故为常量而非列。
+MAX_RETRIES = 3
 
 
 class DocumentType(StrEnum):
@@ -135,6 +142,8 @@ class DocumentStatus(StrEnum):
 
 
 class Document(Base, TimestampMixin):
+    """知识库内文档（kb_id 必填，与笔记「全局」相反）。"""
+
     __tablename__ = "documents"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -153,14 +162,16 @@ class Document(Base, TimestampMixin):
         default=DocumentStatus.PENDING,
     )
     content_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
-    metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # `metadata` 是 SQLAlchemy 保留名，列名映射为 "metadata"、属性名用 doc_metadata
+    doc_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    next_retry_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class DocumentChunk(Base):
+    """父子切割（small-to-big）：单表自引用 parent_id，parent 不向量化、child 向量化。"""
+
     __tablename__ = "document_chunks"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -175,14 +186,17 @@ class DocumentChunk(Base):
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    doc_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True)
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(1024), nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
 ```
 
 - 两个 enum 均 `native_enum=False` 存 VARCHAR（对齐模块 3 决策，免原生 PG enum 的迁移增删值成本）。
-- `embedding` 维度从 `settings.embedding_dim` 读（唯一真源），不硬编码；模型层用 `Vector(settings.embedding_dim)` 或迁移层注入，实现时统一。
+- `embedding` 维度从 `settings.embedding_dim` 读（唯一真源），模型层用常量 `EMBEDDING_DIM` 承接；迁移层冻结默认值 1024，维度漂移由 embed 时断言兜底。
+- `max_retries` 不落库：重试上限是 worker 级全局策略、不随文档而异，故为常量 `MAX_RETRIES=3`（与 `retry_count` 列在判定处比较）。
+- `metadata` 是 SQLAlchemy 保留名，两模型列名仍映射为 `"metadata"`、属性名用 `doc_metadata`（避开 `Base.metadata`）。
 - `parent_id` 自引用 FK `ondelete=CASCADE`：删 parent → 清其 children；删 document → 清全部分块。
+- `Document.filename` 派生属性：`title + 扩展名`（`DOCUMENT_EXTENSIONS` 映射，注意 WORD 扩展名是 `docx` 而非 `source_type.value` 的 `word`），供下载文件名与 MinerU 上传 name 使用。
 
 ### 3.4 迁移 `0004_documents`（手写）
 
@@ -208,34 +222,35 @@ op.execute(
 模块 1 的 `DocumentParser` Protocol + `SourceType` 已定形，本模块落三个真实实现，工厂按 `source_type` 分发：
 
 ```
-PDF  → MinerUDocumentParser   （托管 API：提交 → 轮询 batch → markdown + content_list）
-WORD → WordDocumentParser     （本地 mammoth → markdown）
+PDF  → MinerUDocumentParser   （托管 API v4：申请上传 → PUT → 轮询 → 下载 zip → markdown）
+WORD → WordDocumentParser     （mammoth → HTML → markdownify → markdown，保留 GFM 表格）
 URL  → WebDocumentParser      （复用 WebFetcher：trafilatura → Playwright 回退 → markdown + og:title）
 ```
 
 ### 4.1 `MinerUDocumentParser`（PDF）
 
-- 封装 mineru.net 托管 API（`MINERU_API_BASE_URL` + `MINERU_API_TOKEN` 可配置，Gitee AI / 自托管同协议换 `base_url` 即可）：
-  1. 提交文件（上传或 presigned URL）→ 得 `batch_id`
-  2. 轮询状态至 `done`
-  3. 取 markdown 正文 + `content_list`（含图片/表格/公式位置）→ 组装 `ParsedDocument`
+- 封装 mineru.net 官方云 API v4（`MINERU_API_BASE_URL` 默认 `https://mineru.net` + `MINERU_API_TOKEN` 必配），四步：
+  1. `POST /api/v4/file-urls/batch` 申请上传链接 → 得 `batch_id` + `file_urls`（预签名地址）
+  2. `PUT` 文件字节到 `file_urls`
+  3. 轮询 `GET /api/v4/extract-results/batch/{batch_id}` 至 `state=done`，得 `full_zip_url`
+  4. 下载 zip、解出 markdown
 - 超时/额度/5xx → 抛可重试异常（由 worker 判重试）。
-- 图片：MinerU 返回的图 URL 保留原链接（对齐模块 3「图片不抓、留原链接」）。
+- `content_list` / 页数等元数据暂不提取（留模块 5 RAG 消费时再取 zip 内 `content_list.json`）。
 
 ### 4.2 `WordDocumentParser`（Word）
 
-- `.docx` → `mammoth`（结构保真转 markdown，段落/标题/列表/表格尽量保留）；`.doc`（老二进制格式）**不在范围**（上传校验拒绝，422）。
+- `.docx` → `mammoth.convert_to_html`（得到含 `<table>` 的 HTML）→ `markdownify`（HTML→markdown，保留 GFM 表格）。mammoth 的 markdown 输出不支持表格（会丢弃表格结构），故必须经 HTML 中转；`.doc`（老二进制格式）**不在范围**（上传校验拒绝，422）。
 - CPU 同步转换用 `asyncio.to_thread` 包一层（对齐模块 3 trafilatura 处理）。
 
 ### 4.3 `WebDocumentParser`（URL）
 
-- 复用模块 3 的 `WebFetcher`（`FallbackWebFetcher`：先静态 trafilatura、空正文回退 Playwright），产出 `FetchedPage(markdown, title, source_url)`。
+- 复用模块 3 的 `WebFetcher`（`FallbackWebFetcher`：先静态 trafilatura、空正文回退 Playwright），产出 `FetchedPage(markdown, title, source_url)`；trafilatura 抽取时 `with_metadata=False`，正文不带 YAML 元数据头（标题另经 `extract_title` 取）。
 - 标题取 `og:title`/`<title>`（worker 完成后回写 `documents.title`）。
-- **不生成摘要**（内容不可见、阅读器打开原网页，摘要无用武之地）。
+- **不生成摘要**（阅读器直接渲染解析正文，摘要无用武之地）。
 
 ### 4.4 工厂分发
 
-- `get_document_parser(settings)` 仍返回一个 `DocumentParser` 实例，但内部升级为 `DispatchDocumentParser`：按 `source_type` 路由到 MinerU / Word / Web 三个子实现（协议签名不变，业务层无感）。
+- `get_document_parser(settings)` 返回 `DispatchDocumentParser`（满足 `DocumentParser` 分发边界协议）：按 `source_type` 路由到 pdf/word/web 三个窄解析器——pdf 满足 `PdfParser`、word 满足 `WordParser`、web 满足 `UrlParser`，业务层无感。`parse` 透传可选 `filename`（原始文件名），仅 PDF（MinerU 上传 name）使用。
 
 ---
 
@@ -350,20 +365,21 @@ class DocumentRepository(Protocol):
 | `get(doc_id)` | 查无抛 `NotFoundError("文档不存在")` |
 | `delete(doc_id)` | 先 `get`（404）→ 删文件（pdf/word 时 `FileStore.delete`）→ `repo.delete`（chunk 随 CASCADE 清） |
 | `retry(doc_id)` | 先 `get`（404）→ 仅 `error` 态可重试（否则 409）→ `status=pending`、`retry_count=0`、`next_retry_at=NULL`、`error_message=NULL` → `repo.update` |
+| `get_content(doc_id)` | 先 `get`（404）→ 仅 `done` 态可读（否则 409）→ 返回 `content_markdown`（供阅读器渲染） |
 
 **`ingest.py`（worker 调用）**
 
 ```python
 async def ingest(document_id: uuid.UUID) -> None:
     # 1. 置 processing
-    # 2. parse(source_type, file_path/content/url) -> markdown
+    # 2. parse(source_type, content/url) -> markdown
     # 3. content_markdown 落库；url 时回写 title=og:title
     # 4. parent 切分 -> [section]
     # 5. 逐节 child 切分 -> [(parent, [child])]
     # 6. embed child 批量 -> vectors
     # 7. repo.add_chunks(全部 parent+child)
     # 8. 置 done
-    # 失败：判定可重试 → 排期重试 / 超 max_retries → error + error_message
+    # 失败：判定可重试 → 排期重试 / 超 MAX_RETRIES → error + error_message
 ```
 
 ### 8.3 Router（`api/routes/documents.py`，`prefix="/documents"`）
@@ -374,11 +390,11 @@ async def ingest(document_id: uuid.UUID) -> None:
 | POST | `/api/documents/from-url`（json: `url` + `kb_id`） | 201 `DocumentRead` | 422（URL 非法）· 404 |
 | GET | `/api/documents/{document_id}` | 200 `DocumentRead` | 404 |
 | GET | `/api/documents/{document_id}/file` | 200 原文件流（仅 pdf/word） | 404 / 409（url 类型） |
+| GET | `/api/documents/{document_id}/content` | 200 `DocumentContentRead{markdown}`（word/url 阅读正文） | 404 / 409（非 done） |
 | POST | `/api/documents/{document_id}/retry` | 200 `DocumentRead` | 404 / 409（非 error） |
 | DELETE | `/api/documents/{document_id}` | 204 | 404 |
 
-- **无 `/content` markdown 端点**（markdown 全程不可见，无 markdown 阅读器）。
-- `GET /file`：pdf 用 `Content-Disposition: inline`（供 `<iframe>` 内嵌），word 用 `attachment`（触发下载）。
+- `GET /file`：pdf 用 `Content-Disposition: inline`（供 `<iframe>` 内嵌），word 用 `attachment`（触发下载）；文件名用原始 `title + 扩展名`（`Document.filename`），RFC 5987 编码非 ASCII。
 
 ### 8.4 知识库内容列表（`api/routes/knowledge_bases.py` 扩展）
 
@@ -405,7 +421,11 @@ class DocumentRead(BaseModel):
     metadata: dict | None
     created_at: datetime
     updated_at: datetime
-    # 不含 content_markdown / file_path（正文不可见，文件走 /file 端点）
+    # 不含 content_markdown / file_path（正文走 /content 端点，文件走 /file 端点）
+
+
+class DocumentContentRead(BaseModel):
+    markdown: str  # 解析后的正文（word/url 阅读器渲染）
 ```
 
 ```python
@@ -417,7 +437,7 @@ class ContentItem(BaseModel):
 ```
 
 - 回改 `NoteRead`：去掉 `type`/`summary`/`source_url` 三字段。
-- `DocumentRead` 不含正文：列表/轮询 body 保持轻量，原文件经 `/file`、URL 经 `source_url` 直达。
+- `DocumentRead` 不含正文：列表/轮询 body 保持轻量；正文经 `/content`、原文件经 `/file`、URL 原文经 `source_url` 直达。
 
 ---
 
@@ -455,15 +475,15 @@ router.tsx                # 移除 /documents/:documentId 路由（浮动窗口�
 - **列表**：document 条目显示标题 + `source_type` 图标 + 状态徽标（`pending`/`processing` 转圈、`done` 正常、`error` 红）；`error` 悬浮可重试/删除；点击打开浮动阅读窗口。
 - **进度轮询**：`useDocument(id)` 在 `status ∈ {pending, processing}` 时 `refetchInterval` 轮询，`done/error` 停。
 - **浮动阅读窗口（`DocumentWindow`）**：点击文档在页面上层打开可拖拽、可调整大小、可关闭的窗口；同一文档去重、重复点击聚焦已有窗口；可同时开多个；纯内存态，切换知识库或刷新即清空。窗口内容按 source_type 渲染：
-  - `pdf`：`<iframe src={documentFileUrl(id)}>` 浏览器原生内嵌预览（不引 PDF.js，最简）；
-  - `word`：「下载原文件」按钮 → `documentFileUrl(id)`（`attachment` 触发下载/本地 Word 打开）；
-  - `url`：「打开原网页」按钮 → `window.open(source_url, "_blank")`。
+  - `pdf`：`<iframe src={documentFileUrl(id)}>` 浏览器原生内嵌预览（不引 PDF.js，最简）+ header「下载原文件」按钮；
+  - `word`：渲染解析出的 Markdown（`GET /content` → `react-markdown` + `remark-gfm`）+ header「下载原文件」按钮；
+  - `url`：渲染解析出的 Markdown（同上）+ header「打开原网页」按钮（新标签页打开 `source_url`）。
 - **问答面板常驻**：右侧 `QaPanel` 始终可见、针对整个知识库提问；浮动文档窗口仅作阅读参考，不切换问答范围。
 - **删除**：二次确认 → `deleteDocument` → `invalidateQueries(['knowledge-bases'])`；若该文档窗口正打开则一并关闭。
 
 ### 9.3 前端依赖
 
-- 本模块**无新增前端依赖**（PDF 内嵌用浏览器原生 `<iframe>`，不引 PDF.js）。
+- 本模块新增前端依赖 `react-markdown` + `remark-gfm`（word/url 的 markdown 阅读器，原生支持 GFM 表格/图片/代码）；PDF 内嵌仍用浏览器原生 `<iframe>`，不引 PDF.js。
 
 ---
 
@@ -477,7 +497,7 @@ router.tsx                # 移除 /documents/:documentId 路由（浮动窗口�
 | API 集成 | `test_api_documents.py` | `dependency_overrides` 换 Fake，走 6 端点 + contents 含 document 条目 |
 | worker 测试 | `test_worker.py` | 可控 Fake 驱动一轮循环：拾取 pending、done/error 流转、`next_retry_at` 过滤、processing 超时兜底 |
 | 回改回归 | `test_notes.py` | notes 无 url 路径、NoteRead 无 type/summary/source_url、from-url 端点移除 |
-| 集成 Fake | `tests/fakes.py` 增补 | `FakeDocumentRepository` / `FakeMinerUParser` / `FakeWordParser` / `FakeWebDocumentParser` / `FakeFileStore` / `FakeEmbeddingClient`（已存在） |
+| 集成 Fake | `tests/fakes.py` 增补 | `FakeDocumentRepository` / `FakeDocumentParser`（假分发器）/ `FakeFileParser` / `FakeUrlParser`（窄解析器替身）/ `FakeFileStore` / `FakeEmbeddingClient` |
 
 - 关键用例：pdf 上传→pending→worker done 后 contents 含 document、child 已向量化；word 上传→mammoth 解析；from-url→WebFetcher 抓取→done 后 title=og:title；解析失败→重试→超限→error→retry 重置；删除→文件与 chunk 皆清。
 
@@ -499,25 +519,25 @@ router.tsx                # 移除 /documents/:documentId 路由（浮动窗口�
 | T10 | 后端测试（fakes + 分块 + ingest + service + API + worker + notes 回归） | pytest 全绿 |
 | T11 | 前端数据层 `types.ts`/`documents.ts`/`useDocuments.ts` | 数据层 |
 | T12 | 前端 `DocumentDropzone` + `UrlInputModal` + `ContentListPane` 状态/进度/删除 | 上传闭环 |
-| T13 | 前端 `DocumentWindow`（浮动窗口，PDF 内嵌/Word 下载/URL 打开）+ `useDocumentWindows` | 阅读闭环 |
+| T13 | 前端 `DocumentWindow`（浮动窗口，PDF 内嵌 / Word 与 URL markdown 阅读）+ `useDocumentWindows` | 阅读闭环 |
 | T14 | 全量质量门禁 + 手工验收 | ruff/mypy/pytest/eslint/tsc/build 全绿 |
 
 ---
 
 ## 12. 已定决策
 
-1. **异步处理**：DB 轮询式 worker + 自建重试退避（`retry_count`/`max_retries`/`next_retry_at`），状态落库、重启可恢复，不引 Redis/队列。
-2. **来源路由按类型分发**：PDF→MinerU、Word→本地 mammoth、URL→复用 WebFetcher；三实现满足统一 `DocumentParser` Protocol。
-3. **URL 只作为文档**：放弃网页笔记；`documents.source_type = pdf/word/url`；点击打开原网页；解析 markdown 全程用户不可见。
+1. **异步处理**：DB 轮询式 worker + 自建重试退避（`retry_count`/`next_retry_at` + 常量 `MAX_RETRIES`），状态落库、重启可恢复，不引 Redis/队列。
+2. **来源路由按类型分发**：PDF→MinerU、Word→mammoth+markdownify、URL→复用 WebFetcher；pdf/word/web 分别满足 `PdfParser`/`WordParser`/`UrlParser` 窄协议，对外统一由 `DispatchDocumentParser` 按 `source_type` 分发。
+3. **URL 只作为文档**：放弃网页笔记；`documents.source_type = pdf/word/url`；解析出 markdown 供阅读器渲染，也可点击打开原网页核对最新内容。
 4. **彻底删除网页笔记**：`notes` 删 `type`/`summary`/`source_url` 三列，删 `from-url` 端点、`WebNoteFormModal`、「新建→网页」入口、url 摘要块；`WebFetcher` 保留给 URL 文档复用。
 5. **父子切割（small-to-big）**：单表 `document_chunks` 自引用 `parent_id`；parent 大块存上下文不向量化，child 小块向量化；检索命中 child 回 parent 出上下文。
 6. **内容感知分块**：5 个可插拔 splitter（结构化递归=兜底 + 表格 + 代码 AST + 法律条例 + FAQ 问答对），独立 `app/chunking/` 包。
-7. **阅读器 = 原文件阅读器**：PDF 内嵌预览（浏览器原生 `<iframe>`）、Word 下载、URL 打开原网页；无 markdown 阅读器。
+7. **文档阅读器**：PDF 内嵌预览原文件（浏览器原生 `<iframe>`）；Word 与 URL 渲染解析出的 Markdown（`react-markdown` + `remark-gfm`，支持 GFM 表格），并提供「下载原文件」（pdf/word）或「打开原网页」（url）按钮。
 8. **笔记向量化留模块 5**：笔记可变需编辑重向量化 + 索引语义，随 RAG 消费方一起定。
 9. **文件存储本地磁盘**：`backend/storage/documents/`（gitignore），`FileStore` 抽象留对象存储扩展点；URL 无本地文件只存 `source_url`。
-10. **正文与元数据分离**：`DocumentRead` 不含 `content_markdown`/`file_path`，正文不可见、原文件经 `/file` 端点流式下发。
+10. **正文与元数据分离**：`DocumentRead` 不含 `content_markdown`/`file_path`；正文经 `/content` 端点下发（阅读器渲染），原文件经 `/file` 端点流式下发。
 11. **文档列表并入知识库 contents**：不单开 documents 列表端点，`ContentItem` 增 `document` 条目（对齐模块 3 决策 #13）。
 12. **Word 仅 `.docx`**：`.doc` 老格式上传校验拒绝（422）。
-13. **URL 文档不生成摘要**：内容不可见、点开即原网页，列表只显示标题（og:title）。
+13. **URL 文档不生成摘要**：阅读器直接渲染解析正文，列表只显示标题（og:title）。
 14. **文档阅读 = 浮动窗口（非路由面板）**：点文档在页面上层打开可拖拽/调整大小/关闭的浮动窗口，可同时开多个、同文档去重聚焦；纯内存态（去掉 `/knowledge-bases/:id/documents/:documentId` 路由、不持久化，刷新即消失）；右侧 `QaPanel` 常驻并针对整个知识库，文档窗口仅阅读参考。此为「选中走 URL」（决策 #9）在文档阅读场景的例外：知识库/笔记选中仍走 URL，文档阅读改内存浮动窗口。
 15. **上传入口拆分 + 去笔记**：`DocumentUploadModal` 拆为 `DocumentDropzone`（本地文档，大拖拽窗 + 批量多文件 + 逐文件进度）与 `UrlInputModal`（URL 文档，单一链接输入）两个独立组件；「添加内容」菜单去掉「笔记」项（笔记仅不再从知识库新建，列表已有笔记保留）。

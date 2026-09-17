@@ -67,7 +67,7 @@ backend/
 │       ├── __init__.py      # 导出三个 Protocol 与工厂函数
 │       ├── llm.py           # LLMClient Protocol + FakeLLMClient
 │       ├── embedding.py     # EmbeddingClient Protocol + FakeEmbeddingClient
-│       └── parser.py        # DocumentParser Protocol + FakeDocumentParser
+│       └── parser.py        # DocumentParser Protocol
 └── tests/
     ├── __init__.py
     ├── conftest.py          # 测试 fixtures（settings、db、client）
@@ -288,7 +288,6 @@ class SourceType(StrEnum):
     PDF = "pdf"
     URL = "url"
     WORD = "word"
-    TEXT = "text"          # txt / markdown 等纯文本
 
 @dataclass(frozen=True)
 class ParsedDocument:
@@ -301,14 +300,12 @@ class DocumentParser(Protocol):
         self,
         *,
         source_type: SourceType,
-        file_path: str | None = None,
         content: bytes | None = None,
         url: str | None = None,
     ) -> ParsedDocument: ...
 ```
 
-- `FakeDocumentParser` 返回固定 markdown 文本。
-- **入参约定**（协议层宽松，语义用文档约束）：`source_type` 与入参一一对应——`PDF/WORD/TEXT → file_path 或 content`、`URL → url`。具体 MinerU API 的请求/响应细节到模块 4 接入时再定；此处只锁「输入 pdf/url/word/text 四选一 + 输出 markdown + 元数据」的语义。
+- **入参约定**（协议层宽松，语义用文档约束）：`source_type` 与入参一一对应——`PDF/WORD → content`、`URL → url`。具体 MinerU API 的请求/响应细节到模块 4 接入时再定；此处只锁「输入 pdf/url/word 三选一 + 输出 markdown + 元数据」的语义。
 
 ### 6.4 工厂函数（`integrations/__init__.py`）
 
@@ -427,7 +424,7 @@ jobs:
 
 ## 11. 已定决策（原「待确认清单」定稿结论）
 
-1. **接口签名**（第 6 节）：认可，并已收紧——`ChatMessage.role` 用 `Literal`，`SourceType` 增补 `text`，`metadata` 收为 `dict[str, str]`，`embed_documents/embed_query` 拆分保持不变。
+1. **接口签名**（第 6 节）：认可，并已收紧——`ChatMessage.role` 用 `Literal`，`metadata` 收为 `dict[str, str]`，`embed_documents/embed_query` 拆分保持不变。
 2. **健康检查**：采纳 **liveness/readiness 拆分**，`/health/ready` 在 DB 不可达时返回 **503**（非 200）。
 3. **Python 版本**：定 3.12，无异议。
 4. **前端包管理器**：pnpm，无异议。

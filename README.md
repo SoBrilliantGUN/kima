@@ -45,7 +45,7 @@ docker exec kima-db pg_isready -U kima -d kima
 cd backend
 uv sync                        # 安装依赖（首次）
 cp .env.example .env           # 按需改 DATABASE_URL 等
-uv run alembic upgrade head    # 建表（baseline + knowledge_bases + notes + note_knowledge_bases，含 CREATE EXTENSION vector）
+uv run alembic upgrade head    # 建表（baseline + knowledge_bases + notes + note_knowledge_bases + documents + document_chunks，含 CREATE EXTENSION vector）
 uv run uvicorn app.main:app --reload
 ```
 
@@ -78,14 +78,24 @@ pnpm dev
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/notes/from-url` | 网页笔记（抓取正文 + DeepSeek 摘要） |
 | POST | `/api/notes` | 新建空白笔记 |
 | GET | `/api/notes?limit=&offset=` | 列表（分页） |
 | GET | `/api/notes/{id}` | 详情 |
 | PATCH | `/api/notes/{id}` | 更新（标题/正文，自动保存） |
 | DELETE | `/api/notes/{id}` | 删除 |
 | POST | `/api/notes/{id}/knowledge-bases` | 添加到知识库（幂等） |
-| GET | `/api/knowledge-bases/{id}/contents` | 知识库内容列表（关联笔记） |
+| GET | `/api/knowledge-bases/{id}/contents` | 知识库内容列表（笔记 + 文档） |
+
+## 文档 API（模块 4）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/documents`（multipart: `file` + `kb_id`） | 上传 PDF/Word → 201（pending，后台异步解析） |
+| POST | `/api/documents/from-url`（json: `url` + `kb_id`） | 抓取网页 URL → 201（pending） |
+| GET | `/api/documents/{id}` | 详情（状态/来源/错误信息） |
+| GET | `/api/documents/{id}/file` | 原文件流（pdf 内嵌 / word 下载；url 类型 409） |
+| POST | `/api/documents/{id}/retry` | 失败重试（仅 error 态） |
+| DELETE | `/api/documents/{id}` | 删除 |
 
 ## 质量门禁
 
@@ -106,10 +116,8 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时自动跑以上检查 + docke
 | 1 | 基础设施（脚手架 + DB + 三个集成抽象 + 前端布局） | ✅ 完成 |
 | 2 | 知识库管理 CRUD | ✅ 完成 |
 | 3 | 笔记 / TipTap 编辑器 | ✅ 完成 |
-| 4 | 文档解析与归档（PDF/URL/Word → 解析 → 分块 → 向量化） | 📝 方案定稿（待实现） |
+| 4 | 文档解析与归档（PDF/URL/Word → 解析 → 分块 → 向量化） | ✅ 完成 |
 | 5 | AI 智能问答（Advanced RAG） | 待做 |
 | 6 | 全局搜索 | 待做 |
 
 详细需求见 `docs/requirements.md`；模块 1 设计见 `docs/module-1-infrastructure.md`，模块 2 设计见 `docs/module-2-knowledge-bases.md`，模块 3 设计见 `docs/module-3-notes.md`，模块 4 设计见 `docs/module-4-documents.md`。
-
-> 模块 4 已定稿（`docs/module-4-documents.md`）：将新增文档 API（PDF/Word/URL → 解析 → 内容感知父子分块 → 向量化入库，异步处理）；同时**删除网页笔记**——`POST /api/notes/from-url` 端点与 `notes` 表的 `type`/`summary`/`source_url` 三列将在模块 4 移除（URL 统一归入文档）。上表「笔记 API」的 from-url 在当前代码中仍存在，待模块 4 实现后移除。
