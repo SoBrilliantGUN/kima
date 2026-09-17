@@ -1,8 +1,9 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # backend/ 目录（相对本文件向上三级：core -> app -> backend）
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -38,11 +39,12 @@ class Settings(BaseSettings):
     embedding_dim: int = 1024
 
     # MinerU
-    mineru_api_base_url: str = ""
+    mineru_api_base_url: str = "https://mineru.net"
     mineru_api_token: str = ""
 
     # CORS
-    cors_origins: list[str] = ["http://localhost:5173"]
+    # NoDecode：env 里是逗号分隔字符串，跳过 pydantic-settings 的 JSON 解码，交给下方 _split_cors
+    cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
 
     @field_validator("cors_origins", mode="before")
     @classmethod

@@ -14,6 +14,10 @@ dependencies = [
     "httpx>=0.28",
     "trafilatura>=2.0",
     "playwright>=1.49",
+    "python-multipart>=0.0.12",
+    "pgvector>=0.3.6",
+    "mammoth>=1.8.0",
+    "markdownify>=1.2.3",
 ]
 
 [dependency-groups]
@@ -42,7 +46,7 @@ module = ["tests.*"]
 disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
-module = ["trafilatura", "trafilatura.*"]
+module = ["trafilatura", "trafilatura.*", "mammoth"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -46,11 +46,13 @@ class EmptyContentError(FetchError):
 
 
 def extract_markdown(html: bytes) -> str:
+    # with_metadata=False：正文只留正文，元信息（title/author/…）由 extract_title 单独取，
+    # 避免 trafilatura 把 YAML 元数据块塞进 markdown 头部，污染正文展示与 RAG 切块。
     extracted = trafilatura.extract(
         html,
         output_format="markdown",
         include_images=True,
-        with_metadata=True,
+        with_metadata=False,
     )
     return extracted or ""
 
@@ -158,7 +160,7 @@ class FakeWebFetcher:
         )
         self._fail = fail
 
-    async def fetch(self, _url: str) -> FetchedPage:
+    async def fetch(self, url: str) -> FetchedPage:
         if self._fail:
             raise FetchError("无法抓取该网页")
         return self._page
@@ -179,8 +181,14 @@ async def start_browser() -> Browser | None:
         _playwright = await async_playwright().start()
         _browser = await _playwright.chromium.launch(headless=True)
         return _browser
-    except Exception:
+    except Exception as exc:
         logger.exception("Playwright 浏览器启动失败，SPA 页面抓取将不可用")
+        if isinstance(exc, NotImplementedError):
+            logger.warning(
+                "Windows 上以 `--reload` 运行时 uvicorn 使用 SelectorEventLoop，"
+                "无法创建子进程启动 Playwright；改用 `uvicorn app.main:app`（去掉 --reload）"
+                "即可启用 SPA 抓取"
+            )
         return None
 
 

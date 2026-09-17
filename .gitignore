@@ -12,6 +12,9 @@ __pycache__/
 node_modules/
 dist/
 
+# 文档原文件存储（本地磁盘）
+backend/storage/
+
 # OS / editor
 .DS_Store
 Thumbs.db

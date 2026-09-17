@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -11,9 +12,14 @@ from app.core.config import get_settings
 from app.core.db import async_session_factory
 from app.core.exceptions import DomainError
 from app.core.logging import RequestIdMiddleware, setup_logging
+from app.core.storage import LocalFileStore
+from app.integrations import get_document_parser, get_embedding_client
 from app.integrations.web import start_browser, stop_browser
+from app.repositories.document import SqlAlchemyDocumentRepository
 from app.repositories.knowledge_base import SqlAlchemyKnowledgeBaseRepository
+from app.services.ingest import IngestService
 from app.services.knowledge_base import KnowledgeBaseService
+from app.workers.document_worker import DocumentWorker
 
 
 async def seed_default_knowledge_base() -> None:
@@ -23,11 +29,35 @@ async def seed_default_knowledge_base() -> None:
         await service.ensure_default()
 
 
+def build_document_worker() -> DocumentWorker:
+    """用真实依赖构造文档处理 worker（每个操作独立 session）。"""
+    settings = get_settings()
+    parser = get_document_parser(settings)
+    embedder = get_embedding_client(settings)
+    file_store = LocalFileStore()
+
+    return DocumentWorker(
+        repo_factory=lambda: SqlAlchemyDocumentRepository(async_session_factory()),
+        ingest_factory=lambda: IngestService(
+            repository=SqlAlchemyDocumentRepository(async_session_factory()),
+            parser=parser,
+            embedder=embedder,
+            file_store=file_store,
+        ),
+    )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await seed_default_knowledge_base()
     await start_browser()
+    worker_task = asyncio.create_task(build_document_worker().run())
     yield
+    worker_task.cancel()
+    try:
+        await worker_task
+    except asyncio.CancelledError:
+        pass
     await stop_browser()
 
 

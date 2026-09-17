@@ -1,9 +1,19 @@
 from functools import lru_cache
 
 from app.core.config import Settings
-from app.integrations.embedding import EmbeddingClient, FakeEmbeddingClient
+from app.integrations.embedding import (
+    EmbeddingClient,
+    FakeEmbeddingClient,
+    SiliconFlowEmbeddingClient,
+)
 from app.integrations.llm import DeepSeekLLMClient, FakeLLMClient, LLMClient
-from app.integrations.parser import DocumentParser, FakeDocumentParser
+from app.integrations.parser import (
+    DispatchDocumentParser,
+    DocumentParser,
+    MinerUDocumentParser,
+    WebDocumentParser,
+    WordDocumentParser,
+)
 
 __all__ = [
     "LLMClient",
@@ -32,22 +42,35 @@ def _llm_client(provider: str, model: str, base_url: str, api_key: str) -> LLMCl
 
 def get_embedding_client(settings: Settings) -> EmbeddingClient:
     return _embedding_client(
-        settings.embedding_provider, settings.embedding_model, settings.embedding_dim
+        settings.embedding_provider,
+        settings.embedding_model,
+        settings.embedding_dim,
+        settings.embedding_base_url,
+        settings.embedding_api_key,
     )
 
 
 @lru_cache(maxsize=1)
-def _embedding_client(provider: str, model: str, dimension: int) -> EmbeddingClient:
+def _embedding_client(
+    provider: str, model: str, dimension: int, base_url: str, api_key: str
+) -> EmbeddingClient:
     if provider == "fake":
         return FakeEmbeddingClient(dimension=dimension)
+    if provider == "siliconflow":
+        return SiliconFlowEmbeddingClient(
+            base_url=base_url, api_key=api_key, model=model, dimension=dimension
+        )
     raise ValueError(f"Unsupported Embedding provider: {provider}")
 
 
 def get_document_parser(settings: Settings) -> DocumentParser:
-    # 模块 1 仅 fake；模块 4 接入 MinerU 时按 mineru_api_base_url 注册真实实现
-    return _document_parser(settings.mineru_api_base_url)
+    return _document_parser(settings.mineru_api_base_url, settings.mineru_api_token)
 
 
 @lru_cache(maxsize=1)
-def _document_parser(base_url: str) -> DocumentParser:
-    return FakeDocumentParser()
+def _document_parser(mineru_base_url: str, mineru_token: str) -> DocumentParser:
+    return DispatchDocumentParser(
+        pdf=MinerUDocumentParser(base_url=mineru_base_url, token=mineru_token),
+        word=WordDocumentParser(),
+        web=WebDocumentParser(),
+    )
