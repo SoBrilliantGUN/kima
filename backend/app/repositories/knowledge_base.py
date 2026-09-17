@@ -1,7 +1,8 @@
 import uuid
 from typing import Protocol
 
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.knowledge_base import KnowledgeBase
@@ -48,6 +49,10 @@ class SqlAlchemyKnowledgeBaseRepository:
         return kb
 
     async def update(self, kb: KnowledgeBase) -> KnowledgeBase:
+        if inspect(kb).session is not self._session:
+            raise InvalidRequestError(
+                "update() 只接受本 session 已加载的持久对象（detached/transient 请先 get）"
+            )
         await self._session.commit()
         await self._session.refresh(kb)
         return kb

@@ -2,8 +2,9 @@ import uuid
 from collections.abc import Sequence
 from typing import Any, Protocol, cast
 
-from sqlalchemy import CursorResult, func, select
+from sqlalchemy import CursorResult, func, inspect, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.note import Note, note_knowledge_bases
@@ -45,6 +46,10 @@ class SqlAlchemyNoteRepository:
         return note
 
     async def update(self, note: Note) -> Note:
+        if inspect(note).session is not self._session:
+            raise InvalidRequestError(
+                "update() 只接受本 session 已加载的持久对象（detached/transient 请先 get）"
+            )
         await self._session.commit()
         await self._session.refresh(note)
         return note

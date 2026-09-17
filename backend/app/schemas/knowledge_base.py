@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.document import DocumentRead
 from app.schemas.note import NoteRead
 
 COLOR_PATTERN = r"^#[0-9A-Fa-f]{6}$"
@@ -72,10 +73,11 @@ class KnowledgeBaseList(BaseModel):
 
 
 class ContentItem(BaseModel):
-    """知识库内容列表的异构条目，靠 `type` 判别。模块 4 增 `document`。"""
+    """知识库内容列表的异构条目，靠 `type` 判别（note / document）。"""
 
-    type: Literal["note"]
+    type: Literal["note", "document"]
     note: NoteRead | None = None
+    document: DocumentRead | None = None
 
 
 class ContentList(BaseModel):

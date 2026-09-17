@@ -1,17 +1,11 @@
 import uuid
-from enum import StrEnum
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, String, Table, Text, Uuid, func
+from sqlalchemy import Column, DateTime, ForeignKey, String, Table, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
 
 DEFAULT_NOTE_TITLE = "无标题笔记"
-
-
-class NoteType(StrEnum):
-    MARKDOWN = "markdown"
-    URL = "url"
 
 
 note_knowledge_bases = Table(
@@ -29,15 +23,10 @@ note_knowledge_bases = Table(
 
 
 class Note(Base, TimestampMixin):
-    """笔记实体（全局，不挂知识库）。"""
+    """笔记实体（全局，不挂知识库）。纯 Markdown 空白笔记。"""
 
     __tablename__ = "notes"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
-    type: Mapped[NoteType] = mapped_column(
-        Enum(NoteType, native_enum=False, length=16), nullable=False, default=NoteType.MARKDOWN
-    )
     content_markdown: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -23,3 +23,8 @@ class ConflictError(DomainError):
 class FetchError(DomainError):
     status_code = 422
     code = "fetch_failed"
+
+
+class ValidationError(DomainError):
+    status_code = 422
+    code = "validation_error"

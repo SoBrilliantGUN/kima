@@ -1,19 +1,17 @@
 """笔记服务层。
 
 笔记是全局实体：可以独立存在（不挂知识库），也可以通过
-note_knowledge_bases 关联表挂载到任意知识库。
+note_knowledge_bases 关联表挂载到任意知识库。笔记为纯 Markdown 空白笔记。
 """
 
 import uuid
 from collections.abc import Sequence
 
 from app.core.exceptions import NotFoundError
-from app.integrations.web import WebFetcher
-from app.models.note import DEFAULT_NOTE_TITLE, Note, NoteType
+from app.models.note import DEFAULT_NOTE_TITLE, Note
 from app.repositories.knowledge_base import KnowledgeBaseRepository
 from app.repositories.note import NoteRepository
-from app.schemas.note import NoteCreate, NoteCreateFromUrl, NoteUpdate
-from app.services.llm import Summarizer
+from app.schemas.note import NoteCreate, NoteUpdate
 
 # 列表分页的默认值与上限。
 LIST_LIMIT_DEFAULT = 50
@@ -27,13 +25,9 @@ class NoteService:
         self,
         repository: NoteRepository,
         kb_repository: KnowledgeBaseRepository,
-        web_fetcher: WebFetcher,
-        summarizer: Summarizer,
     ) -> None:
         self._repository = repository
         self._kb_repository = kb_repository
-        self._web_fetcher = web_fetcher
-        self._summarizer = summarizer
 
     async def _validate_kb_if_present(self, kb_id: uuid.UUID | None) -> None:
         """若指定了知识库则校验其存在；未指定（None）表示全局笔记，跳过。"""
@@ -42,32 +36,10 @@ class NoteService:
         if await self._kb_repository.get(kb_id) is None:
             raise NotFoundError("知识库不存在")
 
-    async def create_from_url(self, payload: NoteCreateFromUrl) -> Note:
-        """从 URL 抓取网页正文并生成摘要，创建一篇 URL 笔记。"""
-        await self._validate_kb_if_present(payload.knowledge_base_id)
-        fetched = await self._web_fetcher.fetch(payload.url)
-        title = fetched.title or payload.url
-        summary = await self._summarizer.summarize(fetched.markdown)
-        note = Note(
-            title=title,
-            type=NoteType.URL,
-            content_markdown=fetched.markdown,
-            summary=summary,
-            source_url=payload.url,
-        )
-        note = await self._repository.add(note)
-        if payload.knowledge_base_id is not None:
-            await self._repository.associate(note.id, payload.knowledge_base_id)
-        return note
-
     async def create_blank(self, payload: NoteCreate) -> Note:
         """创建一篇空白的 Markdown 笔记。"""
         await self._validate_kb_if_present(payload.knowledge_base_id)
-        note = Note(
-            title=payload.title or DEFAULT_NOTE_TITLE,
-            type=NoteType.MARKDOWN,
-            content_markdown="",
-        )
+        note = Note(title=payload.title or DEFAULT_NOTE_TITLE, content_markdown="")
         note = await self._repository.add(note)
         if payload.knowledge_base_id is not None:
             await self._repository.associate(note.id, payload.knowledge_base_id)

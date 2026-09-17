@@ -13,24 +13,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.db import get_db_session
+from app.core.storage import FileStore, LocalFileStore
 from app.integrations import get_document_parser, get_embedding_client, get_llm_client
 from app.integrations.embedding import EmbeddingClient
 from app.integrations.llm import LLMClient
 from app.integrations.parser import DocumentParser
-from app.integrations.web import (
-    FallbackWebFetcher,
-    PlaywrightWebFetcher,
-    TrafilaturaWebFetcher,
-    WebFetcher,
-    get_browser,
-)
+from app.repositories.document import DocumentRepository, SqlAlchemyDocumentRepository
 from app.repositories.knowledge_base import (
     KnowledgeBaseRepository,
     SqlAlchemyKnowledgeBaseRepository,
 )
 from app.repositories.note import NoteRepository, SqlAlchemyNoteRepository
+from app.services.document import DocumentService
 from app.services.knowledge_base import KnowledgeBaseService
-from app.services.llm import Summarizer
 from app.services.note import NoteService
 
 
@@ -47,14 +42,14 @@ def get_llm_client_dep(settings: Annotated[Settings, Depends(get_settings_dep)])
 def get_embedding_client_dep(
     settings: Annotated[Settings, Depends(get_settings_dep)],
 ) -> EmbeddingClient:
-    """按 settings.embedding_provider 返回对应的 Embedding 客户端（当前仅 fake）。"""
+    """按 settings.embedding_provider 返回对应的 Embedding 客户端。"""
     return get_embedding_client(settings)
 
 
 def get_document_parser_dep(
     settings: Annotated[Settings, Depends(get_settings_dep)],
 ) -> DocumentParser:
-    """返回文档解析器（模块 1 为 fake，模块 4 接入 MinerU 后替换实现）。"""
+    """返回文档解析器（按 source_type 分发的 DispatchDocumentParser）。"""
     return get_document_parser(settings)
 
 
@@ -72,13 +67,6 @@ def get_kb_service(
     return KnowledgeBaseService(repo)
 
 
-def get_web_fetcher_dep() -> WebFetcher:
-    """返回网页抓取器：先静态 trafilatura，正文为空时回退到 Playwright 渲染 SPA。"""
-    browser = get_browser()
-    spa = PlaywrightWebFetcher(browser) if browser is not None else None
-    return FallbackWebFetcher(TrafilaturaWebFetcher(), spa)
-
-
 def get_note_repository(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> NoteRepository:
@@ -86,21 +74,33 @@ def get_note_repository(
     return SqlAlchemyNoteRepository(session)
 
 
-def get_summarizer_dep(
-    llm: Annotated[LLMClient, Depends(get_llm_client_dep)],
-) -> Summarizer:
-    """用 LLM 客户端构造摘要生成器（LLM 相关操作统一经此注入）。"""
-    return Summarizer(llm)
-
-
 def get_note_service(
     repo: Annotated[NoteRepository, Depends(get_note_repository)],
     kb_repo: Annotated[KnowledgeBaseRepository, Depends(get_kb_repository)],
-    web_fetcher: Annotated[WebFetcher, Depends(get_web_fetcher_dep)],
-    summarizer: Annotated[Summarizer, Depends(get_summarizer_dep)],
 ) -> NoteService:
-    """构造笔记服务，注入仓库、知识库仓库、抓取器与摘要生成器。"""
-    return NoteService(repo, kb_repo, web_fetcher, summarizer)
+    """构造笔记服务，注入笔记仓库与知识库仓库。"""
+    return NoteService(repo, kb_repo)
+
+
+def get_file_store() -> FileStore:
+    """返回本地磁盘文件存储（模块 4 文档原文件落盘/读取）。"""
+    return LocalFileStore()
+
+
+def get_document_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> DocumentRepository:
+    """用当前数据库会话构造文档仓库的 SQLAlchemy 实现。"""
+    return SqlAlchemyDocumentRepository(session)
+
+
+def get_document_service(
+    repo: Annotated[DocumentRepository, Depends(get_document_repository)],
+    kb_repo: Annotated[KnowledgeBaseRepository, Depends(get_kb_repository)],
+    file_store: Annotated[FileStore, Depends(get_file_store)],
+) -> DocumentService:
+    """构造文档服务，注入文档仓库、知识库仓库与文件存储。"""
+    return DocumentService(repo, kb_repo, file_store)
 
 
 # Annotated 类型别名：把「类型 + 依赖函数」打包，路由签名直接使用这些名字完成注入。
@@ -109,11 +109,12 @@ DBSessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 LLMClientDep = Annotated[LLMClient, Depends(get_llm_client_dep)]
 EmbeddingClientDep = Annotated[EmbeddingClient, Depends(get_embedding_client_dep)]
 DocumentParserDep = Annotated[DocumentParser, Depends(get_document_parser_dep)]
-WebFetcherDep = Annotated[WebFetcher, Depends(get_web_fetcher_dep)]
 KnowledgeBaseRepositoryDep = Annotated[KnowledgeBaseRepository, Depends(get_kb_repository)]
 KnowledgeBaseServiceDep = Annotated[KnowledgeBaseService, Depends(get_kb_service)]
 NoteRepositoryDep = Annotated[NoteRepository, Depends(get_note_repository)]
 NoteServiceDep = Annotated[NoteService, Depends(get_note_service)]
+DocumentRepositoryDep = Annotated[DocumentRepository, Depends(get_document_repository)]
+DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
 
 __all__ = [
     "SettingsDep",
@@ -121,9 +122,10 @@ __all__ = [
     "LLMClientDep",
     "EmbeddingClientDep",
     "DocumentParserDep",
-    "WebFetcherDep",
     "KnowledgeBaseRepositoryDep",
     "KnowledgeBaseServiceDep",
     "NoteRepositoryDep",
     "NoteServiceDep",
+    "DocumentRepositoryDep",
+    "DocumentServiceDep",
 ]

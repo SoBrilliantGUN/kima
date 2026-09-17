@@ -8,7 +8,6 @@ from app.api.deps import NoteServiceDep
 from app.schemas.note import (
     NoteAddToKnowledgeBase,
     NoteCreate,
-    NoteCreateFromUrl,
     NoteList,
     NoteRead,
     NoteUpdate,
@@ -16,15 +15,6 @@ from app.schemas.note import (
 from app.services.note import LIST_LIMIT_DEFAULT
 
 router = APIRouter(prefix="/notes", tags=["notes"])
-
-
-@router.post("/from-url", response_model=NoteRead, status_code=status.HTTP_201_CREATED)
-async def create_note_from_url(
-    payload: NoteCreateFromUrl,
-    service: NoteServiceDep,
-) -> NoteRead:
-    note = await service.create_from_url(payload)
-    return NoteRead.model_validate(note)
 
 
 @router.post("", response_model=NoteRead, status_code=status.HTTP_201_CREATED)
