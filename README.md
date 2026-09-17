@@ -117,7 +117,6 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时自动跑以上检查 + docke
 | 2 | 知识库管理 CRUD | ✅ 完成 |
 | 3 | 笔记 / TipTap 编辑器 | ✅ 完成 |
 | 4 | 文档解析与归档（PDF/URL/Word → 解析 → 分块 → 向量化） | ✅ 完成 |
-| 5 | AI 智能问答（Advanced RAG） | 待做 |
-| 6 | 全局搜索 | 待做 |
+| 5 | AI 智能问答（Advanced RAG） | 🟡 设计定稿 |
 
-详细需求见 `docs/requirements.md`；模块 1 设计见 `docs/module-1-infrastructure.md`，模块 2 设计见 `docs/module-2-knowledge-bases.md`，模块 3 设计见 `docs/module-3-notes.md`，模块 4 设计见 `docs/module-4-documents.md`。
+详细需求见 `docs/requirements.md`；模块 1 设计见 `docs/module-1-infrastructure.md`，模块 2 设计见 `docs/module-2-knowledge-bases.md`，模块 3 设计见 `docs/module-3-notes.md`，模块 4 设计见 `docs/module-4-documents.md`，模块 5 设计见 `docs/module-5-ai-qa.md`。
