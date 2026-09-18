@@ -1,0 +1,53 @@
+.inputBox {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+
+  &:focus-within {
+    border-color: #1f2329;
+  }
+
+  textarea {
+    flex: 1;
+    border: none;
+    outline: none;
+    resize: none;
+    max-height: 120px;
+    overflow-y: auto;
+    background: transparent;
+    color: var(--color-text);
+    font: inherit;
+    line-height: 1.5;
+  }
+}
+
+.send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+}
+
+.sendDisabled {
+  background: #c9ccd1;
+  cursor: default;
+}
+
+.sendActive {
+  background: #1f2329;
+  cursor: pointer;
+}
+
+.sendIcon {
+  width: 16px;
+  height: 16px;
+}
