@@ -26,7 +26,7 @@ export default function KnowledgeBasePage() {
     <div className={styles.page}>
       <KnowledgeBaseListPane selectedId={id} />
       <ContentListPane kbId={id} onOpenDocument={open} onCloseDocument={close} />
-      <QaPanel />
+      <QaPanel kbId={id} />
       {windows.map((window) => (
         <DocumentWindow
           key={window.documentId}

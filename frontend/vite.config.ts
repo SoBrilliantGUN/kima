@@ -10,6 +10,14 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  css: {
+    preprocessorOptions: {
+      scss: {
+        // 用 modern-compiler API，消除 Dart Sass 的 legacy-js-api 弃用警告
+        api: 'modern-compiler',
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

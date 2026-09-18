@@ -94,3 +94,57 @@ export interface ContentListResponse {
   items: ContentItem[]
   total: number
 }
+
+export type ChatMode = 'kb' | 'web'
+
+export type ChatRole = 'user' | 'assistant'
+
+export type CitationSourceType = 'document' | 'note' | 'web'
+
+export interface Citation {
+  index: number
+  source_type: CitationSourceType
+  source_id: string | null
+  chunk_id: string | null
+  title: string
+  snippet: string
+  url: string | null
+}
+
+export interface Conversation {
+  id: string
+  kb_id: string | null
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ConversationListResponse {
+  items: Conversation[]
+  total: number
+}
+
+export interface ChatMessage {
+  id: string
+  conversation_id: string
+  role: ChatRole
+  content: string
+  citations: Citation[] | null
+  created_at: string
+}
+
+export interface ConversationDetail {
+  id: string
+  kb_id: string | null
+  title: string
+  created_at: string
+  updated_at: string
+  messages: ChatMessage[]
+}
+
+export interface ChatRequest {
+  mode: ChatMode
+  kb_id?: string | null
+  conversation_id?: string | null
+  question: string
+}
