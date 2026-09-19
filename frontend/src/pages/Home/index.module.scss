@@ -4,21 +4,18 @@
   display: flex;
 }
 
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-border);
+}
+
 .chat {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--color-surface);
-}
-
-.toolbar {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--color-border);
 }
 
 .modeSwitch {
@@ -98,7 +95,11 @@
 
 .inputArea {
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--color-border);
   background: var(--color-surface);
 }
 

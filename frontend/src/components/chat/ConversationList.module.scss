@@ -1,11 +1,8 @@
 .list {
-  width: 260px;
-  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  border-right: 1px solid var(--color-border);
   background: var(--color-surface);
 }
 
@@ -72,7 +69,7 @@
 }
 
 .itemDelete {
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: center;
   width: 24px;
@@ -81,10 +78,14 @@
   background: transparent;
   color: var(--color-text-secondary);
   cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
 }
 
 .item:hover .itemDelete {
-  display: flex;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .deleteIcon {

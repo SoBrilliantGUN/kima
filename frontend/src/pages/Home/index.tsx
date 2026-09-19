@@ -1,20 +1,23 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { ChatInput } from '@/components/chat/ChatInput'
 import { ChatMessageList } from '@/components/chat/ChatMessageList'
+import { ConversationList } from '@/components/chat/ConversationList'
 import { BookIcon, GlobeIcon, MessageCircleIcon } from '@/components/icons'
 import { useChatStream } from '@/hooks/useChat'
+import { useAutoScroll } from '@/hooks/useAutoScroll'
 import { useConversations, useDeleteConversation } from '@/hooks/useConversations'
 import { useKnowledgeBases } from '@/hooks/useKnowledgeBases'
 import type { ChatMode } from '@/api/types'
 
-import { ConversationList } from './components/ConversationList'
 import styles from './index.module.scss'
 
 export default function Home() {
   const [mode, setMode] = useState<ChatMode>('web')
   const [kbId, setKbId] = useState<string | null>(null)
   const chat = useChatStream(mode, kbId)
+  const scrollRef = useAutoScroll([chat.messages, chat.streaming])
+  const autoSelectedRef = useRef(false)
   const { data: conversationData } = useConversations(null)
   const deleteConversation = useDeleteConversation()
   const { data: kbData } = useKnowledgeBases()
@@ -27,11 +30,22 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, kbId])
 
+  // 首次加载时默认选中第一条历史会话，避免落地空白
+  useEffect(() => {
+    const items = conversationData?.items ?? []
+    if (!autoSelectedRef.current && items.length > 0) {
+      autoSelectedRef.current = true
+      void chat.selectConversation(items[0].id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationData])
+
   const needsKb = mode === 'kb' && !kbId
 
   return (
     <div className={styles.page}>
       <ConversationList
+        className={styles.sidebar}
         conversations={conversationData?.items ?? []}
         activeId={chat.conversationId}
         onSelect={(id) => void chat.selectConversation(id)}
@@ -39,7 +53,21 @@ export default function Home() {
         onDelete={(id) => void deleteConversation.mutate(id)}
       />
       <section className={styles.chat}>
-        <div className={styles.toolbar}>
+        <div className={styles.messages} ref={scrollRef}>
+          {chat.messages.length === 0 && !chat.streaming ? (
+            <div className={styles.empty}>
+              <MessageCircleIcon className={styles.emptyIcon} />
+              <p className={styles.emptyText}>
+                {mode === 'web' ? '基于全网问答' : '基于知识库问答'}
+              </p>
+            </div>
+          ) : (
+            <ChatMessageList messages={chat.messages} streaming={chat.streaming} />
+          )}
+          {chat.error ? <div className={styles.error}>{chat.error}</div> : null}
+        </div>
+
+        <div className={styles.inputArea}>
           <div className={styles.modeSwitch}>
             <button
               type="button"
@@ -47,7 +75,7 @@ export default function Home() {
               onClick={() => setMode('web')}
             >
               <GlobeIcon className={styles.modeIcon} />
-              全网
+              基于全网
             </button>
             <button
               type="button"
@@ -55,7 +83,7 @@ export default function Home() {
               onClick={() => setMode('kb')}
             >
               <BookIcon className={styles.modeIcon} />
-              知识库
+              基于知识库
             </button>
           </div>
           {mode === 'kb' ? (
@@ -72,23 +100,6 @@ export default function Home() {
               ))}
             </select>
           ) : null}
-        </div>
-
-        <div className={styles.messages}>
-          {chat.messages.length === 0 && !chat.streaming ? (
-            <div className={styles.empty}>
-              <MessageCircleIcon className={styles.emptyIcon} />
-              <p className={styles.emptyText}>
-                {mode === 'web' ? '基于全网问答' : '基于知识库问答'}
-              </p>
-            </div>
-          ) : (
-            <ChatMessageList messages={chat.messages} />
-          )}
-          {chat.error ? <div className={styles.error}>{chat.error}</div> : null}
-        </div>
-
-        <div className={styles.inputArea}>
           {needsKb ? (
             <div className={styles.selectHint}>请先选择知识库</div>
           ) : (

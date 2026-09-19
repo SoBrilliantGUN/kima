@@ -1,5 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 
+import { useQueryClient } from '@tanstack/react-query'
+
 import { getConversation, streamChat } from '@/api/chat'
 import type { ChatSseEvent } from '@/api/chat'
 import type { ChatMessage, ChatMode, Citation } from '@/api/types'
@@ -44,6 +46,7 @@ export function useChatStream(mode: ChatMode, kbId: string | null) {
   const [streaming, setStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const queryClient = useQueryClient()
 
   /** 选中会话并加载其历史消息。 */
   const selectConversation = useCallback(async (id: string) => {
@@ -96,6 +99,9 @@ export function useChatStream(mode: ChatMode, kbId: string | null) {
       setStreaming(true)
       setError(null)
 
+      // 无 conversationId 说明是首条消息，后端会据此新建会话
+      const isNewConversation = conversationId === null
+
       // 乐观插入「用户问题 + 空的助手回答」，助手内容稍后逐字填充
       const userMsg = createTempMessage('user', trimmed, conversationId)
       const assistantMsg = createTempMessage('assistant', '', conversationId)
@@ -109,6 +115,10 @@ export function useChatStream(mode: ChatMode, kbId: string | null) {
           { mode, kb_id: kbId, conversation_id: conversationId, question: trimmed },
           controller.signal,
         )) {
+          // 首条消息 meta 返回后会话已建好，刷新会话列表让新对话立刻可见
+          if (isNewConversation && event.type === 'meta') {
+            queryClient.invalidateQueries({ queryKey: ['conversations'] })
+          }
           applyEvent(event, assistantMsg.id)
         }
       } catch (err) {
@@ -121,7 +131,7 @@ export function useChatStream(mode: ChatMode, kbId: string | null) {
         abortRef.current = null
       }
     },
-    [mode, kbId, conversationId, streaming, applyEvent],
+    [mode, kbId, conversationId, streaming, applyEvent, queryClient],
   )
 
   /** 停止当前流式回答。 */

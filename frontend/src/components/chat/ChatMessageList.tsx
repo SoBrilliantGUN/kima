@@ -1,3 +1,6 @@
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+
 import type { ChatMessage, Citation } from '@/api/types'
 
 import styles from './ChatMessageList.module.scss'
@@ -27,7 +30,7 @@ function CitationPanel({ citations }: { citations: Citation[] }) {
   )
 }
 
-export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
+export function ChatMessageList({ messages, streaming }: { messages: ChatMessage[]; streaming: boolean }) {
   return (
     <div className={styles.list}>
       {messages.map((message) =>
@@ -37,7 +40,17 @@ export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
           </div>
         ) : (
           <div key={message.id} className={styles.assistantRow}>
-            <div className={styles.assistantContent}>{message.content}</div>
+            {message.content ? (
+              <div className={styles.markdown}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+              </div>
+            ) : streaming ? (
+              <div className={styles.loading} aria-label="AI 正在思考">
+                <span />
+                <span />
+                <span />
+              </div>
+            ) : null}
             {message.citations && message.citations.length > 0 ? (
               <CitationPanel citations={message.citations} />
             ) : null}
