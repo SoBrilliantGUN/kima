@@ -40,8 +40,10 @@ class ConversationDetail(ConversationRead):
 
 
 class ChatRequest(BaseModel):
-    # 检索范围：空列表 = 联网搜索，非空 = 仅检索这些知识库（可 @ 多个）
+    # 检索范围：空列表 = 不检索知识库，非空 = 仅检索这些知识库（可 @ 多个）
     kb_ids: list[uuid.UUID] = []
+    # 联网搜索开关：True = 走博查全网；False = 不联网（kb_ids 也空则纯 LLM 无检索）
+    web_search: bool = False
     # 会话归属知识库：首页全局会话为 None，知识库右面板挂当前库
     kb_id: uuid.UUID | None = None
     conversation_id: uuid.UUID | None = None

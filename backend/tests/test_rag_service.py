@@ -51,7 +51,7 @@ async def _collect(agen: AsyncIterator[AnswerEvent]) -> list[AnswerEvent]:
 
 async def test_answer_kb_mode_event_order() -> None:
     events = await _collect(
-        _service().answer(query="问一下", kb_ids=[uuid.uuid4()], history=[])
+        _service().answer(query="问一下", kb_ids=[uuid.uuid4()], web_search=False, history=[])
     )
     assert any(isinstance(event, AnswerDelta) for event in events)
     assert isinstance(events[-1], AnswerCitations)
@@ -59,7 +59,17 @@ async def test_answer_kb_mode_event_order() -> None:
 
 
 async def test_answer_web_mode_citations() -> None:
-    events = await _collect(_service().answer(query="问一下", kb_ids=[], history=[]))
+    events = await _collect(
+        _service().answer(query="问一下", kb_ids=[], web_search=True, history=[])
+    )
     assert isinstance(events[-1], AnswerCitations)
     assert len(events[-1].citations) == 5  # FakeWebSearchClient 默认 top_k=5
     assert all(citation.source_type == SourceType.WEB for citation in events[-1].citations)
+
+
+async def test_answer_none_mode_no_citations() -> None:
+    events = await _collect(
+        _service().answer(query="问一下", kb_ids=[], web_search=False, history=[])
+    )
+    assert isinstance(events[-1], AnswerCitations)
+    assert events[-1].citations == []  # 不联网也不检索知识库 → 纯 LLM、无引用

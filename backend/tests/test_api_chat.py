@@ -154,7 +154,7 @@ async def test_chat_invalid_kb_error(api_client: AsyncClient) -> None:
 async def test_chat_web_mode_sse(api_client: AsyncClient) -> None:
     events: list[tuple[str | None, object]] = []
     async with api_client.stream(
-        "POST", "/api/chat", json={"question": "问一下"}
+        "POST", "/api/chat", json={"question": "问一下", "web_search": True}
     ) as response:
         assert response.status_code == 200
         current_event: str | None = None

@@ -127,6 +127,7 @@ class ChatService:
         async for event in self._rag.answer(
             query=request.question,
             kb_ids=request.kb_ids,
+            web_search=request.web_search,
             history=llm_history,
         ):
             if isinstance(event, AnswerDelta):

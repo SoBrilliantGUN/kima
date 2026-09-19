@@ -58,19 +58,25 @@ class RagService:
         *,
         query: str,
         kb_ids: list[uuid.UUID],
+        web_search: bool,
         history: list[ChatMessage],
     ) -> AsyncIterator[AnswerEvent]:
-        """完整 RAG 生成：先 yield 文本增量，最后 yield 引用。`kb_ids` 空 = 联网搜索。"""
+        """完整 RAG 生成：先 yield 文本增量，最后 yield 引用。
+
+        `kb_ids` 非空 = 知识库检索；否则 `web_search` 真 = 全网；否则 = 纯 LLM 无检索。
+        """
         # ① 改写（喂最近 2 轮历史消解指代）
         rewritten = await rewrite_query(self._llm, query, history[-4:])
 
-        # ②③④ 检索（KB 混合检索 或 全网）
-        if not kb_ids:
+        # ②③④ 检索（KB 混合检索 / 全网 / 无检索）
+        if kb_ids:
+            chunks = await self._retriever.retrieve(rewritten, kb_ids)
+            context, citations = format_kb_context(chunks)
+        elif web_search:
             results = await self._web_search.search(rewritten, top_k=WEB_TOP_K)
             context, citations = format_web_context(results)
         else:
-            chunks = await self._retriever.retrieve(rewritten, kb_ids)
-            context, citations = format_kb_context(chunks)
+            context, citations = "", []
 
         # 历史 token 预算：总窗口扣掉 system/context/question 后留给历史
         fixed_tokens = (
