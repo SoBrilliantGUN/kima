@@ -1,7 +1,7 @@
 # 模块 5：AI 智能问答 — 详细设计
 
 > 日期：2026-09-18
-> 状态：设计定稿，待实现
+> 状态：已实现
 > 上游基线：`docs/requirements.md`（决策 #2/#3/#11/#12/#16）· `docs/module-4-documents.md`（父子分块 + document_chunks + worker）· `docs/module-3-notes.md`（笔记全局 + note_knowledge_bases）
 
 本模块交付「**AI 智能问答**」完整能力：
@@ -24,7 +24,7 @@
 
 | # | 验收项 |
 |---|---|
-| 1 | `alembic upgrade head`：新增 `note_chunks` + `chat_conversations` + `chat_messages`；`notes` 加 `vectorized_at`；`document_chunks` 加 `tsv tsvector` 列 + GIN 索引并回填存量 |
+| 1 | `alembic upgrade head` 成功（单一基线 `0001_initial` 建全量表 + 扩展 + 索引） |
 | 2 | 自建 Postgres 镜像（`docker/` 多阶段，编译 pgvector + pg_jieba），`docker compose up` 起库即带 `vector` + `pg_jieba` 两扩展 |
 | 3 | `rag.retrieve()` 返回混合检索候选（dense + lexical → RRF → rerank → 命中 child 回 parent）；文档与笔记统一可检索，按 `kb_id` 过滤正确 |
 | 4 | 问答 SSE 流式：先 `meta`（会话/消息 id）→ 逐 token `delta` → `citations` → `done` |
@@ -42,7 +42,7 @@
   ├─ ② 混合检索   向量: bge-m3 → pgvector top-k（按 kb_id 过滤）
   │               词法: pg_jieba ts_rank top-k
   ├─ ③ RRF 融合   两路结果 RRF 融合成候选集
-  ├─ ④ 精排       SiliconFlow bge-reranker → top-N
+  ├─ ④ 精排       SiliconFlow bge-reranker → 过滤低分（RERANK_MIN_SCORE）→ top-N
   └─ ⑤ 生成       组装 context（token 预算 + 历史摘要 + 去重引用）→ DeepSeek 流式 → 回答 + 引用
 ```
 
@@ -53,24 +53,25 @@
 
 ## 3. 数据模型
 
-### 3.1 迁移 `0005_rag`（`down_revision="0004_documents"`）
+### 3.1 数据模型（迁移已并入 `0001_initial` 基线）
 
 **新增表**
 
-**`note_chunks`**（笔记分块，**单层**，无父子两级）
+**`note_chunks`**（笔记分块，**父子两级** small-to-big）
 
 | 字段 | 类型 | 约束 |
 |---|---|---|
 | `id` | `UUID` | PK，app 端 `uuid.uuid4` |
 | `note_id` | `UUID` | FK → `notes.id ON DELETE CASCADE` |
+| `parent_id` | `UUID` | 自引用 FK → `note_chunks.id ON DELETE CASCADE`，可空：`NULL`=parent、非空=child |
 | `chunk_index` | `Integer` | 块序 |
 | `content` | `Text` | 非空 |
 | `metadata` | `JSONB` | 可空（`heading_path`/`block_type`） |
 | `token_count` | `Integer` | 可空 |
-| `embedding` | `Vector(1024)` | 非空 |
+| `embedding` | `Vector(1024)` | 可空（child 有 / parent 无） |
 | `tsv` | `TSVECTOR` | 非空（`to_tsvector('jiebacfg', content)`） |
 
-- **无 `kb_id` / `parent_id`**：笔记全局、多对多入库，chunk 不能挂单一库；笔记短，chunk 即检索单元与上下文单元，无需 parent 回查。
+- **无 `kb_id`、有 `parent_id`**：笔记全局、多对多入库，chunk 不能挂单一库（按库过滤走关联表）；`parent_id` 自引用做 small-to-big（parent 存上下文不向量化、child 向量化），与文档一致。
 - **入库判定走关联表**：检索某库时 `note_chunks ⋈ note_knowledge_bases(knowledge_base_id=X)` 过滤；游离笔记无 chunk 天然不参与。
 
 **`chat_conversations`**（会话）
@@ -125,8 +126,8 @@ app/rag/
 - **dense**：`embed_query(query)` → `pgvector` 余弦 top-20；按 `kb_id` 过滤（document_chunks.kb_id / note_chunks 经关联表）。
 - **lexical**：`to_tsquery('jiebacfg', plainto_tsquery(query))` → `tsv @@` → `ts_rank` 排序 top-20。
 - **RRF**：`score(d) = Σ 1/(k + rank_i)`（k≈60），两路融合成候选集。
-- **rerank**：`RerankerClient`（SiliconFlow bge-reranker）对候选集精排 → top-5~8。
-- **命中回父**：文档命中 child → 回 `parent_id` 取 parent 全文作上下文；笔记 chunk 直接用作上下文。
+- **rerank**：`RerankerClient`（SiliconFlow bge-reranker）对候选集精排 → 过滤低于 `rerank_min_score`（Settings，默认 0.3）的候选 → top-N（默认 6）。
+- **命中回父**：文档与笔记命中 child → 回 `parent_id` 取 parent 全文作上下文（small-to-big）；按 `source_type` 分桶（document/note 各查各表），杜绝跨表 UUID 撞号覆盖与空集合冗余查询。
 - **`retrieve()` 语义**：输入 `(query, kb_id | None)`，返回带 `chunk`/`source_type`/`source_id`/`title`/`snippet` 的结构化结果，不绑定问答，便于后续搜索类能力复用。
 
 ### 4.2 集成抽象（`integrations/` 扩展）
@@ -149,7 +150,7 @@ app/rag/
   ```
 
   即「内容有变 **且** 已停止编辑超过阈值」才处理；阈值 `NOTE_REVECTORIZE_IDLE_SECONDS` 默认 **120s**，可配置。
-- **处理**：删旧 `note_chunks` → 复用 content-aware 分块管线（单层，目标 ~300–500 token，走 `recursive` 兜底 + 表格/代码/FAQ 等 splitter）→ 批量 embed → 写 `note_chunks` + 回写 `vectorized_at`。
+- **处理**：删旧 `note_chunks` → 复用文档的两级分块管线（`chunk_document`，父子 small-to-big）→ 批量 embed child → 写 `note_chunks` + 回写 `vectorized_at`。
 - **重向量化 = 删除 + 新增**：不做原地 diff（内容变了本来就要重切，diff 对齐复杂度不值当）。
 - **worker**：`workers/note_vectorize_worker.py`，与文档 worker 并列，`FOR UPDATE SKIP LOCKED` + `asyncio.Semaphore` 限流；lifespan 接入、优雅退出。前端零耦合，「关闭笔记」只是「停止编辑」的特例，被阈值自然覆盖。
 
@@ -165,27 +166,25 @@ app/rag/
 
 ## 7. 上下文组装（`context.py`）
 
-> 面向生产级长会话的成本与稳定性设计，核心是「**分层 token 预算 + 按占用比例触发压缩**」，而非硬编码「喂几轮」。
+> 面向生产级长会话的成本与稳定性设计，核心是「**固定段先扣 + 历史 token 预算 + 动态降级 recent 轮数**」，而非硬编码「喂几轮」。
 
-### 7.1 分层预算
+### 7.1 预算分配
 
-把一次 LLM 调用的上下文窗口拆成独立预算的段，各自独立分配、独立压缩：
+把一次 LLM 调用的上下文窗口按「固定段 + 弹性段」分配：
 
-| 层 | 内容 | 说明 |
+| 段 | 内容 | 说明 |
 |---|---|---|
-| L0 | system prompt | 固定，不压缩 |
-| L1 | 检索上下文（含引用编号） | 本轮命中 chunk 去重后组装，受预算约束截断 |
-| L2 | 对话历史 | 可压缩（见 7.2） |
-| L3 | 本轮问题 + 引用指令 | 固定 |
+| 固定段 | system prompt + 检索上下文（含引用编号）+ 本轮问题 + 安全余量 | 先扣，不压缩 |
+| 弹性段 | 对话历史 | 剩余预算，可压缩（见 7.2） |
 
-- 总预算 `CONTEXT_MAX_TOKENS` 可配置；各层按比例切分，组装时逐层 `alloc`，超层预算告警并截断。
+- 总预算 `CONTEXT_MAX_TOKENS` 可配置；`history_budget = 总预算 − 固定段`，组装时先把固定段（system/context/query + `SAFETY_MARGIN_TOKENS` 默认 200）扣掉，剩余全部留给历史。
 
-### 7.2 分级历史压缩（替代「写死 N 轮」）
+### 7.2 历史分级压缩（替代「写死 N 轮」）
 
-- 平时：**保留最近 N 轮 verbatim**（`HISTORY_RECENT_TURNS`，默认 3），不做任何摘要。
-- 当「当前用量 / 总预算」的占比超过阈值时，才触发**历史摘要**：把更早的历史用一次 `temperature=0` 的 LLM 调用压缩成一段结构化摘要（`{焦点, 已完成}`），垫在最前，最近 N 轮仍保留原文。
-- 极端情况（摘要后仍超预算）：退化为「最近 2 轮 + 摘要」，硬保不爆窗。
-- **语义损失边界清晰**：只有超预算才损失早期历史的逐字内容，日常对话零损失。
+- 全部历史在 `history_budget` 内 → 全量 verbatim，不做摘要。
+- 超预算 → **动态降级 `recent_turns`**：从配置的最近 N 轮（`HISTORY_RECENT_TURNS`，默认 3）逐轮下调，保留「塞得下预算」的最大 verbatim 轮数；更早的历史用一次 `temperature=0` 的 LLM 调用压缩成一段摘要垫在最前。连 1 轮都塞不下时，recent 降为 0、全量走摘要。
+- **摘要硬截断**：摘要生成后按「剩余预算 = `history_budget − recent 占用`」截断，保证 `[摘要, *recent]` 总 token ≤ 预算（`estimate_tokens` 估算口径）。
+- **语义损失边界清晰**：损失优先级从旧到新——早期历史先被压缩成摘要（有损）、recent 仅在自身塞不下时逐轮降级、摘要尾部最后被截断；日常（未超预算）对话零损失。
 
 ### 7.3 引用编号
 
@@ -254,9 +253,9 @@ SSE 事件流（`text/event-stream`）：
 
 ## 9. pg_jieba 自建镜像
 
-- `docker/pgvector-jieba/Dockerfile`：基于 `pgvector/pgvector:pg16` 多阶段构建——下载 `pg_jieba` 源码 + jieba 分词字典 → cmake/make 编译安装 → 保留 `vector` + `pg_jieba` 两扩展。
-- `docker-compose.yml`：`db` 服务 `build: ./docker/pgvector-jieba`，替换官方镜像。
-- 迁移 `0005` 前导 `CREATE EXTENSION IF NOT EXISTS pg_jieba`（`vector` 已在模块 1 基线落好）。
+- `docker/pgvector-jieba/Dockerfile`：基于 `pgvector/pgvector:pg16` 多阶段构建——下载 `pg_jieba` 源码 + jieba 分词字典 → cmake/make 编译安装 → 保留 `vector` + `pg_jieba` 两扩展。内含 `ca-certificates`（否则 git 报 `CAfile: none`）+ 浅克隆重试 + `git config url.<镜像>.insteadOf` 让主仓与 submodule 统一走镜像源。
+- `docker-compose.yml`：`db` 服务 `build: ./docker/pgvector-jieba`，替换官方镜像。国内直连 github.com 超时，构建用镜像源：`docker compose build --build-arg GIT_MIRROR=https://gh-proxy.com/https://github.com db`。
+- 迁移基线 `0001_initial` 前导 `CREATE EXTENSION IF NOT EXISTS pg_jieba`（`vector` 同在前导）。
 - 决策 #12 收口：官方镜像仅作模块 1~4 过渡，本模块起用自建镜像。
 
 ---
@@ -301,11 +300,11 @@ shared/chat/
 
 | 层 | 测试 | 方式 |
 |---|---|---|
-| 检索单测 | `test_rag_retrieve.py` | RRF 融合、dense/lexical top-k 参数、命中回父、按库过滤、笔记经关联表过滤 |
-| 上下文单测 | `test_context.py` | 分层预算分配、历史超预算触发摘要、引用编号生成、极端降级 |
-| 改写单测 | `test_rewrite.py` | 指代消解（fake LLM） |
-| 服务单测 | `test_rag_service.py` | `answer()` 注入 Fake retrieval/rerank/llm/embedding：五步编排 + 流式事件顺序 |
-| 笔记 worker 单测 | `test_note_vectorize_worker.py` | idle 阈值判定、删除+新增、游离笔记跳过、`vectorized_at` 回写 |
+| 检索单测 | `test_rag.py` | RRF 融合、rerank 过滤低分、命中回父（按 source_type 分桶）、按库过滤、笔记经关联表过滤 |
+| 上下文单测 | `test_context.py` | 预算分配、历史超预算动态降级 recent 轮数、摘要硬截断、引用编号生成 |
+| 服务单测 | `test_rag_service.py` | `answer()` 注入 Fake retrieval/rerank/llm/embedding：五步编排（含改写）+ 流式事件顺序 |
+| 评估单测 | `test_rag_eval.py` / `test_rag_eval_runner.py` | 检索指标 recall@k / MRR（纯函数）+ golden 集运行器（Fake retrieve）+ LLM-judge faithfulness / answer_relevancy / context_relevancy（Fake judge） |
+| 笔记 worker 单测 | `test_note_vectorize.py` | idle 阈值判定、删除+新增、游离笔记跳过、`vectorized_at` 回写 |
 | API 集成 | `test_api_chat.py` | 会话 CRUD + `POST /api/chat` SSE 冒烟（Fake 流）+ 错误信封 |
 | 集成 Fake | `tests/fakes.py` 增补 | `FakeWebSearchClient` / `FakeRerankerClient` / 流式 `FakeLLMClient` / `FakeNoteChunkRepository` |
 
@@ -318,7 +317,7 @@ shared/chat/
 | 步骤 | 内容 | 产出 |
 |---|---|---|
 | T1 | 自建 pg_jieba 镜像 + compose 换镜像 + 迁移前导建扩展 | `docker compose up` 带双扩展 |
-| T2 | 迁移 `0005`：note_chunks / chat 两表 / notes.vectorized_at / document_chunks.tsv + 回填 + GIN | 可 `upgrade head` |
+| T2 | 迁移基线 `0001_initial`：note_chunks / chat 两表 / notes.vectorized_at / document_chunks.tsv + GIN（生成列自动回填） | 可 `upgrade head` |
 | T3 | `app/rag/`：schema + dense + lexical + hybrid(RRF) + rerank + 单测 | 检索能力（可独立验收） |
 | T4 | `integrations/`：rerank(SiliconFlow) + search(Bocha) + llm.stream() | 真实 provider |
 | T5 | `rag/context.py` + `rag/rewrite.py` + `rag/generate.py` + `rag/service.py` | 生成编排 |
@@ -338,9 +337,10 @@ shared/chat/
 3. **全网搜索**：完整做，接博查 Web Search API；`WebSearchClient` Protocol 可插拔；全网/知识库二选一、不混合。
 4. **流式（SSE）**：`LLMClient` 加 `stream()`；问答走 SSE 打字机 + 引用补齐。
 5. **词法检索完整落地**：自建 Postgres 镜像（编译 pgvector + pg_jieba）；混合检索 = 向量 + 词法 + RRF；存量 chunk 只补 `tsv`、不重算 embedding。
-6. **笔记向量化**：单层分块、只覆盖已入库笔记；后端 worker idle 触发（`vectorized_at` + 默认 120s 阈值）；重向量化 = 删除旧 chunk + 新增。
-7. **上下文管理**：分层 token 预算 + 按占用比例触发历史摘要（超预算才摘要早期历史、保留近期 verbatim），替代硬编码轮数；各阈值可配置。
+6. **笔记向量化**：父子两级分块（与文档一致）、只覆盖已入库笔记；后端 worker idle 触发（`vectorized_at` + 默认 120s 阈值）；重向量化 = 删除旧 chunk + 新增。
+7. **上下文管理**：token 预算驱动——固定段（system/检索上下文/问题/安全余量）先扣、剩余给历史；超预算时动态降级 recent 轮数（保留「塞得下」的最大 verbatim 轮）+ 摘要早期历史并硬截断到剩余预算，替代硬编码轮数；各阈值可配置。
 8. **引用**：chunk 级 + 底部「来源」面板（标题 + 片段 + 跳转原文档/笔记），正文标 `[n]`。
 9. **会话管理**：首页带历史会话列表（`kb_id` 空）；右面板按库持久化（`kb_id` 挂库）。
 10. **首页 UI 参考 ima**：会话列表 + 主问答区（模式切换 + 库选择器 + 消息流 + 输入框）；Copilot 浮窗本版不加。
 11. **模型**：单 `deepseek-chat`，无「快速/深度」档（后置）；rerank 用 SiliconFlow bge-reranker；改写/摘要 `temperature=0`，生成 `temperature=0.3`。
+12. **评估最小集**：检索层 recall@k / MRR（`app/rag/metrics.py` 纯函数 + `app/rag/eval_runner.py` golden 集运行器，驱动 chunking 决策）+ 端到端 LLM-judge faithfulness / answer_relevancy / context_relevancy（`app/rag/eval.py`，复用现有 `LLMClient`，1–5 分归一化）；`scripts/eval_retrieval.py` 跑真实检索出报告，golden 集用「应命中片段」子串标注（`eval/golden.example.json`）；不引 ragas 重包（避免拖入 langchain），judge 用 `temperature=0`。

@@ -1,7 +1,7 @@
 # kima — 项目需求与技术方案
 
 > 记录日期：2026-09-10
-> 状态：需求已锁定；模块 1（基础设施）、模块 2（知识库管理）、模块 3（笔记/编辑器）、模块 4（文档解析与归档）已实现，模块 5（AI 智能问答）设计定稿待实现
+> 状态：需求已锁定；模块 1（基础设施）、模块 2（知识库管理）、模块 3（笔记/编辑器）、模块 4（文档解析与归档）、模块 5（AI 智能问答）已实现
 > 本文档记录本次讨论的完整结论，作为后续逐模块实现的需求基线
 
 ---
@@ -109,7 +109,7 @@ kima/
 | 2 | **知识库管理** | 知识库 CRUD + 前端页面 | ✅ 完成 |
 | 3 | **笔记/编辑器** | 笔记 CRUD + TipTap Markdown 编辑器（空白笔记 + 添加到知识库 + 知识库内容列表） | ✅ 完成 |
 | 4 | **文档解析与归档** | 上传 PDF/URL/Word → 解析 → 内容感知父子分块 → 向量化入库（详见 `docs/module-4-documents.md`） | ✅ 完成 |
-| 5 | **AI 智能问答** | Advanced RAG（查询改写 + 混合检索 + RRF + rerank + 生成引用），预留 Agent 接口 | 🟡 设计定稿 |
+| 5 | **AI 智能问答** | Advanced RAG（查询改写 + 混合检索 + RRF + rerank + 生成引用），预留 Agent 接口 | ✅ 完成 |
 
 ### 模块 5 RAG 细节（Advanced RAG）
 
@@ -118,7 +118,7 @@ kima/
 ② 混合检索   向量: bge-m3 → pgvector top-k（按知识库过滤）
              词法: pg_jieba/zhparser 中文全文检索 top-k（ts_rank 打分）
 ③ RRF 融合   两路结果 RRF 融合成候选集
-④ 精排       SiliconFlow bge-reranker → top-N
+④ 精排       SiliconFlow bge-reranker → 过滤低分 → top-N
 ⑤ 生成       组装 context（去重 + 引用元数据）→ DeepSeek 生成 → 回答 + 引用来源
 ```
 
@@ -136,9 +136,12 @@ kima/
 | `documents` | id、kb_id、标题、来源类型(pdf/url/word)、source_url、file_path、状态(pending/processing/done/error)、正文、metadata |
 | `document_chunks` | id、document_id、kb_id、parent_id(自引用，父子切割)、chunk_index、content、metadata、embedding(vector，child 有/parent 无)、token_count |
 | `notes` | id、标题、content_markdown、created_at、updated_at |
+| `note_chunks` | id、note_id、parent_id(自引用，父子切割)、chunk_index、content、metadata、embedding(vector，child 有/parent 无)、token_count |
 | `note_knowledge_bases` | note_id(fk→notes)、knowledge_base_id(fk→knowledge_bases)、created_at；唯一(note_id, knowledge_base_id) |
 | `chat_conversations` | id、kb_id、标题、created_at |
 | `chat_messages` | id、conversation_id、role、content、citations(jsonb)、created_at |
+
+> **迁移说明（第一版）**：项目为 v1 第一版、无历史数据，全部数据库迁移已合并为单一基线 `alembic/versions/0001_initial.py`（含 vector + pg_jieba 扩展、8 张表、父子切割自引用 FK、HNSW 部分索引 + tsv GIN）。各模块文档（module-2/3/4/5）中出现的 `0002_knowledge_bases` / `0003_notes` / `0004_documents` / `0006_rag` 等编号均为历史增量，现统一并入 `0001_initial`。
 
 ---
 
@@ -163,16 +166,16 @@ kima/
 17. **默认知识库 + 删除规则**：应用启动（lifespan）时幂等预置「我的知识库」（`#5B8DEF`），保证始终至少一个知识库；**不能删除最后一个知识库**（后端 409 `last_knowledge_base` + 前端隐藏删除按钮）。
 18. **笔记全局 + 添加到知识库（推翻旧「文档=笔记统一进库」）**：笔记是**全局**内容，不归属任何知识库（`notes` 无 `kb_id`）；知识库内的「文档」（pdf/word/url 归档）与「笔记」是两类东西。笔记可通过「添加到知识库」动作关联进某知识库（`note_knowledge_bases` 多对多，**引用而非复制**，改笔记库里同步变）。
 
-19. **URL 统一归入文档（详见 `docs/module-4-documents.md`）**：URL 不再作为网页笔记，统一归入文档（`documents.source_type=pdf/word/url`）；`notes` 为纯 Markdown 空白笔记（无 `type`/`summary`/`source_url` 三列、无 `from-url` 端点）。文档解析按类型分发——PDF→MinerU、Word→mammoth+markdownify、URL→复用 WebFetcher。父子切割 small-to-big——`document_chunks` 自引用 `parent_id`，parent 大块存上下文不向量化、child 小块向量化，检索命中 child 回 parent。内容感知分块 5 splitter（结构化递归兜底 + 表格 + 代码 AST + 法律条例 + FAQ 问答对）。异步 DB 轮询 worker + 自建重试退避。文档阅读器（PDF 内嵌原文件 / Word 与 URL 渲染解析 markdown），支持下载原文件 / 打开原网页。笔记向量化留模块 5。
+19. **URL 统一归入文档（详见 `docs/module-4-documents.md`）**：URL 不再作为网页笔记，统一归入文档（`documents.source_type=pdf/word/url`）；`notes` 为纯 Markdown 空白笔记（无 `type`/`summary`/`source_url` 三列、无 `from-url` 端点）。文档解析按类型分发——PDF→MinerU、Word→mammoth+markdownify、URL→复用 WebFetcher。父子切割 small-to-big——`document_chunks` 自引用 `parent_id`，parent 大块存上下文不向量化、child 小块向量化，检索命中 child 回 parent。内容感知分块基于 markdown-it-py AST + 3 splitter（结构化递归兜底 + 表格 + 代码），标题落地为可检索 child、相邻块重叠 ~50 token。异步 DB 轮询 worker + 自建重试退避。文档阅读器（PDF 内嵌原文件 / Word 与 URL 渲染解析 markdown），支持下载原文件 / 打开原网页。笔记向量化留模块 5。
 
 20. **模块 4 前端交互**：① 文档阅读由「路由面板」改为「浮动窗口」——点文档在页面上层打开可拖拽/调整大小/关闭的浮动窗口，可同时开多个、同文档去重聚焦；纯内存态，去掉 `/knowledge-bases/:id/documents/:documentId` 路由；右侧问答面板常驻并针对整个知识库，浮动窗口仅阅读参考。② 上传入口拆分——本地文档用大拖拽批量窗口、URL 用单一链接输入弹窗，二者分离。③ 知识库「添加内容」菜单去掉「笔记」项（笔记不再从知识库新建，列表已有笔记保留）。
 
 ---
 
-## 8. 待办 / 下一步
+## 8. 模块进度
 
 - 模块 1（基础设施）✅ 已实现 — 详见 `docs/module-1-infrastructure.md`
 - 模块 2（知识库管理）✅ 已实现 — 详见 `docs/module-2-knowledge-bases.md`
 - 模块 3（笔记/编辑器）✅ 已实现 — 详见 `docs/module-3-notes.md`
 - 模块 4（文档解析与归档）✅ 已实现 — 详见 `docs/module-4-documents.md`：上传 PDF/URL/Word → 解析 → 内容感知父子分块 → 向量化入库；前端交互（浮动阅读窗口 + 上传入口拆分 + 去笔记入口，见决策 #20）已落地
-- 模块 5（AI 智能问答）🟡 设计定稿 — 详见 `docs/module-5-ai-qa.md`
+- 模块 5（AI 智能问答）✅ 已实现 — 详见 `docs/module-5-ai-qa.md`

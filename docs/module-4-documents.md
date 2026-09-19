@@ -31,7 +31,7 @@
 | 4 | 失败自动重试退避，超 `MAX_RETRIES` 置 `error`；`POST /{id}/retry` 手动重试；worker 重启能重新拾起 `pending` |
 | 5 | `GET /api/knowledge-bases/{kb_id}/contents` 返回异构条目（`note` + `document`）；文档条目含状态/来源/错误信息 |
 | 6 | 前端：上传/URL 入口（本地文档大拖拽批量窗 + URL 单一链接弹窗，二者分离）+ 列表（状态徽标 + 进度轮询 + 失败重试/删除）+ 浮动阅读窗口（PDF 内嵌 / Word 与 URL 渲染解析 markdown，可拖拽/调整大小/关闭，多开去重聚焦） |
-| 7 | 三种来源解析产出有效 markdown；分块走内容感知 5 splitter + 父子切割（small-to-big） |
+| 7 | 三种来源解析产出有效 markdown；分块走内容感知 3 splitter（markdown-it-py AST）+ 父子切割（small-to-big） |
 | 8 | 后端 `ruff` + `mypy(strict)` + `pytest` 全绿；前端 `eslint` + `tsc --noEmit` + `vite build` 全绿；测试不起真库/真网/真 MinerU |
 
 ---
@@ -101,7 +101,7 @@ pending ──worker 拾起──▶ processing ──成功──▶ done
 **两级语义（small-to-big）**：
 
 - `parent` = 大块上下文（标题节，目标 ~1000–2000 token，**不向量化**）。
-- `child` = 细粒度检索单元（5 splitter 产物，目标 ~300–500 token，**向量化**）。
+- `child` = 细粒度检索单元（3 splitter 产物，目标 ~300–500 token，**向量化**；标题亦作为可检索 child 落地）。
 - 检索（模块 5）：query 向量 → 命中 child → 回 `parent_id` 取 parent 全文做上下文，解决「小 chunk 精确检索、大 chunk 完整上下文」。
 - `parent_id` 的 NULL / 非空 即区分 parent / child，无需额外 level 列（固定两级）。
 
@@ -256,45 +256,43 @@ URL  → WebDocumentParser      （复用 WebFetcher：trafilatura → Playwrigh
 
 ## 5. 分块层：内容感知 + 父子切割（新包 `app/chunking/`）
 
-这是模块 4 的技术亮点，单独成包、纯函数、强单测。
+这是模块 4 的技术亮点，单独成包、纯函数、强单测。语义块识别基于 **markdown-it-py AST**（不再手写
+行首正则），天然正确处理嵌套列表 / GFM 表格 / 代码围栏 / 引用 / Setext 标题，并按「重复出现的最浅
+标题层级」切父级节，避免单标题文档塌成一个 parent。
 
 ```
 app/chunking/
-├── base.py          # Chunk dataclass(id/顺序/content/metadata) + 目标长度常量
-├── block.py         # markdown → 语义块切分（标题/段落/代码围栏/表格/列表/FAQ 问答对）
-├── registry.py      # 按「块类型」匹配 splitter；无匹配 → 递归兜底
+├── base.py          # Chunk/ParentChunk dataclass + token 估算 + 递归切分（含相邻块重叠）
+├── block.py         # markdown-it-py AST → 语义块（标题/段落/代码围栏/表格/列表/引用）+ 父级切分
+├── registry.py      # 按「块类型」匹配 splitter；无匹配 → 递归兜底；标题即 child
 └── splitters/
-    ├── recursive.py   # 结构化递归（标题层级→段落→句子；超长硬切+重叠）——默认兜底
+    ├── recursive.py   # 结构化递归（段落→行→句→词；超长硬切 + 相邻块重叠）——默认兜底
     ├── table.py       # 整表保留；超长按行切 + 重复表头
-    ├── code_ast.py    # 代码块按函数/类边界(AST)；无 AST 语言降级按行
-    ├── legal.py       # 按「第 X 条/款/项」边界切
-    └── faq.py         # FAQ 按「问答对」切
+    └── code_ast.py    # 代码块按函数/类边界；无 AST 语言降级按行
 ```
 
 ### 5.1 管线（两级）
 
 ```
 markdown
-  ├─ ① 父级切分（section segmentation）: 按标题层级切成「节」= parent；无标题文档退化为固定窗口(~1500 token)
+  ├─ ① 父级切分（section segmentation）: 按标题层级切成「节」= parent；无标题文档退化为递归切分(~1500 token)
   │     过小节合并、超大节拆分，目标 ~1000–2000 token/parent
-  └─ ② 子级切分（content-aware，5 splitter 逐节处理）: 产出 child(~300–500 token)
+  └─ ② 子级切分（content-aware，3 splitter 逐节处理）: 产出 child(~300–500 token)
         超长块落回「递归字符硬切 + 重叠」兜底
 ```
 
-- **父级切分**：识别 H1–H6 标题层级，把同一标题节下的内容聚成一个 parent；无标题的扁平文档按固定 token 窗口分段。
-- **子级切分**：每节内按 `block.py` 识别的异质块（段落/表格/代码/列表/FAQ），经 `registry` 匹配对应 splitter 产出 child。
-- **兜底**：任何专用 splitter 处理不了或仍超长的块，落回「递归字符硬切 + 重叠」。
+- **父级切分**：按「重复出现的最浅标题层级」聚成 parent（单标题文档不塌成一个 parent）；无标题的扁平文档回退递归切分分段。
+- **子级切分**：每节内按 `block.py` 识别的异质块（段落/表格/代码/列表/引用），经 `registry` 匹配对应 splitter 产出 child；标题块本身作为 child 落地（可检索）。
+- **重叠**：相邻合并块之间保留 ~50 token 重叠（句子边界对齐）；超长不可拆片段落回「递归字符硬切 + 重叠」兜底。
 - **元数据**：child 的 `metadata` 带 `block_type` + `heading_path`（所属标题路径），供模块 5 检索时拼上下文；parent 带 `heading_path`。
 
-### 5.2 5 个 splitter
+### 5.2 3 个 splitter
 
 | splitter | 处理对象 | 切分方式 |
 |---|---|---|
-| `recursive.py` | 标题 + 普通段落 | 标题层级 → 段落 → 句子；超长硬切 + 重叠 |
+| `recursive.py` | 标题 + 普通段落/列表/引用 | 段落 → 行 → 句 → 词；超长硬切 + 相邻块重叠（默认兜底） |
 | `table.py` | Markdown 表格 | 整表保留；超长按行切 + 重复表头 |
-| `code_ast.py` | 代码块 | AST 按函数/类边界；无 AST 支持的语言降级按行 |
-| `legal.py` | 法律条文 | 按「第 X 条/款/项」边界 |
-| `faq.py` | FAQ | 按「问答对」切 |
+| `code_ast.py` | 代码块 | 按函数/类边界；无 AST 支持的语言降级按行 |
 
 ---
 
@@ -491,7 +489,7 @@ router.tsx                # 移除 /documents/:documentId 路由（浮动窗口�
 
 | 层 | 测试 | 方式 |
 |---|---|---|
-| 分块单元 | `test_chunking.py` | 5 splitter 各自边界（递归标题/段落/句子 + 超长硬切+重叠、表格整表/按行+重复表头、代码 AST/降级按行、法律第X条、FAQ 问答对）+ parent 切分（标题节/无标题回退/合并/拆分）+ registry 兜底 |
+| 分块单元 | `test_chunking.py` | 3 splitter 各自边界（递归句子切分 + 相邻块重叠 + 超长硬切、表格整表/按行+重复表头、代码函数边界/降级按行）+ AST 语义块（标题/段落/表格/代码/列表/引用 + heading_path）+ parent 切分（标题节/单标题不塌/无标题回退/合并/拆分）+ registry 兜底 |
 | ingest 单元 | `test_ingest.py` | 注入 Fake parser/embedding/chunker：done 落父子 chunk（child 有向量、parent NULL）/ parse 失败→error / embed 失败→error / 重试排期正确 |
 | service 单元 | `test_services_document.py` | 注入 Fake repo/parser/file_store：上传建 pending、from-url、详情/删除/重试、kb 不存在 404、类型不支持 422、非 error 态重试 409 |
 | API 集成 | `test_api_documents.py` | `dependency_overrides` 换 Fake，走 6 端点 + contents 含 document 条目 |
@@ -509,7 +507,7 @@ router.tsx                # 移除 /documents/:documentId 路由（浮动窗口�
 |---|---|---|
 | T1 | `pyproject.toml` 加 `python-multipart`、`pgvector`、`mammoth`（+ 视需 `tree-sitter`）；`httpx` 移入运行时依赖 | 依赖可装 |
 | T2 | `models/document.py` + 迁移 `0004`（建 documents/document_chunks + drop notes 三列 + 部分 HNSW） | 可 `upgrade head` |
-| T3 | `app/chunking/` 包：block 切分 + registry + 5 splitter + parent 切分 + 单测 | 分块能力（可独立验收） |
+| T3 | `app/chunking/` 包：markdown-it-py AST 切分 + registry + 3 splitter + parent 切分 + 单测 | 分块能力（可独立验收） |
 | T4 | `integrations/parser.py`（MinerU/Word/Web 三实现 + 分发工厂）+ `integrations/embedding.py`（SiliconFlow） | 解析/向量化真实 provider |
 | T5 | `core/storage.py`（FileStore）+ `services/ingest.py`（parent→child→embed 流水线） | 核心业务逻辑 |
 | T6 | `repositories/document.py` + `schemas/document.py` | 数据访问/校验层 |
@@ -531,7 +529,7 @@ router.tsx                # 移除 /documents/:documentId 路由（浮动窗口�
 3. **URL 只作为文档**：放弃网页笔记；`documents.source_type = pdf/word/url`；解析出 markdown 供阅读器渲染，也可点击打开原网页核对最新内容。
 4. **彻底删除网页笔记**：`notes` 删 `type`/`summary`/`source_url` 三列，删 `from-url` 端点、`WebNoteFormModal`、「新建→网页」入口、url 摘要块；`WebFetcher` 保留给 URL 文档复用。
 5. **父子切割（small-to-big）**：单表 `document_chunks` 自引用 `parent_id`；parent 大块存上下文不向量化，child 小块向量化；检索命中 child 回 parent 出上下文。
-6. **内容感知分块**：5 个可插拔 splitter（结构化递归=兜底 + 表格 + 代码 AST + 法律条例 + FAQ 问答对），独立 `app/chunking/` 包。
+6. **内容感知分块**：markdown-it-py AST 识别异质块 + 3 个可插拔 splitter（结构化递归=兜底 + 表格 + 代码），标题作为可检索 child 落地、相邻块重叠 ~50 token，独立 `app/chunking/` 包。
 7. **文档阅读器**：PDF 内嵌预览原文件（浏览器原生 `<iframe>`）；Word 与 URL 渲染解析出的 Markdown（`react-markdown` + `remark-gfm`，支持 GFM 表格），并提供「下载原文件」（pdf/word）或「打开原网页」（url）按钮。
 8. **笔记向量化留模块 5**：笔记可变需编辑重向量化 + 索引语义，随 RAG 消费方一起定。
 9. **文件存储本地磁盘**：`backend/storage/documents/`（gitignore），`FileStore` 抽象留对象存储扩展点；URL 无本地文件只存 `source_url`。
