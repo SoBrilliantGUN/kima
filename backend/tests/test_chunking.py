@@ -1,15 +1,22 @@
-"""分块层单元测试：5 splitter 边界 + parent 切分 + registry 兜底。"""
+"""分块层单元测试：3 splitter 边界 + parent 切分 + AST 语义块 + registry 兜底。"""
 
-from app.chunking import chunk_document, estimate_tokens, segment_parents
-from app.chunking.block import Block, BlockType, split_blocks
+from app.chunking import chunk_document, estimate_tokens, segment_parents, split_blocks
+from app.chunking.base import split_recursive
+from app.chunking.block import Block, BlockType
 from app.chunking.registry import get_splitter, split_children
-from app.chunking.splitters import (
-    split_code,
-    split_faq,
-    split_legal,
-    split_recursive,
-    split_table,
-)
+from app.chunking.splitters import split_code, split_table
+
+
+def _overlap_len(a: str, b: str) -> int:
+    """a 的尾缀与 b 的前缀的最长公共长度（相邻块重叠量）。"""
+    n = min(len(a), len(b))
+    for k in range(n, 0, -1):
+        if a[-k:] == b[:k]:
+            return k
+    return 0
+
+
+# --- 递归切分 ---
 
 
 def test_recursive_short_returns_single() -> None:
@@ -23,14 +30,25 @@ def test_recursive_splits_long_paragraph_by_sentence() -> None:
     assert all(estimate_tokens(chunk) <= 500 for chunk in chunks)
 
 
+def test_recursive_merge_keeps_overlap_between_chunks() -> None:
+    # 可区分句子：合并后的相邻块应在句子边界保留 ~50 token 重叠
+    sentences = [f"句子{i:03d}这是第{i}句话。" for i in range(100)]
+    chunks = split_recursive("".join(sentences))
+    assert len(chunks) > 1
+    assert all(estimate_tokens(chunk) <= 500 for chunk in chunks)
+    assert _overlap_len(chunks[0], chunks[1]) > 0
+
+
 def test_recursive_hard_split_with_overlap() -> None:
-    # 无分隔符的超长串 → 硬切 + 重叠
-    text = "字" * 5000
+    # 无分隔符的超长串 → 硬切 + 重叠（用可区分文本验证，而非全同字符）
+    text = "".join(chr(0x4E00 + (i % 100)) for i in range(5000))
     chunks = split_recursive(text)
     assert len(chunks) > 1
     assert all(chunk for chunk in chunks)
-    # 相邻 chunk 有重叠（前一块结尾 == 后一块开头）
-    assert chunks[0][-100:] == chunks[1][:100]
+    assert _overlap_len(chunks[0], chunks[1]) > 0
+
+
+# --- 专用 splitter ---
 
 
 def test_table_small_kept_whole() -> None:
@@ -68,20 +86,15 @@ def test_code_no_boundary_falls_back_to_lines() -> None:
     assert len(chunks) >= 1
 
 
-def test_legal_split_by_clause() -> None:
-    text = "第一条 总则\n这是第一条内容。\n第二条 定义\n这是第二条内容。\n第三条 附则\n这是第三条。"
-    chunks = split_legal(text)
-    assert len(chunks) == 3
-    assert chunks[0].startswith("第一条")
-    assert chunks[1].startswith("第二条")
+# --- AST 语义块 ---
 
 
-def test_faq_split_by_qa_pair() -> None:
-    text = "Q: 如何安装？\nA: 运行 pip install。\nQ: 如何卸载？\nA: 运行 pip uninstall。"
-    chunks = split_faq(text)
-    assert len(chunks) == 2
-    assert "问：如何安装？" in chunks[0]
-    assert "答：运行 pip install。" in chunks[0]
+def test_block_split_code_fence_language() -> None:
+    # 非缩进与缩进的代码围栏都应正确提取语言标识
+    markdown = "```python\nprint(1)\n```\n\n   ```rust\nfn main() {}\n   ```"
+    blocks = split_blocks(markdown)
+    code = [b for b in blocks if b.type == BlockType.CODE]
+    assert [b.metadata["language"] for b in code] == ["python", "rust"]
 
 
 def test_block_split_identifies_types() -> None:
@@ -90,15 +103,30 @@ def test_block_split_identifies_types() -> None:
         "段落内容。\n\n"
         "| a | b |\n| - | - |\n| 1 | 2 |\n\n"
         "```python\nprint(1)\n```\n\n"
-        "- 项目一\n- 项目二\n"
+        "- 项目一\n- 项目二\n\n"
+        "> 引用内容\n"
     )
     blocks = split_blocks(markdown)
     types = [b.type for b in blocks]
-    assert BlockType.HEADING in types
-    assert BlockType.PARAGRAPH in types
-    assert BlockType.TABLE in types
-    assert BlockType.CODE in types
-    assert BlockType.LIST in types
+    for expected in (
+        BlockType.HEADING,
+        BlockType.PARAGRAPH,
+        BlockType.TABLE,
+        BlockType.CODE,
+        BlockType.LIST,
+        BlockType.BLOCKQUOTE,
+    ):
+        assert expected in types
+
+
+def test_block_carries_heading_path() -> None:
+    markdown = "# 第一章\n\n## 1.1\n\n正文。\n"
+    blocks = split_blocks(markdown)
+    paragraph = next(b for b in blocks if b.type == BlockType.PARAGRAPH)
+    assert paragraph.metadata["heading_path"] == "第一章 > 1.1"
+
+
+# --- parent 切分 ---
 
 
 def test_parent_heading_sections() -> None:
@@ -108,6 +136,16 @@ def test_parent_heading_sections() -> None:
     assert len(parents) == 2
     assert parents[0].heading_path == "第一节"
     assert parents[1].heading_path == "第二节"
+
+
+def test_parent_single_title_does_not_collapse() -> None:
+    # 一个 # 标题 + 多个 ## 节：不应塌成一个 parent（旧 bug）
+    body = "内容" * 700  # ~1400 token，每节 > 1000 避免合并
+    markdown = f"# 标题\n\n## 第一节\n\n{body}\n\n## 第二节\n\n{body}\n"
+    parents = segment_parents(markdown)
+    assert len(parents) == 2
+    assert parents[0].heading_path == "标题 > 第一节"
+    assert parents[1].heading_path == "标题 > 第二节"
 
 
 def test_parent_no_heading_window_fallback() -> None:
@@ -130,9 +168,26 @@ def test_parent_split_oversized_section() -> None:
     assert len(parents) > 1
 
 
+# --- registry / 两级管线 ---
+
+
 def test_registry_falls_back_to_recursive() -> None:
     splitter = get_splitter(BlockType.PARAGRAPH)
     assert splitter is split_recursive
+
+
+def test_split_children_attaches_metadata() -> None:
+    block = Block(BlockType.PARAGRAPH, "正文内容。", {"heading_path": "第一章"})
+    chunks = split_children([block])
+    assert chunks[0].metadata["block_type"] == "paragraph"
+    assert chunks[0].metadata["heading_path"] == "第一章"
+
+
+def test_heading_emitted_as_child() -> None:
+    # 标题应作为可检索 child 落地（而非仅 metadata）
+    parents = chunk_document("# 支付流程\n\n这是正文。\n")
+    headings = [c for c in parents[0].children if c.metadata["block_type"] == "heading"]
+    assert headings and headings[0].content == "支付流程"
 
 
 def test_chunk_document_two_level_structure() -> None:
@@ -142,13 +197,5 @@ def test_chunk_document_two_level_structure() -> None:
     assert len(parents) >= 2
     total_children = sum(len(parent.children) for parent in parents)
     assert total_children >= 2
-    # parent 有 heading_path，child 有 block_type + heading_path
     assert parents[0].heading_path == "概述"
     assert all(parent.children for parent in parents)
-
-
-def test_split_children_attaches_metadata() -> None:
-    block = Block(BlockType.PARAGRAPH, "正文内容。")
-    chunks = split_children([block], "第一章")
-    assert chunks[0].metadata["block_type"] == "paragraph"
-    assert chunks[0].metadata["heading_path"] == "第一章"
