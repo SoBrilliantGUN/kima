@@ -58,6 +58,17 @@ export function GlobeIcon(props: IconProps) {
   )
 }
 
+export function GlobeOffIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M2 12h20" />
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+      <path d="m17 7-10 10" />
+    </Icon>
+  )
+}
+
 export function FilePlusIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -100,6 +111,15 @@ export function ChevronDownIcon(props: IconProps) {
     <Icon {...props}>
       <path d="M12 5v14" />
       <path d="m19 12-7 7-7-7" />
+    </Icon>
+  )
+}
+
+export function HistoryIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 3" />
     </Icon>
   )
 }

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import type { Document, DocumentStatus } from '@/api/types'
-import { FilePlusIcon, SearchIcon } from '@/components/icons'
+import { FilePlusIcon, MessageCircleIcon, SearchIcon } from '@/components/icons'
 import { useDeleteDocument, useRetryDocument } from '@/hooks/useDocuments'
 import { useKnowledgeBase, useKbContents } from '@/hooks/useKnowledgeBases'
 import { AddContentMenu } from './components/AddContentMenu'
@@ -19,12 +19,16 @@ const STATUS_LABEL: Record<DocumentStatus, string> = {
 
 interface ContentListPaneProps {
   kbId?: string
+  qaOpen: boolean
+  onOpenQa: () => void
   onOpenDocument: (documentId: string) => void
   onCloseDocument: (documentId: string) => void
 }
 
 export function ContentListPane({
   kbId,
+  qaOpen,
+  onOpenQa,
   onOpenDocument,
   onCloseDocument,
 }: ContentListPaneProps) {
@@ -70,6 +74,12 @@ export function ContentListPane({
           <h2 className={styles.name}>{kb.name}</h2>
           {kb.description ? <p className={styles.description}>{kb.description}</p> : null}
         </div>
+        {!qaOpen ? (
+          <button type="button" className={styles.askButton} onClick={onOpenQa}>
+            <MessageCircleIcon />
+            问知识库
+          </button>
+        ) : null}
       </header>
 
       <div className={styles.toolbar}>

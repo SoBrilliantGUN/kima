@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { getConversation, streamChat } from '@/api/chat'
 import type { ChatSseEvent } from '@/api/chat'
-import type { ChatMessage, ChatMode, Citation } from '@/api/types'
+import type { ChatMessage, Citation } from '@/api/types'
 
 let tempIdCounter = 0
 
@@ -39,8 +39,12 @@ function setCitations(messages: ChatMessage[], assistantId: string, citations: C
 /**
  * 流式问答状态：维护当前会话消息列表，发送时经 SSE 逐步追加回答文本与引用。
  * 会话的「选中/加载」由调用方通过 selectConversation/startNew 驱动。
+ *
+ * @param kbId      会话归属知识库（首页全局会话传 null；知识库右面板传当前库）。
+ * @param kbIds     检索范围（非空 = 仅检索这些知识库，可多个）。
+ * @param webSearch 联网搜索开关（kbIds 为空且 webSearch 为假 = 纯 LLM 无检索）。
  */
-export function useChatStream(mode: ChatMode, kbId: string | null) {
+export function useChatStream(kbId: string | null, kbIds: string[], webSearch: boolean) {
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState(false)
@@ -112,7 +116,7 @@ export function useChatStream(mode: ChatMode, kbId: string | null) {
       abortRef.current = controller
       try {
         for await (const event of streamChat(
-          { mode, kb_id: kbId, conversation_id: conversationId, question: trimmed },
+          { kb_ids: kbIds, web_search: webSearch, kb_id: kbId, conversation_id: conversationId, question: trimmed },
           controller.signal,
         )) {
           // 首条消息 meta 返回后会话已建好，刷新会话列表让新对话立刻可见
@@ -131,7 +135,7 @@ export function useChatStream(mode: ChatMode, kbId: string | null) {
         abortRef.current = null
       }
     },
-    [mode, kbId, conversationId, streaming, applyEvent, queryClient],
+    [kbId, kbIds, webSearch, conversationId, streaming, applyEvent, queryClient],
   )
 
   /** 停止当前流式回答。 */

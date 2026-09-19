@@ -95,8 +95,6 @@ export interface ContentListResponse {
   total: number
 }
 
-export type ChatMode = 'kb' | 'web'
-
 export type ChatRole = 'user' | 'assistant'
 
 export type CitationSourceType = 'document' | 'note' | 'web'
@@ -143,7 +141,8 @@ export interface ConversationDetail {
 }
 
 export interface ChatRequest {
-  mode: ChatMode
+  kb_ids: string[]
+  web_search: boolean
   kb_id?: string | null
   conversation_id?: string | null
   question: string

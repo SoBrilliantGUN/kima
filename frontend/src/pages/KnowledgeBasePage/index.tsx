@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 
 import { rememberKnowledgeBase } from '@/lib/lastKnowledgeBase'
@@ -12,6 +12,7 @@ import styles from './index.module.scss'
 export default function KnowledgeBasePage() {
   const { id } = useParams<{ id: string }>()
   const { windows, open, focus, close, clear } = useDocumentWindows()
+  const [qaOpen, setQaOpen] = useState(true)
 
   useEffect(() => {
     if (id) rememberKnowledgeBase(id)
@@ -23,10 +24,18 @@ export default function KnowledgeBasePage() {
   }, [id, clear])
 
   return (
-    <div className={styles.page}>
+    <div className={qaOpen ? `${styles.page} ${styles.qaOpen}` : `${styles.page} ${styles.qaClosed}`}>
       <KnowledgeBaseListPane selectedId={id} />
-      <ContentListPane kbId={id} onOpenDocument={open} onCloseDocument={close} />
-      <QaPanel kbId={id} />
+      <ContentListPane
+        kbId={id}
+        qaOpen={qaOpen}
+        onOpenQa={() => setQaOpen(true)}
+        onOpenDocument={open}
+        onCloseDocument={close}
+      />
+      <div className={styles.qaWrap}>
+        <QaPanel kbId={id} onClose={() => setQaOpen(false)} collapsed={!qaOpen} />
+      </div>
       {windows.map((window) => (
         <DocumentWindow
           key={window.documentId}
