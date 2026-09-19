@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class ConversationCreate(BaseModel):
@@ -40,7 +40,9 @@ class ConversationDetail(ConversationRead):
 
 
 class ChatRequest(BaseModel):
-    mode: Literal["kb", "web"]
+    # 检索范围：空列表 = 联网搜索，非空 = 仅检索这些知识库（可 @ 多个）
+    kb_ids: list[uuid.UUID] = []
+    # 会话归属知识库：首页全局会话为 None，知识库右面板挂当前库
     kb_id: uuid.UUID | None = None
     conversation_id: uuid.UUID | None = None
     question: str
@@ -52,9 +54,3 @@ class ChatRequest(BaseModel):
         if not value:
             raise ValueError("问题不能为空")
         return value
-
-    @model_validator(mode="after")
-    def _require_kb_id(self) -> "ChatRequest":
-        if self.mode == "kb" and self.kb_id is None:
-            raise ValueError("mode=kb 时必须提供 kb_id")
-        return self

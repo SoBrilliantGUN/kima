@@ -47,13 +47,13 @@ class FakeRetrievalRepository:
         self.lexical_calls = 0
 
     async def search_dense(
-        self, kb_id: uuid.UUID, query_vec: list[float], top_k: int
+        self, kb_ids: list[uuid.UUID], query_vec: list[float], top_k: int
     ) -> list[RetrievedChunk]:
         self.dense_calls += 1
         return list(self._dense)
 
     async def search_lexical(
-        self, kb_id: uuid.UUID, query: str, top_k: int
+        self, kb_ids: list[uuid.UUID], query: str, top_k: int
     ) -> list[RetrievedChunk]:
         self.lexical_calls += 1
         return list(self._lexical)
@@ -142,7 +142,7 @@ async def test_retriever_resolves_parent() -> None:
         rerank_top_n=6,
     )
 
-    result = await retriever.retrieve("问一下", kb_id)
+    result = await retriever.retrieve("问一下", [kb_id])
 
     assert repository.dense_calls == 1
     assert repository.lexical_calls == 1

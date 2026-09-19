@@ -39,11 +39,11 @@ class RagRetriever:
         self._rerank_min_score = rerank_min_score
         self._rrf_k = rrf_k
 
-    async def retrieve(self, query: str, kb_id: uuid.UUID) -> list[RetrievedChunk]:
-        """检索指定知识库：混合检索 + RRF + rerank + 回 parent。"""
+    async def retrieve(self, query: str, kb_ids: list[uuid.UUID]) -> list[RetrievedChunk]:
+        """检索指定知识库集合：混合检索 + RRF + rerank + 回 parent。"""
         query_vec = await self._embedder.embed_query(query)
-        dense_hits = await self._repository.search_dense(kb_id, query_vec, self._dense_top_k)
-        lexical_hits = await self._repository.search_lexical(kb_id, query, self._lexical_top_k)
+        dense_hits = await self._repository.search_dense(kb_ids, query_vec, self._dense_top_k)
+        lexical_hits = await self._repository.search_lexical(kb_ids, query, self._lexical_top_k)
 
         fused = rrf_fuse([dense_hits, lexical_hits], self._rrf_k)
         ranked = await rerank_chunks(

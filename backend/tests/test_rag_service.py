@@ -15,12 +15,12 @@ from app.rag.service import RagService
 
 class _FakeRepo:
     async def search_dense(
-        self, kb_id: uuid.UUID, query_vec: list[float], top_k: int
+        self, kb_ids: list[uuid.UUID], query_vec: list[float], top_k: int
     ) -> list[RetrievedChunk]:
         return []
 
     async def search_lexical(
-        self, kb_id: uuid.UUID, query: str, top_k: int
+        self, kb_ids: list[uuid.UUID], query: str, top_k: int
     ) -> list[RetrievedChunk]:
         return []
 
@@ -51,7 +51,7 @@ async def _collect(agen: AsyncIterator[AnswerEvent]) -> list[AnswerEvent]:
 
 async def test_answer_kb_mode_event_order() -> None:
     events = await _collect(
-        _service().answer(query="问一下", mode="kb", kb_id=uuid.uuid4(), history=[])
+        _service().answer(query="问一下", kb_ids=[uuid.uuid4()], history=[])
     )
     assert any(isinstance(event, AnswerDelta) for event in events)
     assert isinstance(events[-1], AnswerCitations)
@@ -59,7 +59,7 @@ async def test_answer_kb_mode_event_order() -> None:
 
 
 async def test_answer_web_mode_citations() -> None:
-    events = await _collect(_service().answer(query="问一下", mode="web", kb_id=None, history=[]))
+    events = await _collect(_service().answer(query="问一下", kb_ids=[], history=[]))
     assert isinstance(events[-1], AnswerCitations)
     assert len(events[-1].citations) == 5  # FakeWebSearchClient 默认 top_k=5
     assert all(citation.source_type == SourceType.WEB for citation in events[-1].citations)

@@ -19,11 +19,11 @@ from app.rag.schema import RetrievedChunk
 
 class RetrievalRepository(Protocol):
     async def search_dense(
-        self, kb_id: uuid.UUID, query_vec: list[float], top_k: int
+        self, kb_ids: list[uuid.UUID], query_vec: list[float], top_k: int
     ) -> list[RetrievedChunk]: ...
 
     async def search_lexical(
-        self, kb_id: uuid.UUID, query: str, top_k: int
+        self, kb_ids: list[uuid.UUID], query: str, top_k: int
     ) -> list[RetrievedChunk]: ...
 
     async def get_parent_contents(
@@ -38,14 +38,14 @@ class SqlAlchemyRetrievalRepository:
         self._session = session
 
     async def search_dense(
-        self, kb_id: uuid.UUID, query_vec: list[float], top_k: int
+        self, kb_ids: list[uuid.UUID], query_vec: list[float], top_k: int
     ) -> list[RetrievedChunk]:
-        return await dense_search(self._session, kb_id, query_vec, top_k)
+        return await dense_search(self._session, kb_ids, query_vec, top_k)
 
     async def search_lexical(
-        self, kb_id: uuid.UUID, query: str, top_k: int
+        self, kb_ids: list[uuid.UUID], query: str, top_k: int
     ) -> list[RetrievedChunk]:
-        return await lexical_search(self._session, kb_id, query, top_k)
+        return await lexical_search(self._session, kb_ids, query, top_k)
 
     async def get_parent_contents(
         self, doc_ids: set[uuid.UUID], note_ids: set[uuid.UUID]

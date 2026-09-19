@@ -49,30 +49,27 @@ class RagService:
         self._context_max_tokens = context_max_tokens
         self._history_recent_turns = history_recent_turns
 
-    async def retrieve(self, query: str, kb_id: uuid.UUID) -> list[RetrievedChunk]:
-        """检索指定知识库（混合检索 + RRF + rerank + 回 parent）。"""
-        return await self._retriever.retrieve(query, kb_id)
+    async def retrieve(self, query: str, kb_ids: list[uuid.UUID]) -> list[RetrievedChunk]:
+        """检索指定知识库集合（混合检索 + RRF + rerank + 回 parent）。"""
+        return await self._retriever.retrieve(query, kb_ids)
 
     async def answer(
         self,
         *,
         query: str,
-        mode: str,
-        kb_id: uuid.UUID | None,
+        kb_ids: list[uuid.UUID],
         history: list[ChatMessage],
     ) -> AsyncIterator[AnswerEvent]:
-        """完整 RAG 生成：先 yield 文本增量，最后 yield 引用。`mode` ∈ {"kb", "web"}。"""
+        """完整 RAG 生成：先 yield 文本增量，最后 yield 引用。`kb_ids` 空 = 联网搜索。"""
         # ① 改写（喂最近 2 轮历史消解指代）
         rewritten = await rewrite_query(self._llm, query, history[-4:])
 
         # ②③④ 检索（KB 混合检索 或 全网）
-        if mode == "web":
+        if not kb_ids:
             results = await self._web_search.search(rewritten, top_k=WEB_TOP_K)
             context, citations = format_web_context(results)
         else:
-            if kb_id is None:
-                raise ValueError("mode=kb 时必须提供 kb_id")
-            chunks = await self._retriever.retrieve(rewritten, kb_id)
+            chunks = await self._retriever.retrieve(rewritten, kb_ids)
             context, citations = format_kb_context(chunks)
 
         # 历史 token 预算：总窗口扣掉 system/context/question 后留给历史

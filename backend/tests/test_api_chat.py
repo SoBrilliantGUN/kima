@@ -71,12 +71,12 @@ class FakeChatRepository:
 
 class _EmptyRetrievalRepo:
     async def search_dense(
-        self, kb_id: uuid.UUID, query_vec: list[float], top_k: int
+        self, kb_ids: list[uuid.UUID], query_vec: list[float], top_k: int
     ) -> list[RetrievedChunk]:
         return []
 
     async def search_lexical(
-        self, kb_id: uuid.UUID, query: str, top_k: int
+        self, kb_ids: list[uuid.UUID], query: str, top_k: int
     ) -> list[RetrievedChunk]:
         return []
 
@@ -139,15 +139,22 @@ async def test_conversation_crud(api_client: AsyncClient) -> None:
     assert (await api_client.get("/api/conversations")).json()["total"] == 0
 
 
-async def test_chat_kb_mode_requires_kb_id(api_client: AsyncClient) -> None:
-    response = await api_client.post("/api/chat", json={"mode": "kb", "question": "hi"})
-    assert response.status_code == 422
+async def test_chat_invalid_kb_error(api_client: AsyncClient) -> None:
+    async with api_client.stream(
+        "POST", "/api/chat", json={"kb_ids": [str(uuid.uuid4())], "question": "hi"}
+    ) as response:
+        assert response.status_code == 200
+        body = ""
+        async for line in response.aiter_lines():
+            body += line + "\n"
+    assert "event: error" in body
+    assert "not_found" in body
 
 
 async def test_chat_web_mode_sse(api_client: AsyncClient) -> None:
     events: list[tuple[str | None, object]] = []
     async with api_client.stream(
-        "POST", "/api/chat", json={"mode": "web", "question": "问一下"}
+        "POST", "/api/chat", json={"question": "问一下"}
     ) as response:
         assert response.status_code == 200
         current_event: str | None = None
@@ -171,7 +178,7 @@ async def test_chat_missing_conversation_error(api_client: AsyncClient) -> None:
     async with api_client.stream(
         "POST",
         "/api/chat",
-        json={"mode": "web", "question": "hi", "conversation_id": str(uuid.uuid4())},
+        json={"question": "hi", "conversation_id": str(uuid.uuid4())},
     ) as response:
         assert response.status_code == 200
         body = ""

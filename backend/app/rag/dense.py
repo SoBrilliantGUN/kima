@@ -16,17 +16,17 @@ from app.rag.schema import RetrievedChunk, SourceType
 
 
 async def dense_search(
-    session: AsyncSession, kb_id: uuid.UUID, query_vec: list[float], top_k: int
+    session: AsyncSession, kb_ids: list[uuid.UUID], query_vec: list[float], top_k: int
 ) -> list[RetrievedChunk]:
     """文档 + 笔记两路向量检索，合并返回（各自顺序即 rank，供 RRF 使用）。"""
     hits: list[RetrievedChunk] = []
-    hits.extend(await _dense_documents(session, kb_id, query_vec, top_k))
-    hits.extend(await _dense_notes(session, kb_id, query_vec, top_k))
+    hits.extend(await _dense_documents(session, kb_ids, query_vec, top_k))
+    hits.extend(await _dense_notes(session, kb_ids, query_vec, top_k))
     return hits
 
 
 async def _dense_documents(
-    session: AsyncSession, kb_id: uuid.UUID, query_vec: list[float], top_k: int
+    session: AsyncSession, kb_ids: list[uuid.UUID], query_vec: list[float], top_k: int
 ) -> list[RetrievedChunk]:
     distance = DocumentChunk.embedding.cosine_distance(query_vec)
     rows = (
@@ -39,7 +39,7 @@ async def _dense_documents(
                 Document.title,
             )
             .join(Document, Document.id == DocumentChunk.document_id)
-            .where(DocumentChunk.embedding.is_not(None), DocumentChunk.kb_id == kb_id)
+            .where(DocumentChunk.embedding.is_not(None), DocumentChunk.kb_id.in_(kb_ids))
             .order_by(distance)
             .limit(top_k)
         )
@@ -59,7 +59,7 @@ async def _dense_documents(
 
 
 async def _dense_notes(
-    session: AsyncSession, kb_id: uuid.UUID, query_vec: list[float], top_k: int
+    session: AsyncSession, kb_ids: list[uuid.UUID], query_vec: list[float], top_k: int
 ) -> list[RetrievedChunk]:
     distance = NoteChunk.embedding.cosine_distance(query_vec)
     rows = (
@@ -75,7 +75,7 @@ async def _dense_notes(
             .join(Note, Note.id == NoteChunk.note_id)
             .where(
                 NoteChunk.embedding.is_not(None),
-                note_knowledge_bases.c.knowledge_base_id == kb_id,
+                note_knowledge_bases.c.knowledge_base_id.in_(kb_ids),
             )
             .order_by(distance)
             .limit(top_k)

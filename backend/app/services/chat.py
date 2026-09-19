@@ -98,6 +98,9 @@ class ChatService:
     # --- 提问（SSE 流） ---
 
     async def ask(self, request: ChatRequest) -> AsyncIterator[ChatEvent]:
+        # 校验检索范围内的每个知识库都存在（联网搜索 kb_ids 为空则跳过）
+        for kb_id in request.kb_ids:
+            await self._validate_kb(kb_id)
         conversation = await self._get_or_create_conversation(request)
 
         # 历史 = 本轮之前已有消息（不含本轮问题，问题单独传给 answer）
@@ -123,8 +126,7 @@ class ChatService:
         citations: list[Citation] = []
         async for event in self._rag.answer(
             query=request.question,
-            mode=request.mode,
-            kb_id=request.kb_id,
+            kb_ids=request.kb_ids,
             history=llm_history,
         ):
             if isinstance(event, AnswerDelta):
