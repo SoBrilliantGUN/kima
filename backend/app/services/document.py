@@ -92,7 +92,7 @@ class DocumentService:
         return document.content_markdown or ""
 
     async def delete(self, document_id: uuid.UUID) -> None:
-        """删除文档：磁盘原文件需手动删；chunks 由 DB 外键 ON DELETE CASCADE 级联清理（见 repository.delete）。"""
+        """删除文档：磁盘原文件需手动删；chunks 由 DB 外键 ON DELETE CASCADE 级联清理。"""
         document = await self.get(document_id)
         if document.file_path:
             await self._file_store.delete(document.file_path)

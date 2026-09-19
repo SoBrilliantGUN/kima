@@ -49,7 +49,7 @@ class SqlAlchemyKnowledgeBaseRepository:
         return kb
 
     async def update(self, kb: KnowledgeBase) -> KnowledgeBase:
-        if inspect(kb).session is not self._session:
+        if inspect(kb).session is not self._session:  # type: ignore[comparison-overlap]
             raise InvalidRequestError(
                 "update() 只接受本 session 已加载的持久对象（detached/transient 请先 get）"
             )

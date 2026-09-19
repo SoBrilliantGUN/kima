@@ -46,7 +46,7 @@ class SqlAlchemyNoteRepository:
         return note
 
     async def update(self, note: Note) -> Note:
-        if inspect(note).session is not self._session:
+        if inspect(note).session is not self._session:  # type: ignore[comparison-overlap]
             raise InvalidRequestError(
                 "update() 只接受本 session 已加载的持久对象（detached/transient 请先 get）"
             )

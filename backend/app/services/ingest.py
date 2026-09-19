@@ -69,7 +69,8 @@ class IngestService:
     async def _parse(self, document: Document) -> ParsedDocument:
         """把 Document 翻译成解析器入参：URL 直接透传 source_url；文件类型先从 FileStore 读字节。
 
-        这里的 if 负责「准备输入」（读文件 vs 传 url），类型到窄解析器的路由由 DispatchDocumentParser 完成。
+        这里的 if 负责「准备输入」（读文件 vs 传 url），
+        类型到窄解析器的路由由 DispatchDocumentParser 完成。
         """
         if document.source_type == DocumentType.URL:
             return await self._parser.parse(source_type=SourceType.URL, url=document.source_url)
@@ -87,7 +88,8 @@ class IngestService:
     def _build_chunks(self, document: Document, parents: list[ParentChunk]) -> list[DocumentChunk]:
         """把 chunk_document 的 ParentChunk 树拍平成 document_chunks 行（small-to-big）。
 
-        parent 行不向量化（embedding=None），child 行以 parent_id 指向父行；chunk_index 各自层级内从 0 计。
+        parent 行不向量化（embedding=None），child 行以 parent_id 指向父行；
+        chunk_index 各自层级内从 0 计。
         """
         rows: list[DocumentChunk] = []
         for parent_index, parent in enumerate(parents):
@@ -120,7 +122,7 @@ class IngestService:
         return rows
 
     async def _embed_children(self, chunks: list[DocumentChunk]) -> None:
-        """只向量化 child（parent 不向量化），按 EMBED_BATCH_SIZE 分批调 embedder 后回填 embedding。"""
+        """只向量化 child（parent 不向量化），按 EMBED_BATCH_SIZE 分批回填 embedding。"""
         children = [chunk for chunk in chunks if chunk.parent_id is not None]
         if not children:
             return

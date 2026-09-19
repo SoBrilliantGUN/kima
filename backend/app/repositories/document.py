@@ -44,7 +44,7 @@ class SqlAlchemyDocumentRepository:
 
     async def update(self, doc: Document) -> Document:
         """提交对持久对象的原地改动；对象须由本 session 的 get() 加载。"""
-        if inspect(doc).session is not self._session:
+        if inspect(doc).session is not self._session:  # type: ignore[comparison-overlap]
             raise InvalidRequestError(
                 "update() 只接受本 session 已加载的持久对象（detached/transient 请先 get）"
             )
