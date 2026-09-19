@@ -1,21 +1,29 @@
-"""分块基础：目标长度常量、token 估算、Chunk/ParentChunk 数据类、父级切分。
+"""分块基础：目标长度常量、token 估算、Chunk/ParentChunk 数据类、递归切分。
 
-父级（section）按标题层级把文档切成「节」；无标题文档回退为固定窗口；
-过小节合并、超大节拆分，目标每 parent ~1000–2000 token。
+递归切分（段落→行→句→词逐级拆 + 贪心合并 + 相邻块重叠）是父级与子级共用的
+兜底原语，仅目标大小不同（父级 ~1500、子级 ~500）。父级按标题层级切「节」见
+`block.py` 的 `segment_parents`；无标题文档或超大节回退为递归切分；过小节合并，
+目标每 parent ~1000–2000 token。
 子级切分（content-aware）见 `block.py` + `registry.py` + `splitters/`。
 """
 
-import re
 from dataclasses import dataclass, field
 
 # 目标长度（token 估算值，非精确 tokenizer）
 CHILD_TARGET_MAX_TOKENS = 500  # child 目标 ~300–500 的上界
-CHILD_OVERLAP_TOKENS = 50  # 超长硬切的重叠量
+CHUNK_OVERLAP_TOKENS = 50  # 递归切分相邻块的 token 重叠量
 PARENT_TARGET_MIN_TOKENS = 1000
 PARENT_TARGET_MAX_TOKENS = 2000
 PARENT_FALLBACK_WINDOW_TOKENS = 1500
 
-_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+# CJK 统一码基本区：CJK 字符约 1 token/字，其余约 4 字符/token
+_CJK_START = "一"
+_CJK_END = "鿿"
+
+
+def _is_cjk(ch: str) -> bool:
+    """是否为 CJK 字符（统一码基本区）。"""
+    return _CJK_START <= ch <= _CJK_END
 
 
 def estimate_tokens(text: str) -> int:
@@ -23,7 +31,7 @@ def estimate_tokens(text: str) -> int:
 
     仅用于分块长度判断与 `token_count` 落库，不需要精确 tokenizer。
     """
-    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
+    cjk = sum(1 for ch in text if _is_cjk(ch))
     other = len(text) - cjk
     return cjk + (other + 3) // 4
 
@@ -45,20 +53,126 @@ class ParentChunk:
     children: list[Chunk] = field(default_factory=list)
 
 
-def heading_level(line: str) -> int | None:
-    """返回标题层级（1–6），非标题返回 None。"""
-    match = _HEADING_RE.match(line)
-    return len(match.group(1)) if match else None
+# 递归切分分隔符优先级：段落 → 行 → 中文句 → 英文句 → 词
+_SEPARATORS = ["\n\n", "\n", "。", "！", "？", "；", ". ", "! ", "? ", "; ", " "]
 
 
-def heading_text(line: str) -> str:
-    """返回去掉 `#` 前缀的标题文本。"""
-    match = _HEADING_RE.match(line)
-    return match.group(2).strip() if match else line.strip()
+def _tokens_of_char(ch: str) -> float:
+    """单字符 token 估算：CJK 约 1，其余约 1/4。"""
+    return 1.0 if _is_cjk(ch) else 0.25
+
+
+def split_recursive(text: str, max_tokens: int = CHILD_TARGET_MAX_TOKENS) -> list[str]:
+    """结构化递归切分：段落→行→句→词逐级拆原子片段，再贪心合并回 ~`max_tokens`。
+
+    父级（~PARENT_FALLBACK_WINDOW_TOKENS）与子级（~CHILD_TARGET_MAX_TOKENS）共用，
+    仅目标大小不同；无法再拆的超长片段用 token 精确硬切 + 重叠兜底。
+    相邻合并块之间保留 ~CHUNK_OVERLAP_TOKENS 的重叠（句子边界对齐），避免边界语义腰斩。
+    """
+    pieces = _atomic_pieces(text, max_tokens)
+    return _merge_pieces(pieces, max_tokens)
+
+
+def _atomic_pieces(text: str, max_tokens: int) -> list[str]:
+    """逐级按分隔符拆到不超过 max 或无法再拆，超长不可拆片段硬切。"""
+    pieces = [text]
+    for sep in _SEPARATORS:
+        result: list[str] = []
+        for piece in pieces:
+            if estimate_tokens(piece) <= max_tokens:
+                result.append(piece)
+            elif sep in piece:
+                result.extend(_split_keep_separator(piece, sep))
+            else:
+                result.append(piece)
+        pieces = result
+
+    final: list[str] = []
+    for piece in pieces:
+        if estimate_tokens(piece) > max_tokens:
+            final.extend(_hard_split(piece, max_tokens, CHUNK_OVERLAP_TOKENS))
+        else:
+            final.append(piece)
+    return [p for p in final if p.strip()]
+
+
+def _merge_pieces(
+    pieces: list[str],
+    max_tokens: int,
+    overlap_tokens: int = CHUNK_OVERLAP_TOKENS,
+) -> list[str]:
+    """把原子片段贪心合并成 ~max_tokens 的块，相邻块保留 ~overlap_tokens 重叠。
+
+    重叠只取上一块尾部、且不使新块越界（尾部 + 首个片段 <= max 才携带）；超长
+    片段本身已由 `_hard_split` 携带重叠，此处不再重复。
+    """
+    chunks: list[str] = []
+    current: list[str] = []
+    current_tokens = 0
+    for piece in pieces:
+        piece_tokens = estimate_tokens(piece)
+        if current and current_tokens + piece_tokens > max_tokens:
+            chunks.append("".join(current).strip())
+            tail = _tail_pieces(current, overlap_tokens)
+            tail_tokens = estimate_tokens("".join(tail))
+            if tail_tokens + piece_tokens <= max_tokens:
+                current = tail + [piece]
+                current_tokens = tail_tokens + piece_tokens
+            else:
+                current = [piece]
+                current_tokens = piece_tokens
+        else:
+            current.append(piece)
+            current_tokens += piece_tokens
+    if current:
+        chunks.append("".join(current).strip())
+    return [chunk for chunk in chunks if chunk]
+
+
+def _tail_pieces(current: list[str], overlap_tokens: int) -> list[str]:
+    """从 `current` 尾部取若干原子片段，累计 ~overlap_tokens（至少取一个）。"""
+    tail: list[str] = []
+    acc = 0
+    for piece in reversed(current):
+        piece_tokens = estimate_tokens(piece)
+        if tail and acc + piece_tokens > overlap_tokens:
+            break
+        tail.append(piece)
+        acc += piece_tokens
+    return list(reversed(tail))
+
+
+def _split_keep_separator(text: str, sep: str) -> list[str]:
+    parts = text.split(sep)
+    return [p + sep for p in parts[:-1]] + [parts[-1]]
+
+
+def _hard_split(text: str, max_tokens: int, overlap_tokens: int) -> list[str]:
+    """token 精确的滑动窗口硬切 + 重叠。"""
+    chunks: list[str] = []
+    start = 0
+    n = len(text)
+    while start < n:
+        end = start
+        acc = 0.0
+        while end < n and acc < max_tokens:
+            acc += _tokens_of_char(text[end])
+            end += 1
+        chunks.append(text[start:end])
+        if end >= n:
+            break
+        # 向前回退 overlap_tokens 对应的字符数
+        back = end
+        back_acc = 0.0
+        while back > start and back_acc < overlap_tokens:
+            back -= 1
+            back_acc += _tokens_of_char(text[back])
+        start = back
+    return [chunk for chunk in chunks if chunk.strip()]
 
 
 def split_by_lines(text: str, max_tokens: int) -> list[str]:
-    """按行累加切分，保证每段不超过 `max_tokens`。"""
+    """按行累加切分，保证每段不超过 `max_tokens`（供代码等行结构内容兜底）。"""
     lines = text.strip().split("\n")
     chunks: list[str] = []
     current: list[str] = []
@@ -72,79 +186,3 @@ def split_by_lines(text: str, max_tokens: int) -> list[str]:
     if current:
         chunks.append("\n".join(current))
     return chunks
-
-
-def segment_parents(markdown: str) -> list[ParentChunk]:
-    """父级切分：按标题层级切成节；无标题回退固定窗口。"""
-    lines = markdown.split("\n")
-    heading_indexes = [i for i, line in enumerate(lines) if heading_level(line) is not None]
-    if not heading_indexes:
-        return _window_parents(markdown)
-
-    root_level = min(heading_level(lines[i]) or 6 for i in heading_indexes)
-
-    sections: list[tuple[str, list[str]]] = []
-    current_path = ""
-    current_lines: list[str] = []
-    for line in lines:
-        level = heading_level(line)
-        if level == root_level:
-            if current_lines or current_path:
-                sections.append((current_path, current_lines))
-            current_path = heading_text(line)
-            current_lines = [line]
-        else:
-            current_lines.append(line)
-    sections.append((current_path, current_lines))
-
-    parents = [
-        ParentChunk(content="\n".join(block).strip(), heading_path=path)
-        for path, block in sections
-        if block
-    ]
-    return _split_large(_merge_small(parents))
-
-
-def _window_parents(markdown: str) -> list[ParentChunk]:
-    chunks = split_by_lines(markdown, PARENT_FALLBACK_WINDOW_TOKENS)
-    return [ParentChunk(content=chunk) for chunk in chunks if chunk.strip()]
-
-
-def _merge_small(parents: list[ParentChunk]) -> list[ParentChunk]:
-    """把过小的节并入相邻节（向前），目标 >= PARENT_TARGET_MIN。"""
-    if len(parents) <= 1:
-        return parents
-    merged: list[ParentChunk] = []
-    for parent in parents:
-        if merged and estimate_tokens(merged[-1].content) < PARENT_TARGET_MIN_TOKENS:
-            merged[-1] = _merge_parent(merged[-1], parent)
-        else:
-            merged.append(parent)
-    if len(merged) > 1 and estimate_tokens(merged[-1].content) < PARENT_TARGET_MIN_TOKENS:
-        merged[-2] = _merge_parent(merged[-2], merged[-1])
-        merged.pop()
-    return merged
-
-
-def _merge_parent(a: ParentChunk, b: ParentChunk) -> ParentChunk:
-    return ParentChunk(
-        content=f"{a.content}\n\n{b.content}".strip(),
-        heading_path=a.heading_path,
-        children=a.children + b.children,
-    )
-
-
-def _split_large(parents: list[ParentChunk]) -> list[ParentChunk]:
-    """把超大节按窗口拆分，保证每 parent <= PARENT_TARGET_MAX。"""
-    result: list[ParentChunk] = []
-    for parent in parents:
-        if estimate_tokens(parent.content) <= PARENT_TARGET_MAX_TOKENS:
-            result.append(parent)
-            continue
-        chunks = split_by_lines(parent.content, PARENT_FALLBACK_WINDOW_TOKENS)
-        result.extend(
-            ParentChunk(content=chunk, heading_path=parent.heading_path)
-            for chunk in chunks
-            if chunk.strip()
-        )
-    return result
