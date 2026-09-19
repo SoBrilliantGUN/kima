@@ -6,7 +6,7 @@
 
 本模块交付「**AI 智能问答**」完整能力：
 
-- **两处入口**：`kima` 首页（选库 / 全网二选一切换）+ 知识库页右侧常驻问答面板（当前库）
+- **两处入口**：`kima` 首页（联网搜索 / 基于知识库切换）+ 知识库页右侧常驻问答面板（当前库）
 - **Advanced RAG 五步**：查询改写 → 混合检索（向量 + 词法 + RRF）→ rerank 精排 → token 预算组装上下文 → 流式生成 + chunk 级引用
 - **词法检索**：pg_jieba 中文全文检索完整落地（自建 Postgres 镜像）
 - **笔记向量化**：只覆盖已入库笔记，编辑停手后 idle 异步重向量化
@@ -18,7 +18,7 @@
 
 ## 1. 目标与验收
 
-目标：`kima 首页`与`知识库右面板`两处问答走完整 Advanced RAG，支持「选库 / 全网」切换；回答流式输出并附带 chunk 级引用；笔记编辑后自动重向量化。
+目标：`kima 首页`与`知识库右面板`两处问答走完整 Advanced RAG，支持「联网搜索 / 基于知识库（多选）」切换；回答流式输出并附带 chunk 级引用；笔记编辑后自动重向量化。
 
 **验收标准（Definition of Done）**
 
@@ -28,7 +28,7 @@
 | 2 | 自建 Postgres 镜像（`docker/` 多阶段，编译 pgvector + pg_jieba），`docker compose up` 起库即带 `vector` + `pg_jieba` 两扩展 |
 | 3 | `rag.retrieve()` 返回混合检索候选（dense + lexical → RRF → rerank → 命中 child 回 parent）；文档与笔记统一可检索，按 `kb_id` 过滤正确 |
 | 4 | 问答 SSE 流式：先 `meta`（会话/消息 id）→ 逐 token `delta` → `citations` → `done` |
-| 5 | 首页「全网 / 知识库」切换：全网走博查、知识库走混合检索，各自生成引用 |
+| 5 | 首页「联网搜索 / 基于知识库」切换：联网搜索走博查、基于知识库走混合检索（可多选）、都不开则纯 LLM 无检索 |
 | 6 | 笔记保存后 idle 自动重向量化（删除旧 chunk + 新增），`vectorized_at` 回写；游离笔记跳过 |
 | 7 | 后端 `ruff` + `mypy(strict)` + `pytest` 全绿；前端 `eslint` + `tsc --noEmit` + `vite build` 全绿；测试不起真库/真网/真 LLM |
 
@@ -123,12 +123,12 @@ app/rag/
 
 ### 4.1 混合检索
 
-- **dense**：`embed_query(query)` → `pgvector` 余弦 top-20；按 `kb_id` 过滤（document_chunks.kb_id / note_chunks 经关联表）。
+- **dense**：`embed_query(query)` → `pgvector` 余弦 top-20；按 `kb_ids` 过滤（document_chunks.kb_id / note_chunks 经关联表，`IN` 多库）。
 - **lexical**：`to_tsquery('jiebacfg', plainto_tsquery(query))` → `tsv @@` → `ts_rank` 排序 top-20。
 - **RRF**：`score(d) = Σ 1/(k + rank_i)`（k≈60），两路融合成候选集。
 - **rerank**：`RerankerClient`（SiliconFlow bge-reranker）对候选集精排 → 过滤低于 `rerank_min_score`（Settings，默认 0.3）的候选 → top-N（默认 6）。
 - **命中回父**：文档与笔记命中 child → 回 `parent_id` 取 parent 全文作上下文（small-to-big）；按 `source_type` 分桶（document/note 各查各表），杜绝跨表 UUID 撞号覆盖与空集合冗余查询。
-- **`retrieve()` 语义**：输入 `(query, kb_id | None)`，返回带 `chunk`/`source_type`/`source_id`/`title`/`snippet` 的结构化结果，不绑定问答，便于后续搜索类能力复用。
+- **`retrieve()` 语义**：输入 `(query, kb_ids: list[uuid])`，返回带 `chunk`/`source_type`/`source_id`/`title`/`snippet` 的结构化结果，不绑定问答，便于后续搜索类能力复用。
 
 ### 4.2 集成抽象（`integrations/` 扩展）
 
@@ -230,8 +230,9 @@ docker/                         # 自建 pg_jieba 镜像（§9）
 
 ```python
 class ChatRequest(BaseModel):
-    mode: Literal["kb", "web"]
-    kb_id: uuid.UUID | None = None   # mode=kb 时必填
+    kb_ids: list[uuid.UUID] = []          # 检索范围：空 = 不检索知识库；非空 = 仅检索这些库（可多个）
+    web_search: bool = False              # 联网搜索：True = 走博查全网；False = 不联网（kb_ids 也空则纯 LLM）
+    kb_id: uuid.UUID | None = None        # 会话归属库：首页全局会话 None；右面板挂当前库
     conversation_id: uuid.UUID | None = None  # 空则新建会话
     question: str
 ```
@@ -246,7 +247,7 @@ SSE 事件流（`text/event-stream`）：
 | `done` | `{assistant_message_id}` | 结束 |
 | `error` | `{code, message}` | 失败 |
 
-- `ChatService.ask()`：校验（`mode=kb` 必须有 `kb_id`，`conversation_id` 存在性）→ 建/取会话 → 存 user 消息 → 调 `RagService.answer()` 流式 → 存 assistant 消息（含 `citations`）。
+- `ChatService.ask()`：逐个校验 `kb_ids` 存在性（`conversation_id` 存在性在建/取会话时校验）→ 建/取会话 → 存 user 消息 → 调 `RagService.answer()` 流式 → 存 assistant 消息（含 `citations`）。
 - 流式实现：`StreamingResponse` + `async generator`；`LLMClient.stream()` 逐 token 转发为 `delta` 事件。
 
 ---
@@ -266,32 +267,30 @@ SSE 事件流（`text/event-stream`）：
 
 ```
 pages/Home/
-  index.tsx                    # 会话列表 + 问答区 + 模式切换
-  components/
-    ConversationList.tsx       # 历史会话（新建/切换/删除）
-    ChatPanel.tsx              # 消息流 + 输入框 + 模式切换 + 库选择器
-    ModeSwitch.tsx             # 「全网 / 知识库」切换（知识库档展开库下拉）
-shared/chat/
-  StreamingMessage.tsx         # SSE 打字机渲染
-  CitationPanel.tsx            # 底部「来源」面板（标题 + 片段 + 跳转）
-  MessageBubble.tsx            # user/assistant 气泡 + [1][2] 内联引用
+  index.tsx                    # 会话列表 + 问答区 + 联网搜索/基于知识库 多选
+src/components/chat/           # 首页与右面板共用的聊天组件
+  ChatInput.tsx                # 输入框（发送/停止）
+  ChatMessageList.tsx          # 消息流（Markdown 渲染 + 流式加载动画 + 引用面板）
+  ConversationList.tsx         # 历史会话（新建/切换/删除，className 覆盖布局）
 ```
 
-- **布局对齐 ima 首页**：左侧历史会话列表 + 主区问答（顶部模式切换「全网/知识库」、知识库档带库选择器、中部消息流、底部输入框）。
-- **默认落地页**：`/` 即首页（决策 #2/#15）。
-- **模式切换**：`全网` / `知识库`（选库）二选一；无「所有库」档（对齐 ima，检索过滤维度退化为固定 `kb_id` 或全网两种）。
+- **布局对齐 ima 首页**：左侧历史会话列表 + 主区问答（中部消息流、底部输入框；输入框上方「联网搜索」开关 + 「基于知识库」按钮 + 已选知识库 chips）。
+- **检索范围**：`联网搜索` 开关与「基于知识库」（多选）**互斥**——开启联网走博查、基于知识库走混合检索、两者都不开则纯 LLM 无检索。检索范围由 `kb_ids` + `web_search` 表达。
+- **切换不清空聊天**：切换检索范围只影响下一条消息，会话（首页全局、`kb_id` 为 null）与历史消息保持不变。
+- **默认落地页**：`/` 即首页，首次加载默认选中第一条历史会话（决策 #2/#15）。
 - **Copilot 本版不加**（后补，决策 #2）。
 
-### 10.2 知识库右面板（`pages/KnowledgeBasePage/components/QaPanel.tsx`）
+### 10.2 知识库右面板（`pages/KnowledgeBasePage/components/QaPanel/`）
 
-- 右面板常驻、针对当前库提问（`kb_id` 取自当前路由）；按库持久化会话（进库自动载入该库最近会话，可新建）。
-- 复用 `StreamingMessage` / `CitationPanel` / `MessageBubble` 组件。
+- 右面板针对当前库提问（`kb_id` 取自当前路由）；按库持久化会话（进库自动载入该库最近会话，可新建/切换/删除）。
+- **头部三图标**：新建对话 / 历史对话（点击展开下拉面板显示该库历史会话）/ 关闭（收起面板）。收起后知识库详情右上角出现「问知识库」按钮，点击重新展开；收起/展开用 `grid-template-columns` 200ms 过渡（收起时内容先 `display:none`，避免挤压）。
+- 复用 `ChatInput` / `ChatMessageList` / `ConversationList` 组件。
 
 ### 10.3 数据层
 
-- `api/chat.ts`：`listConversations` / `createConversation` / `getConversation` / `deleteConversation` / `askQuestion`（`fetch` + `ReadableStream` 解析 SSE）。
-- `api/types.ts`：`Conversation` / `ChatMessage` / `Citation` / SSE 事件类型。
-- `hooks/useChat.ts` / `useConversations.ts`：react-query hooks + SSE 流状态管理。
+- `api/chat.ts`：`listConversations` / `createConversation` / `getConversation` / `deleteConversation` / `streamChat`（`fetch` + `ReadableStream` 解析 SSE）。
+- `api/types.ts`：`Conversation` / `ChatMessage` / `Citation` / `ChatRequest`（`kb_ids` + `web_search` + `kb_id`）/ SSE 事件类型。
+- `hooks/useChat.ts`（`useChatStream(kbId, kbIds)`）/ `useConversations.ts`：react-query hooks + SSE 流状态管理。
 - 引用交互：正文 `[1][2]` 可点，聚焦到底部来源面板对应条目；来源条目可点开对应文档（复用模块 4 浮动窗口）或跳转笔记。
 
 ---
@@ -308,7 +307,7 @@ shared/chat/
 | API 集成 | `test_api_chat.py` | 会话 CRUD + `POST /api/chat` SSE 冒烟（Fake 流）+ 错误信封 |
 | 集成 Fake | `tests/fakes.py` 增补 | `FakeWebSearchClient` / `FakeRerankerClient` / 流式 `FakeLLMClient` / `FakeNoteChunkRepository` |
 
-- 关键用例：`mode=kb` 缺 `kb_id` → 422；会话不存在 → 404；SSE 事件顺序 `meta→delta…→citations→done`；笔记 idle 阈值内不触发、超阈值触发且删旧新增。
+- 关键用例：`kb_ids` 含不存在的库 → error（not_found）；会话不存在 → error；SSE 事件顺序 `meta→delta…→citations→done`；笔记 idle 阈值内不触发、超阈值触发且删旧新增。
 
 ---
 
@@ -324,7 +323,7 @@ shared/chat/
 | T6 | `repositories/chat.py` + `schemas/chat.py` + `services/chat.py` + `api/routes/chat.py`（SSE） | 接口层 |
 | T7 | `workers/note_vectorize_worker.py` + lifespan 接入 + 阈值配置 | 笔记向量化 |
 | T8 | 后端测试（检索/上下文/服务/worker/API 集成 + Fake 增补） | pytest 全绿 |
-| T9 | 前端 `api/chat.ts`（SSE client）+ `shared/chat` 组件 + Home 页（会话列表 + 模式切换 + 库选择器 + 流式 + 引用面板） | 首页问答闭环 |
+| T9 | 前端 `api/chat.ts`（SSE client）+ `components/chat` 组件 + Home 页（会话列表 + 联网搜索/基于知识库多选 + 流式 + 引用面板） | 首页问答闭环 |
 | T10 | 前端 `QaPanel`（按库会话）+ 复用流式/引用组件 | 右面板问答闭环 |
 | T11 | 全量质量门禁 + 手工验收 | ruff/mypy/pytest/eslint/tsc/build 全绿 |
 
@@ -332,15 +331,15 @@ shared/chat/
 
 ## 13. 已定决策
 
-1. **两处入口**：`kima` 首页（选库 / 全网二选一）+ 知识库右面板（当前库）；无「所有库聚合」档（对齐 ima，个人场景够用）。
-2. **检索范围**：选库模式 = 该库 documents + 该库已关联 notes；游离笔记不向量化、不参与检索。
-3. **全网搜索**：完整做，接博查 Web Search API；`WebSearchClient` Protocol 可插拔；全网/知识库二选一、不混合。
+1. **两处入口**：`kima` 首页（联网搜索 / 基于知识库）+ 知识库右面板（当前库）；无「所有库聚合」档（对齐 ima，个人场景够用）。
+2. **检索范围**：基于知识库模式 = 所选库的 documents + 已关联 notes（可多选）；游离笔记不向量化、不参与检索。
+3. **联网搜索**：完整做，接博查 Web Search API；`WebSearchClient` Protocol 可插拔；联网搜索与基于知识库互斥、不混合；两者都关时纯 LLM 无检索。
 4. **流式（SSE）**：`LLMClient` 加 `stream()`；问答走 SSE 打字机 + 引用补齐。
 5. **词法检索完整落地**：自建 Postgres 镜像（编译 pgvector + pg_jieba）；混合检索 = 向量 + 词法 + RRF；存量 chunk 只补 `tsv`、不重算 embedding。
 6. **笔记向量化**：父子两级分块（与文档一致）、只覆盖已入库笔记；后端 worker idle 触发（`vectorized_at` + 默认 120s 阈值）；重向量化 = 删除旧 chunk + 新增。
 7. **上下文管理**：token 预算驱动——固定段（system/检索上下文/问题/安全余量）先扣、剩余给历史；超预算时动态降级 recent 轮数（保留「塞得下」的最大 verbatim 轮）+ 摘要早期历史并硬截断到剩余预算，替代硬编码轮数；各阈值可配置。
 8. **引用**：chunk 级 + 底部「来源」面板（标题 + 片段 + 跳转原文档/笔记），正文标 `[n]`。
 9. **会话管理**：首页带历史会话列表（`kb_id` 空）；右面板按库持久化（`kb_id` 挂库）。
-10. **首页 UI 参考 ima**：会话列表 + 主问答区（模式切换 + 库选择器 + 消息流 + 输入框）；Copilot 浮窗本版不加。
+10. **首页 UI 参考 ima**：会话列表 + 主问答区（联网搜索开关 + 基于知识库多选 + 消息流 + 输入框）；Copilot 浮窗本版不加。
 11. **模型**：单 `deepseek-chat`，无「快速/深度」档（后置）；rerank 用 SiliconFlow bge-reranker；改写/摘要 `temperature=0`，生成 `temperature=0.3`。
 12. **评估最小集**：检索层 recall@k / MRR（`app/rag/metrics.py` 纯函数 + `app/rag/eval_runner.py` golden 集运行器，驱动 chunking 决策）+ 端到端 LLM-judge faithfulness / answer_relevancy / context_relevancy（`app/rag/eval.py`，复用现有 `LLMClient`，1–5 分归一化）；`scripts/eval_retrieval.py` 跑真实检索出报告，golden 集用「应命中片段」子串标注（`eval/golden.example.json`）；不引 ragas 重包（避免拖入 langchain），judge 用 `temperature=0`。
