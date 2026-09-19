@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, String, Table, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -30,3 +31,5 @@ class Note(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     content_markdown: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # 上次向量化时间戳（NULL=从未向量化）；笔记向量化 worker 用它做 idle 检测
+    vectorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

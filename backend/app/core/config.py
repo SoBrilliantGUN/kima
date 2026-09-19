@@ -38,9 +38,28 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-m3"
     embedding_dim: int = 1024
 
+    # Rerank（SiliconFlow）
+    rerank_provider: str = "fake"
+    rerank_api_key: str = ""
+    rerank_base_url: str = "https://api.siliconflow.cn/v1"
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"
+    rerank_min_score: float = 0.3
+
+    # Web Search（博查）
+    web_search_provider: str = "fake"
+    web_search_api_key: str = ""
+    web_search_base_url: str = "https://api.bochaai.com/v1"
+
     # MinerU
     mineru_api_base_url: str = "https://mineru.net"
     mineru_api_token: str = ""
+
+    # RAG 上下文组装
+    context_max_tokens: int = 6000
+    history_recent_turns: int = 3
+
+    # 笔记向量化（idle 触发）
+    note_revectorize_idle_seconds: int = 120
 
     # CORS
     # NoDecode：env 里是逗号分隔字符串，跳过 pydantic-settings 的 JSON 解码，交给下方 _split_cors

@@ -1,6 +1,8 @@
 services:
   db:
-    image: pgvector/pgvector:pg16
+    build:
+      context: ./docker/pgvector-jieba
+    image: kima-db:pg16-jieba
     container_name: kima-db
     environment:
       POSTGRES_USER: kima

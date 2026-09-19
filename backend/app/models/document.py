@@ -4,8 +4,8 @@ from enum import StrEnum
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, Uuid
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Computed, DateTime, Enum, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.config import get_settings
@@ -93,3 +93,7 @@ class DocumentChunk(Base):
     doc_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True)
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    # 词法检索列（生成列，pg_jieba 分词），由 to_tsvector('jiebacfg', content) 自动计算
+    tsv: Mapped[str | None] = mapped_column(
+        TSVECTOR(), Computed("to_tsvector('jiebacfg', content)", persisted=True), nullable=True
+    )
