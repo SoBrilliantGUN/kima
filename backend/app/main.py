@@ -17,9 +17,12 @@ from app.integrations import get_document_parser, get_embedding_client
 from app.integrations.web import start_browser, stop_browser
 from app.repositories.document import SqlAlchemyDocumentRepository
 from app.repositories.knowledge_base import SqlAlchemyKnowledgeBaseRepository
+from app.repositories.note_chunk import SqlAlchemyNoteChunkRepository
 from app.services.ingest import IngestService
 from app.services.knowledge_base import KnowledgeBaseService
+from app.services.note_vectorize import NoteVectorizeService
 from app.workers.document_worker import DocumentWorker
+from app.workers.note_vectorize_worker import NoteVectorizeWorker
 
 
 async def seed_default_knowledge_base() -> None:
@@ -47,17 +50,33 @@ def build_document_worker() -> DocumentWorker:
     )
 
 
+def build_note_vectorize_worker() -> NoteVectorizeWorker:
+    """用真实依赖构造笔记向量化 worker（每个操作独立 session）。"""
+    settings = get_settings()
+    embedder = get_embedding_client(settings)
+    return NoteVectorizeWorker(
+        repo_factory=lambda: SqlAlchemyNoteChunkRepository(async_session_factory()),
+        service_factory=lambda: NoteVectorizeService(
+            repository=SqlAlchemyNoteChunkRepository(async_session_factory()),
+            embedder=embedder,
+        ),
+        idle_seconds=settings.note_revectorize_idle_seconds,
+    )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await seed_default_knowledge_base()
     await start_browser()
-    worker_task = asyncio.create_task(build_document_worker().run())
+    document_worker_task = asyncio.create_task(build_document_worker().run())
+    note_worker_task = asyncio.create_task(build_note_vectorize_worker().run())
     yield
-    worker_task.cancel()
-    try:
-        await worker_task
-    except asyncio.CancelledError:
-        pass
+    for task in (document_worker_task, note_worker_task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await stop_browser()
 
 
