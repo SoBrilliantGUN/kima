@@ -93,7 +93,11 @@ export function QaPanel({ kbId, onClose, collapsed = false }: Props) {
               conversations={conversationData?.items ?? []}
               activeId={chat.conversationId}
               onSelect={handleSelect}
-              onDelete={(id) => void deleteConversation.mutate(id)}
+              onDelete={(id) => {
+                // 删除的是当前会话时，先复位聊天状态并中止在途流，避免残留 streaming 卡住后续发送
+                if (id === chat.conversationId) chat.startNew()
+                void deleteConversation.mutate(id)
+              }}
             />
           </div>
         ) : null}

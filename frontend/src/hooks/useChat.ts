@@ -58,6 +58,9 @@ export function useChatStream(kbId: string | null, kbIds: string[], webSearch: b
       // 已在查看该会话时跳过：既避免无谓刷新，也防止首条消息流式期间
       // meta 触发 conversations refetch 后，自动选中把正在追加的消息覆盖掉。
       if (id === conversationId) return
+      // 切到别的会话时中止当前流并复位 streaming，避免旧流残留占用状态
+      abortRef.current?.abort()
+      setStreaming(false)
       setConversationId(id)
       setError(null)
       try {
@@ -72,9 +75,13 @@ export function useChatStream(kbId: string | null, kbIds: string[], webSearch: b
 
   /** 新建会话：清空当前状态，等待下一条消息创建会话。 */
   const startNew = useCallback(() => {
+    // 中止进行中的流并复位 streaming：否则删除/切换会话后旧流仍占着
+    // streaming=true，下一次 send 会被「正在回复」的守卫直接拦掉。
+    abortRef.current?.abort()
     setConversationId(null)
     setMessages([])
     setError(null)
+    setStreaming(false)
   }, [])
 
   /**
