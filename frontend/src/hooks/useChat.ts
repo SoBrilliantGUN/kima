@@ -53,16 +53,22 @@ export function useChatStream(kbId: string | null, kbIds: string[], webSearch: b
   const queryClient = useQueryClient()
 
   /** 选中会话并加载其历史消息。 */
-  const selectConversation = useCallback(async (id: string) => {
-    setConversationId(id)
-    setError(null)
-    try {
-      const detail = await getConversation(id)
-      setMessages(detail.messages)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '加载会话失败')
-    }
-  }, [])
+  const selectConversation = useCallback(
+    async (id: string) => {
+      // 已在查看该会话时跳过：既避免无谓刷新，也防止首条消息流式期间
+      // meta 触发 conversations refetch 后，自动选中把正在追加的消息覆盖掉。
+      if (id === conversationId) return
+      setConversationId(id)
+      setError(null)
+      try {
+        const detail = await getConversation(id)
+        setMessages(detail.messages)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '加载会话失败')
+      }
+    },
+    [conversationId],
+  )
 
   /** 新建会话：清空当前状态，等待下一条消息创建会话。 */
   const startNew = useCallback(() => {
