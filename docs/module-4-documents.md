@@ -358,7 +358,7 @@ class DocumentRepository(Protocol):
 
 | 方法 | 规则 |
 |---|---|
-| `create_file(kb_id, file, filename)` | 先 `kb_repo.get` 校验知识库存在（404）→ 校验扩展名/`mime_type` ∈ pdf/docx、大小 ≤20MB（否则 422）→ `FileStore.save` 落盘 → 建 `Document(source_type=pdf/word, title=文件名去扩展名, status=pending)` → `repo.add` |
+| `create_file(kb_id, file, filename)` | 先 `kb_repo.get` 校验知识库存在（404）→ 校验扩展名/`mime_type` ∈ pdf/docx、大小 ≤50MB（否则 422）→ `FileStore.save` 落盘 → 建 `Document(source_type=pdf/word, title=文件名去扩展名, status=pending)` → `repo.add` |
 | `create_from_url(kb_id, url)` | 先 `kb_repo.get` 校验（404）→ URL 校验 http/https 非空（否则 422）→ 建 `Document(source_type=url, source_url=url, title=url, status=pending)` → `repo.add` |
 | `get(doc_id)` | 查无抛 `NotFoundError("文档不存在")` |
 | `delete(doc_id)` | 先 `get`（404）→ 删文件（pdf/word 时 `FileStore.delete`）→ `repo.delete`（chunk 随 CASCADE 清） |

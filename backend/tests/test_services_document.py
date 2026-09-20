@@ -8,7 +8,7 @@ from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.models.document import DocumentStatus, DocumentType
 from app.models.knowledge_base import KnowledgeBase
 from app.schemas.document import DocumentCreateFromUrl
-from app.services.document import DocumentService
+from app.services.document import MAX_FILE_SIZE, DocumentService
 from tests.fakes import FakeDocumentRepository, FakeFileStore, FakeKnowledgeBaseRepository
 
 
@@ -74,7 +74,7 @@ async def test_create_file_rejects_oversized(
 ) -> None:
     kb = await _make_kb(kb_repo)
     with pytest.raises(ValidationError):
-        await service.create_file(kb.id, content=b"x" * (20 * 1024 * 1024 + 1), filename="大.pdf")
+        await service.create_file(kb.id, content=b"x" * (MAX_FILE_SIZE + 1), filename="大.pdf")
 
 
 async def test_create_file_missing_kb_404(service: DocumentService) -> None:

@@ -12,12 +12,14 @@ from app.core.config import get_settings
 from app.core.db import async_session_factory
 from app.core.exceptions import DomainError
 from app.core.logging import RequestIdMiddleware, setup_logging
+from app.core.middleware import UploadSizeLimitMiddleware
 from app.core.storage import LocalFileStore
 from app.integrations import get_document_parser, get_embedding_client
 from app.integrations.web import start_browser, stop_browser
 from app.repositories.document import SqlAlchemyDocumentRepository
 from app.repositories.knowledge_base import SqlAlchemyKnowledgeBaseRepository
 from app.repositories.note_chunk import SqlAlchemyNoteChunkRepository
+from app.services.document import MAX_FILE_SIZE
 from app.services.ingest import IngestService
 from app.services.knowledge_base import KnowledgeBaseService
 from app.services.note_vectorize import NoteVectorizeService
@@ -94,6 +96,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(RequestIdMiddleware)
+    # 文档上传大小粗筛：在读 body 前按 Content-Length 直接 413，避免大文件被整份读入内存
+    app.add_middleware(
+        UploadSizeLimitMiddleware,
+        max_bytes=MAX_FILE_SIZE,
+        path=f"{settings.api_prefix}/documents",
+    )
 
     @app.exception_handler(DomainError)
     async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:

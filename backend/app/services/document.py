@@ -11,7 +11,7 @@ from app.repositories.document import DocumentRepository
 from app.repositories.knowledge_base import KnowledgeBaseRepository
 from app.schemas.document import DocumentCreateFromUrl
 
-MAX_FILE_SIZE = 20 * 1024 * 1024
+MAX_FILE_SIZE = 50 * 1024 * 1024
 ALLOWED_EXTENSIONS: dict[str, DocumentType] = {
     ".pdf": DocumentType.PDF,
     ".docx": DocumentType.WORD,
@@ -44,7 +44,7 @@ class DocumentService:
         if ext not in ALLOWED_EXTENSIONS:
             raise ValidationError("仅支持 PDF 或 Word(.docx) 文件")
         if len(content) > MAX_FILE_SIZE:
-            raise ValidationError("文件大小不能超过 20MB")
+            raise ValidationError(f"文件大小不能超过 {MAX_FILE_SIZE // (1024 * 1024)}MB")
 
         file_path = await self._file_store.save(content, ext.lstrip("."))
         document = Document(
