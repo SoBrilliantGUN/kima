@@ -9,7 +9,7 @@
 | 前端 | React 18 + TypeScript + Vite + React Router + React Query + SCSS Modules |
 | 后端 | FastAPI + SQLAlchemy 2.0 (async) + asyncpg + Alembic + Pydantic v2 |
 | 存储 | PostgreSQL + pgvector |
-| AI | DeepSeek（LLM）、SiliconFlow（Embedding/Rerank）、MinerU（文档解析）——均为可替换 provider 抽象 |
+| AI | DeepSeek（LLM）、SiliconFlow（Embedding bge-m3 / Rerank bge-reranker）、博查（Web Search）、MinerU（文档解析）——均为可替换 provider 抽象 |
 
 ## 目录结构
 
@@ -17,8 +17,9 @@
 kima/
 ├── frontend/          # React 18 + TS + Vite
 ├── backend/           # FastAPI（app/ 分层：api / services / repositories / models / schemas / core / integrations）
+├── docker/            # 自建 pgvector + pg_jieba 镜像（多阶段编译）
 ├── docs/              # 需求与模块设计文档
-└── docker-compose.yml # PostgreSQL(pgvector)
+└── docker-compose.yml # PostgreSQL(pgvector + pg_jieba，自编译镜像)
 ```
 
 ## 快速开始
@@ -45,7 +46,7 @@ docker exec kima-db pg_isready -U kima -d kima
 cd backend
 uv sync                        # 安装依赖（首次）
 cp .env.example .env           # 按需改 DATABASE_URL 等
-uv run alembic upgrade head    # 建表（baseline + knowledge_bases + notes + note_knowledge_bases + documents + document_chunks，含 CREATE EXTENSION vector）
+uv run alembic upgrade head    # 建表（单一基线 0001_initial：knowledge_bases / notes / note_knowledge_bases / documents / document_chunks / note_chunks / chat_conversations / chat_messages，含 CREATE EXTENSION vector + pg_jieba）
 uv run uvicorn app.main:app --reload
 ```
 
@@ -94,8 +95,19 @@ pnpm dev
 | POST | `/api/documents/from-url`（json: `url` + `kb_id`） | 抓取网页 URL → 201（pending） |
 | GET | `/api/documents/{id}` | 详情（状态/来源/错误信息） |
 | GET | `/api/documents/{id}/file` | 原文件流（pdf 内嵌 / word 下载；url 类型 409） |
+| GET | `/api/documents/{id}/content` | 解析正文 markdown（word/url 阅读器渲染，仅 done 态） |
 | POST | `/api/documents/{id}/retry` | 失败重试（仅 error 态） |
 | DELETE | `/api/documents/{id}` | 删除 |
+
+## 问答 API（模块 5）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/conversations?kb_id=` | 会话列表（首页全局 / 右面板按库） |
+| POST | `/api/conversations` | 新建会话（`kb_id` 可空） |
+| GET | `/api/conversations/{id}` | 会话详情（含消息） |
+| DELETE | `/api/conversations/{id}` | 删除会话 |
+| POST | `/api/chat` | 提问（SSE 流式：`meta → delta → citations → done`） |
 
 ## 质量门禁
 

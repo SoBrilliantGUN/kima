@@ -69,7 +69,7 @@
 | `metadata` | `JSONB` | 可空（`heading_path`/`block_type`） |
 | `token_count` | `Integer` | 可空 |
 | `embedding` | `Vector(1024)` | 可空（child 有 / parent 无） |
-| `tsv` | `TSVECTOR` | 非空（`to_tsvector('jiebacfg', content)`） |
+| `tsv` | `TSVECTOR` | 生成列（`Computed("to_tsvector('jiebacfg', content)", persisted=True)`），PG 自动回填 |
 
 - **无 `kb_id`、有 `parent_id`**：笔记全局、多对多入库，chunk 不能挂单一库（按库过滤走关联表）；`parent_id` 自引用做 small-to-big（parent 存上下文不向量化、child 向量化），与文档一致。
 - **入库判定走关联表**：检索某库时 `note_chunks ⋈ note_knowledge_bases(knowledge_base_id=X)` 过滤；游离笔记无 chunk 天然不参与。
@@ -97,12 +97,12 @@
 **回改**
 
 - `notes` 加 `vectorized_at`（`DateTime(timezone)` 可空）——笔记向量化 idle 检测基准。
-- `document_chunks` 加 `tsv`（`TSVECTOR` 非空）+ GIN 索引（`USING gin (tsv)`）；迁移里一次性回填存量 `tsv = to_tsvector('jiebacfg', content)`。**不重算 `embedding`**（模块 4 已有向量，重算纯浪费）。
+- `document_chunks` 加 `tsv`（`TSVECTOR` 生成列，`Computed("to_tsvector('jiebacfg', content)", persisted=True)`）+ GIN 索引（`USING gin (tsv)`）；生成列由 PostgreSQL 自动回填存量。**不重算 `embedding`**（模块 4 已有向量，重算纯浪费）。
 
 ### 3.2 ORM 模型
 
 - `models/note_chunk.py`、`models/chat.py`；`models/note.py` 加 `vectorized_at`；`models/document.py` 的 `DocumentChunk` 加 `tsv`。
-- `embedding` 维度仍读 `settings.embedding_dim`（唯一真源，1024）；`tsv` 用 SQLAlchemy 的 `TSVECTOR` 列，写时 `func.to_tsvector("jiebacfg", content)`。
+- `embedding` 维度仍读 `settings.embedding_dim`（唯一真源，1024）；`tsv` 用 SQLAlchemy 的 `TSVECTOR` 列 + `Computed("to_tsvector('jiebacfg', content)", persisted=True)` 生成列。
 
 ---
 

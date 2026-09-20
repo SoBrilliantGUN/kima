@@ -134,9 +134,9 @@ kima/
 |---|---|
 | `knowledge_bases` | id、名称、描述、图标/颜色、created_at、updated_at |
 | `documents` | id、kb_id、标题、来源类型(pdf/url/word)、source_url、file_path、状态(pending/processing/done/error)、正文、metadata |
-| `document_chunks` | id、document_id、kb_id、parent_id(自引用，父子切割)、chunk_index、content、metadata、embedding(vector，child 有/parent 无)、token_count |
+| `document_chunks` | id、document_id、kb_id、parent_id(自引用，父子切割)、chunk_index、content、metadata、embedding(vector，child 有/parent 无)、tsv(生成列，pg_jieba 全文检索)、token_count |
 | `notes` | id、标题、content_markdown、created_at、updated_at |
-| `note_chunks` | id、note_id、parent_id(自引用，父子切割)、chunk_index、content、metadata、embedding(vector，child 有/parent 无)、token_count |
+| `note_chunks` | id、note_id、parent_id(自引用，父子切割)、chunk_index、content、metadata、embedding(vector，child 有/parent 无)、tsv(生成列，pg_jieba 全文检索)、token_count |
 | `note_knowledge_bases` | note_id(fk→notes)、knowledge_base_id(fk→knowledge_bases)、created_at；唯一(note_id, knowledge_base_id) |
 | `chat_conversations` | id、kb_id、标题、created_at |
 | `chat_messages` | id、conversation_id、role、content、citations(jsonb)、created_at |
