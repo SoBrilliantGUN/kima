@@ -9,7 +9,7 @@
 | 前端 | React 18 + TypeScript + Vite + React Router + React Query + SCSS Modules |
 | 后端 | FastAPI + SQLAlchemy 2.0 (async) + asyncpg + Alembic + Pydantic v2 |
 | 存储 | PostgreSQL + pgvector |
-| AI | DeepSeek（LLM）、SiliconFlow（Embedding bge-m3 / Rerank bge-reranker）、博查（Web Search）、MinerU（文档解析）——均为可替换 provider 抽象 |
+| AI | DeepSeek（LLM + Agent，`langchain-deepseek`）、SiliconFlow（Embedding bge-m3 / Rerank bge-reranker）、博查（Web Search）、MinerU（文档解析）——均可替换 provider；Agent 编排 LangGraph、可观测 LangFuse（可选） |
 
 ## 目录结构
 
@@ -46,7 +46,7 @@ docker exec kima-db pg_isready -U kima -d kima
 cd backend
 uv sync                        # 安装依赖（首次）
 cp .env.example .env           # 按需改 DATABASE_URL 等
-uv run alembic upgrade head    # 建表（单一基线 0001_initial：knowledge_bases / notes / note_knowledge_bases / documents / document_chunks / note_chunks / chat_conversations / chat_messages，含 CREATE EXTENSION vector + pg_jieba）
+uv run alembic upgrade head    # 建表（0001_initial 基线 + 0002_copilot；含 CREATE EXTENSION vector + pg_jieba）
 uv run uvicorn app.main:app --reload
 ```
 
@@ -109,6 +109,15 @@ pnpm dev
 | DELETE | `/api/conversations/{id}` | 删除会话 |
 | POST | `/api/chat` | 提问（SSE 流式：`meta → delta → citations → done`） |
 
+## Copilot API（模块 6）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/copilot/chat` | Copilot 提问（SSE：`meta → step → delta → done`，工具调用轨迹经 checkpoint + 事件日志落库） |
+| GET | `/api/copilot/memory` | 查看记忆（Soul/User + 三型记忆条目，只读） |
+| GET | `/api/copilot/skills` | 内置技能清单（9 工具） |
+| GET | `/api/conversations?kind=copilot` | Copilot 会话列表（`kind` 区分 qa/copilot） |
+
 ## 质量门禁
 
 ```bash
@@ -130,5 +139,6 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时自动跑以上检查 + docke
 | 3 | 笔记 / TipTap 编辑器 | ✅ 完成 |
 | 4 | 文档解析与归档（PDF/URL/Word → 解析 → 分块 → 向量化） | ✅ 完成 |
 | 5 | AI 智能问答（Advanced RAG） | ✅ 完成 |
+| 6 | Copilot（知识 Agent：LangGraph 工具调用 + 三型记忆 + 可观测） | 🚧 待实现 |
 
-详细需求见 `docs/requirements.md`；模块 1 设计见 `docs/module-1-infrastructure.md`，模块 2 设计见 `docs/module-2-knowledge-bases.md`，模块 3 设计见 `docs/module-3-notes.md`，模块 4 设计见 `docs/module-4-documents.md`，模块 5 设计见 `docs/module-5-ai-qa.md`。
+详细需求见 `docs/requirements.md`；模块 1 设计见 `docs/module-1-infrastructure.md`，模块 2 设计见 `docs/module-2-knowledge-bases.md`，模块 3 设计见 `docs/module-3-notes.md`，模块 4 设计见 `docs/module-4-documents.md`，模块 5 设计见 `docs/module-5-ai-qa.md`，模块 6 设计见 `docs/module-6-copilot.md`。
