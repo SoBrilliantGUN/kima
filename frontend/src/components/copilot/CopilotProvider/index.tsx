@@ -1,16 +1,13 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
 
-import type { CopilotContext } from '@/api/types'
 import { useCopilot } from '@/hooks/useCopilot'
-
-const EMPTY_CONTEXT: CopilotContext = { kb_id: null, note_id: null, document_id: null }
 
 type Copilot = ReturnType<typeof useCopilot>
 
 interface CopilotProviderValue {
-  /** 主区域 Copilot 会话（首页，无路由上下文）。 */
+  /** 主区域 Copilot 会话（首页）。 */
   main: Copilot
-  /** 小窗 Copilot 会话（跨 Tab 常驻，带路由上下文）。 */
+  /** 小窗 Copilot 会话（跨 Tab 常驻）。 */
   small: Copilot
   smallOpen: boolean
   /** 弹窗：把主区当前对话转移到小窗，主区回到空白新会话。 */
@@ -23,15 +20,9 @@ interface CopilotProviderValue {
 
 const CopilotProviderContext = createContext<CopilotProviderValue | null>(null)
 
-export function CopilotProvider({
-  routeContext,
-  children,
-}: {
-  routeContext: CopilotContext
-  children: ReactNode
-}) {
-  const main = useCopilot(EMPTY_CONTEXT)
-  const small = useCopilot(routeContext)
+export function CopilotProvider({ children }: { children: ReactNode }) {
+  const main = useCopilot()
+  const small = useCopilot()
   const [smallOpen, setSmallOpen] = useState(false)
 
   const value: CopilotProviderValue = {

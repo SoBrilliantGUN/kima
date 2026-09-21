@@ -159,16 +159,9 @@ export interface CopilotStep {
   args: Record<string, unknown>
 }
 
-export interface CopilotContext {
-  kb_id?: string | null
-  note_id?: string | null
-  document_id?: string | null
-}
-
 export interface CopilotRequest {
   conversation_id?: string | null
   question: string
-  context?: CopilotContext | null
 }
 
 export interface CopilotMemory {

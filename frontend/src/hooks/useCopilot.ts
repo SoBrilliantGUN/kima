@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { getCopilotConversation, streamCopilot } from '@/api/copilot'
 import type { CopilotSseEvent } from '@/api/copilot'
-import type { ChatMessage, CopilotContext, CopilotStep } from '@/api/types'
+import type { ChatMessage, CopilotStep } from '@/api/types'
 
 let tempIdCounter = 0
 
@@ -46,10 +46,8 @@ function upsertReviewStep(messages: ChatMessage[], assistantId: string, step: Co
 
 /**
  * Copilot 流式对话状态：发送后经 SSE 逐步追加回答文本与工具步骤。
- *
- * @param context 当前上下文（AppLayout 按路由推导：kb_id / note_id），随请求提交。
  */
-export function useCopilot(context: CopilotContext) {
+export function useCopilot() {
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState(false)
@@ -100,7 +98,7 @@ export function useCopilot(context: CopilotContext) {
       abortRef.current = controller
       try {
         for await (const event of streamCopilot(
-          { conversation_id: conversationId, question: trimmed, context },
+          { conversation_id: conversationId, question: trimmed },
           controller.signal,
         )) {
           if (isNewConversation && event.type === 'meta') {
@@ -117,7 +115,7 @@ export function useCopilot(context: CopilotContext) {
         abortRef.current = null
       }
     },
-    [conversationId, context, streaming, applyEvent, queryClient],
+    [conversationId, streaming, applyEvent, queryClient],
   )
 
   const stop = useCallback(() => {
