@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 
 import styles from './index.module.scss'
 
@@ -12,6 +13,7 @@ interface ModalProps {
 /**
  * 最小模态原语：只负责「居中浮层 + 点遮罩关闭 + Escape 关闭 + 面板 stopPropagation」。
  * 标题/header/关闭按钮/面板尺寸均由各模态自行渲染。
+ * 通过 Portal 渲染到 body，保证嵌套模态（如设置弹窗里的身份证）能正确叠在最上层。
  */
 export function Modal({ onClose, children, className }: ModalProps) {
   useEffect(() => {
@@ -22,7 +24,7 @@ export function Modal({ onClose, children, className }: ModalProps) {
     return () => window.removeEventListener('keydown', handleKeydown)
   }, [onClose])
 
-  return (
+  return createPortal(
     <div className={styles.overlay} onClick={onClose}>
       <div
         className={className ? `${styles.modal} ${className}` : styles.modal}
@@ -30,6 +32,7 @@ export function Modal({ onClose, children, className }: ModalProps) {
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

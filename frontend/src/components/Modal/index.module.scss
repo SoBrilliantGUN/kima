@@ -9,6 +9,7 @@
 }
 
 .modal {
+  position: relative;
   max-width: calc(100vw - 32px);
   padding: var(--space-5);
   border-radius: var(--radius-md);
