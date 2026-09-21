@@ -1,10 +1,10 @@
 import { documentFileUrl } from '@/api/documents'
 import type { DocumentStatus } from '@/api/types'
 import { CloseIcon } from '@/components/icons'
+import { ResizeHandles } from '@/components/ResizeHandles'
 import { useDeleteDocument, useDocument, useRetryDocument } from '@/hooks/useDocuments'
 import { useWindowRect } from '@/hooks/useWindowRect'
 import { DocumentWindowBody } from './components/DocumentWindowBody'
-import { ResizeHandles } from './components/ResizeHandles'
 import styles from './index.module.scss'
 
 const STATUS_LABEL: Record<DocumentStatus, string> = {
