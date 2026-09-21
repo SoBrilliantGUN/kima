@@ -118,7 +118,8 @@ export function useWindowRect(offset: number) {
   const resizeRef = useRef<ResizeState | null>(null)
 
   function handleHeaderPointerDown(event: ReactPointerEvent<HTMLElement>) {
-    if ((event.target as HTMLElement).closest('button')) return
+    // 按钮/链接等可点击元素不触发拖拽：链接被捕获指针后会吞掉 click，导致“打开原网页”等失效
+    if ((event.target as HTMLElement).closest('button, a')) return
     dragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
