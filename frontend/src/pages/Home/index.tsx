@@ -3,25 +3,33 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChatInput } from '@/components/chat/ChatInput'
 import { ChatMessageList } from '@/components/chat/ChatMessageList'
 import { ConversationList } from '@/components/chat/ConversationList'
-import { BookIcon, CloseIcon, GlobeIcon, GlobeOffIcon, MessageCircleIcon } from '@/components/icons'
+import { useCopilotProvider } from '@/components/copilot/CopilotProvider'
+import { BookIcon, BotIcon, CloseIcon, GlobeIcon, GlobeOffIcon, MessageCircleIcon, SparkleIcon } from '@/components/icons'
 import { useChatStream } from '@/hooks/useChat'
 import { useAutoScroll } from '@/hooks/useAutoScroll'
 import { useConversations, useDeleteConversation } from '@/hooks/useConversations'
 import { useKnowledgeBases } from '@/hooks/useKnowledgeBases'
+import { CopilotPane } from './components/CopilotPane'
 
 import styles from './index.module.scss'
 
 export default function Home() {
+  // 主区模式：问问kima（问答） / 我的Copilot（知识 Agent）
+  const [mode, setMode] = useState<'qa' | 'copilot'>('qa')
+
   // 检索范围：联网搜索开关 + @ 知识库多选，二者互斥
   const [webSearch, setWebSearch] = useState(true)
   const [selectedKbIds, setSelectedKbIds] = useState<string[]>([])
   const [kbPickerOpen, setKbPickerOpen] = useState(false)
   const kbIds = useMemo(() => (webSearch ? [] : selectedKbIds), [webSearch, selectedKbIds])
-  const chat = useChatStream(null, kbIds, webSearch)
-  const scrollRef = useAutoScroll([chat.messages, chat.streaming])
+  const qa = useChatStream(null, kbIds, webSearch)
+  const scrollRef = useAutoScroll([qa.messages, qa.streaming])
   const autoSelectedRef = useRef(false)
   const pickerRef = useRef<HTMLDivElement>(null)
   const kbButtonRef = useRef<HTMLButtonElement>(null)
+
+  const { main: copilot } = useCopilotProvider()
+
   const { data: conversationData } = useConversations(null)
   const deleteConversation = useDeleteConversation()
   const { data: kbData } = useKnowledgeBases()
@@ -32,12 +40,19 @@ export default function Home() {
     [kbs, selectedKbIds],
   )
 
-  // 首次加载时默认选中第一条历史会话，避免落地空白
+  // 首次加载默认选中第一条历史会话，避免落地空白
   useEffect(() => {
     const items = conversationData?.items ?? []
     if (!autoSelectedRef.current && items.length > 0) {
       autoSelectedRef.current = true
-      void chat.selectConversation(items[0].id)
+      const first = items[0]
+      if (first.kind === 'copilot') {
+        setMode('copilot')
+        void copilot.selectConversation(first.id)
+      } else {
+        setMode('qa')
+        void qa.selectConversation(first.id)
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationData])
@@ -60,7 +75,6 @@ export default function Home() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [kbPickerOpen])
 
-  // 联网搜索开关：开 = 清空 @ 库回到联网；关 = 进入知识库模式（不联网也不检索库时即为纯 LLM）
   function handleToggleWeb() {
     if (webSearch) {
       setWebSearch(false)
@@ -79,102 +93,161 @@ export default function Home() {
   }
 
   function handleRemoveKb(kbId: string) {
-    const next = selectedKbIds.filter((id) => id !== kbId)
-    setSelectedKbIds(next)
+    setSelectedKbIds((prev) => prev.filter((id) => id !== kbId))
   }
+
+  function handleNewQa() {
+    setMode('qa')
+    qa.startNew()
+  }
+
+  function handleNewCopilot() {
+    setMode('copilot')
+    copilot.startNew()
+  }
+
+  function handleSelectHistory(id: string, kind: string) {
+    if (kind === 'copilot') {
+      setMode('copilot')
+      void copilot.selectConversation(id)
+    } else {
+      setMode('qa')
+      void qa.selectConversation(id)
+    }
+  }
+
+  function handleDelete(id: string) {
+    if (mode === 'copilot' && id === copilot.conversationId) copilot.startNew()
+    else if (mode === 'qa' && id === qa.conversationId) qa.startNew()
+    void deleteConversation.mutate(id)
+  }
+
+  const activeId = mode === 'qa' ? qa.conversationId : copilot.conversationId
 
   return (
     <div className={styles.page}>
       <ConversationList
         className={styles.sidebar}
         conversations={conversationData?.items ?? []}
-        activeId={chat.conversationId}
-        onSelect={(id) => void chat.selectConversation(id)}
-        onNew={() => chat.startNew()}
-        onDelete={(id) => {
-          // 删除的是当前会话时，先复位聊天状态并中止在途流，避免残留 streaming 卡住后续发送
-          if (id === chat.conversationId) chat.startNew()
-          void deleteConversation.mutate(id)
-        }}
-      />
-      <section className={styles.chat}>
-        <div className={styles.messages} ref={scrollRef}>
-          {chat.messages.length === 0 && !chat.streaming ? (
-            <div className={styles.empty}>
-              <MessageCircleIcon className={styles.emptyIcon} />
-              <p className={styles.emptyText}>联网搜索，或基于知识库提问</p>
-            </div>
-          ) : (
-            <ChatMessageList messages={chat.messages} streaming={chat.streaming} />
-          )}
-          {chat.error ? <div className={styles.error}>{chat.error}</div> : null}
-        </div>
-
-        <div className={styles.inputArea}>
-          <div className={styles.scopeBar}>
+        activeId={activeId}
+        hideNewButton
+        header={
+          <div className={styles.modeEntries}>
             <button
               type="button"
-              className={webSearch ? `${styles.webToggle} ${styles.webToggleOn}` : styles.webToggle}
-              onClick={handleToggleWeb}
-              aria-pressed={webSearch}
-              title="联网搜索"
+              className={mode === 'qa' ? `${styles.modeEntry} ${styles.modeEntryActive}` : styles.modeEntry}
+              onClick={handleNewQa}
             >
-              {webSearch ? (
-                <GlobeIcon className={styles.webToggleIcon} />
-              ) : (
-                <GlobeOffIcon className={styles.webToggleIcon} />
-              )}
-              联网搜索
+              <SparkleIcon className={styles.modeIcon} />
+              <span>问问kima</span>
             </button>
-
             <button
               type="button"
-              ref={kbButtonRef}
-              className={selectedKbIds.length > 0 ? `${styles.kbToggle} ${styles.kbToggleOn}` : styles.kbToggle}
-              onClick={() => setKbPickerOpen((open) => !open)}
-              title="基于知识库提问"
+              className={
+                mode === 'copilot' ? `${styles.modeEntry} ${styles.modeEntryActive}` : styles.modeEntry
+              }
+              onClick={handleNewCopilot}
             >
-              <BookIcon className={styles.kbToggleIcon} />
-              基于知识库
+              <BotIcon className={styles.modeIcon} />
+              <span>我的Copilot</span>
             </button>
-
-            {selectedKbs.map((kb) => (
-              <span key={kb.id} className={styles.kbChip}>
-                {kb.name}
-                <button type="button" onClick={() => handleRemoveKb(kb.id)} aria-label="移除">
-                  <CloseIcon />
-                </button>
-              </span>
-            ))}
           </div>
+        }
+        onSelect={(id) => {
+          const conv = conversationData?.items.find((c) => c.id === id)
+          if (conv) handleSelectHistory(id, conv.kind)
+        }}
+        onDelete={handleDelete}
+      />
 
-          {kbPickerOpen ? (
-            <div className={styles.picker} ref={pickerRef}>
-              {kbs.map((kb) => {
-                const active = selectedKbIds.includes(kb.id)
-                return (
-                  <button
-                    key={kb.id}
-                    type="button"
-                    className={active ? `${styles.pickerItem} ${styles.pickerItemActive}` : styles.pickerItem}
-                    onClick={() => handleToggleKb(kb.id)}
-                  >
-                    <span className={styles.pickerCheck}>{active ? '✓' : ''}</span>
-                    {kb.name}
-                  </button>
-                )
-              })}
-              {kbs.length === 0 ? <div className={styles.pickerEmpty}>暂无知识库</div> : null}
+      <section className={styles.chat}>
+        {mode === 'qa' ? (
+          <>
+            <div className={styles.messages} ref={scrollRef}>
+              {qa.messages.length === 0 && !qa.streaming ? (
+                <div className={styles.empty}>
+                  <MessageCircleIcon className={styles.emptyIcon} />
+                  <p className={styles.emptyText}>联网搜索，或基于知识库提问</p>
+                </div>
+              ) : (
+                <ChatMessageList messages={qa.messages} streaming={qa.streaming} />
+              )}
+              {qa.error ? <div className={styles.error}>{qa.error}</div> : null}
             </div>
-          ) : null}
 
-          <ChatInput
-            streaming={chat.streaming}
-            placeholder="输入问题"
-            onSend={(text) => void chat.send(text)}
-            onStop={chat.stop}
-          />
-        </div>
+            <div className={styles.inputArea}>
+              <div className={styles.scopeBar}>
+                <button
+                  type="button"
+                  className={webSearch ? `${styles.webToggle} ${styles.webToggleOn}` : styles.webToggle}
+                  onClick={handleToggleWeb}
+                  aria-pressed={webSearch}
+                  title="联网搜索"
+                >
+                  {webSearch ? (
+                    <GlobeIcon className={styles.webToggleIcon} />
+                  ) : (
+                    <GlobeOffIcon className={styles.webToggleIcon} />
+                  )}
+                  联网搜索
+                </button>
+
+                <button
+                  type="button"
+                  ref={kbButtonRef}
+                  className={
+                    selectedKbIds.length > 0 ? `${styles.kbToggle} ${styles.kbToggleOn}` : styles.kbToggle
+                  }
+                  onClick={() => setKbPickerOpen((open) => !open)}
+                  title="基于知识库提问"
+                >
+                  <BookIcon className={styles.kbToggleIcon} />
+                  基于知识库
+                </button>
+
+                {selectedKbs.map((kb) => (
+                  <span key={kb.id} className={styles.kbChip}>
+                    {kb.name}
+                    <button type="button" onClick={() => handleRemoveKb(kb.id)} aria-label="移除">
+                      <CloseIcon />
+                    </button>
+                  </span>
+                ))}
+              </div>
+
+              {kbPickerOpen ? (
+                <div className={styles.picker} ref={pickerRef}>
+                  {kbs.map((kb) => {
+                    const active = selectedKbIds.includes(kb.id)
+                    return (
+                      <button
+                        key={kb.id}
+                        type="button"
+                        className={
+                          active ? `${styles.pickerItem} ${styles.pickerItemActive}` : styles.pickerItem
+                        }
+                        onClick={() => handleToggleKb(kb.id)}
+                      >
+                        <span className={styles.pickerCheck}>{active ? '✓' : ''}</span>
+                        {kb.name}
+                      </button>
+                    )
+                  })}
+                  {kbs.length === 0 ? <div className={styles.pickerEmpty}>暂无知识库</div> : null}
+                </div>
+              ) : null}
+
+              <ChatInput
+                streaming={qa.streaming}
+                placeholder="输入问题"
+                onSend={(text) => void qa.send(text)}
+                onStop={qa.stop}
+              />
+            </div>
+          </>
+        ) : (
+          <CopilotPane />
+        )}
       </section>
     </div>
   )

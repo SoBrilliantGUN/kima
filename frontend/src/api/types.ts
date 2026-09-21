@@ -112,6 +112,7 @@ export interface Citation {
 export interface Conversation {
   id: string
   kb_id: string | null
+  kind: string
   title: string
   created_at: string
   updated_at: string
@@ -128,6 +129,7 @@ export interface ChatMessage {
   role: ChatRole
   content: string
   citations: Citation[] | null
+  steps?: CopilotStep[] | null
   created_at: string
 }
 
@@ -146,4 +148,54 @@ export interface ChatRequest {
   kb_id?: string | null
   conversation_id?: string | null
   question: string
+}
+
+// --- Copilot（知识 Agent） ---
+
+export type CopilotMemoryKind = 'procedural' | 'semantic' | 'episodic'
+
+export interface CopilotStep {
+  tool_name: string
+  args: Record<string, unknown>
+}
+
+export interface CopilotContext {
+  kb_id?: string | null
+  note_id?: string | null
+  document_id?: string | null
+}
+
+export interface CopilotRequest {
+  conversation_id?: string | null
+  question: string
+  context?: CopilotContext | null
+}
+
+export interface CopilotMemory {
+  id: string
+  kind: CopilotMemoryKind
+  content: string
+  entity_id: string | null
+  importance: number
+  access_count: number
+  last_access: string | null
+  superseded: boolean
+  version: number
+  created_at: string
+}
+
+export interface CopilotMemoryList {
+  soul: string
+  user: string
+  memories: CopilotMemory[]
+}
+
+export interface CopilotSkill {
+  name: string
+  description: string
+  has_side_effect: boolean
+}
+
+export interface CopilotSkillsList {
+  items: CopilotSkill[]
 }
