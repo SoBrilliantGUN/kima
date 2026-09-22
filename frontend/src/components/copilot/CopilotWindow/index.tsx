@@ -58,8 +58,10 @@ export function CopilotWindow() {
         messages={small.messages}
         streaming={small.streaming}
         error={small.error}
+        pendingApproval={small.pendingApproval}
         onSend={(text) => void small.send(text)}
         onStop={small.stop}
+        onApprove={(d) => void small.approve(d)}
       />
 
       <ResizeHandles

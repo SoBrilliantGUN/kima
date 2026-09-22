@@ -2,6 +2,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { ChatInput } from '@/components/chat/ChatInput'
+import { TOOL_LABELS } from '@/api/copilot'
 import type { ChatMessage } from '@/api/types'
 import { useAutoScroll } from '@/hooks/useAutoScroll'
 import { CopilotSteps } from '../CopilotSteps'
@@ -9,15 +10,31 @@ import { CopilotTrace } from '../CopilotTrace'
 
 import styles from './index.module.scss'
 
+interface PendingApproval {
+  runId: string
+  tool: string
+  args: Record<string, unknown>
+}
+
 interface Props {
   messages: ChatMessage[]
   streaming: boolean
   error: string | null
+  pendingApproval: PendingApproval | null
   onSend: (text: string) => void
   onStop: () => void
+  onApprove: (decision: 'approve' | 'reject') => void
 }
 
-export function CopilotChat({ messages, streaming, error, onSend, onStop }: Props) {
+export function CopilotChat({
+  messages,
+  streaming,
+  error,
+  pendingApproval,
+  onSend,
+  onStop,
+  onApprove,
+}: Props) {
   const scrollRef = useAutoScroll([messages, streaming])
 
   return (
@@ -63,6 +80,22 @@ export function CopilotChat({ messages, streaming, error, onSend, onStop }: Prop
         )}
         {error ? <div className={styles.error}>{error}</div> : null}
       </div>
+
+      {pendingApproval ? (
+        <div className={styles.approval}>
+          <span className={styles.approvalText}>
+            Copilot 想执行「{TOOL_LABELS[pendingApproval.tool] ?? pendingApproval.tool}」，是否确认？
+          </span>
+          <div className={styles.approvalActions}>
+            <button className={styles.approveBtn} onClick={() => onApprove('approve')}>
+              确认
+            </button>
+            <button className={styles.rejectBtn} onClick={() => onApprove('reject')}>
+              拒绝
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className={styles.inputArea}>
         <ChatInput

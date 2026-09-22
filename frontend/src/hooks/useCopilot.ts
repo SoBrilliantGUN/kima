@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react'
 
 import { useQueryClient } from '@tanstack/react-query'
 
-import { getCopilotConversation, streamCopilot } from '@/api/copilot'
+import { approveCopilot, getCopilotConversation, streamCopilot } from '@/api/copilot'
 import type { CopilotSseEvent } from '@/api/copilot'
 import type { ChatMessage, CopilotStep } from '@/api/types'
 
@@ -54,11 +54,25 @@ export function useCopilot() {
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const queryClient = useQueryClient()
+  const [pendingApproval, setPendingApproval] = useState<{
+    runId: string
+    tool: string
+    args: Record<string, unknown>
+  } | null>(null)
+  const resumeContextRef = useRef<{
+    conversationId: string
+    assistantMessageId: string
+  } | null>(null)
+  const activeAssistantIdRef = useRef<string | null>(null)
 
   const applyEvent = useCallback((event: CopilotSseEvent, assistantId: string) => {
     switch (event.type) {
       case 'meta':
         setConversationId(event.conversationId)
+        resumeContextRef.current = {
+          conversationId: event.conversationId,
+          assistantMessageId: event.assistantMessageId,
+        }
         break
       case 'step':
         setMessages((prev) => appendStep(prev, assistantId, { tool_name: event.toolName, args: event.args }))
@@ -73,6 +87,9 @@ export function useCopilot() {
             args: { verdict: event.verdict, issues: event.issues },
           }),
         )
+        break
+      case 'approval':
+        setPendingApproval({ runId: event.runId, tool: event.tool, args: event.args })
         break
       case 'error':
         setError(event.message)
@@ -92,6 +109,7 @@ export function useCopilot() {
       const isNewConversation = conversationId === null
       const userMsg = createTempMessage('user', trimmed, conversationId)
       const assistantMsg = createTempMessage('assistant', '', conversationId)
+      activeAssistantIdRef.current = assistantMsg.id
       setMessages((prev) => [...prev, userMsg, assistantMsg])
 
       const controller = new AbortController()
@@ -116,6 +134,41 @@ export function useCopilot() {
       }
     },
     [conversationId, streaming, applyEvent, queryClient],
+  )
+
+  const approve = useCallback(
+    async (decision: 'approve' | 'reject') => {
+      const approval = pendingApproval
+      const resumeContext = resumeContextRef.current
+      const assistantId = activeAssistantIdRef.current
+      if (!approval || !resumeContext || !assistantId) return
+      setPendingApproval(null)
+      setStreaming(true)
+      setError(null)
+      const controller = new AbortController()
+      abortRef.current = controller
+      try {
+        for await (const event of approveCopilot(
+          {
+            run_id: approval.runId,
+            decision,
+            conversation_id: resumeContext.conversationId,
+            assistant_message_id: resumeContext.assistantMessageId,
+          },
+          controller.signal,
+        )) {
+          applyEvent(event, assistantId)
+        }
+      } catch (err) {
+        if (!(err instanceof DOMException && err.name === 'AbortError')) {
+          setError(err instanceof Error ? err.message : '请求失败')
+        }
+      } finally {
+        setStreaming(false)
+        abortRef.current = null
+      }
+    },
+    [pendingApproval, applyEvent],
   )
 
   const stop = useCallback(() => {
@@ -173,7 +226,9 @@ export function useCopilot() {
     messages,
     streaming,
     error,
+    pendingApproval,
     send,
+    approve,
     stop,
     reset,
     hydrate,

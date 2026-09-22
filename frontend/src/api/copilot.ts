@@ -14,6 +14,7 @@ export type CopilotSseEvent =
   | { type: 'step'; toolName: string; args: Record<string, unknown> }
   | { type: 'delta'; text: string }
   | { type: 'review'; verdict: string; issues: CopilotReviewIssue[] }
+  | { type: 'approval'; runId: string; tool: string; args: Record<string, unknown> }
   | { type: 'done'; assistantMessageId: string }
   | { type: 'error'; code: string; message: string }
 
@@ -49,6 +50,13 @@ function parseSseBlock(block: string): CopilotSseEvent | null {
         verdict: String(payload.verdict),
         issues: Array.isArray(payload.issues) ? (payload.issues as CopilotReviewIssue[]) : [],
       }
+    case 'approval':
+      return {
+        type: 'approval',
+        runId: String(payload.run_id),
+        tool: String(payload.tool),
+        args: (payload.args ?? {}) as Record<string, unknown>,
+      }
     case 'done':
       return { type: 'done', assistantMessageId: String(payload.assistant_message_id) }
     case 'error':
@@ -62,15 +70,16 @@ function parseSseBlock(block: string): CopilotSseEvent | null {
   }
 }
 
-/** 流式 Copilot 对话：POST /api/copilot/chat，逐事件 yield（meta/step/delta/done/error）。 */
-export async function* streamCopilot(
-  request: CopilotRequest,
+/** 通用 SSE 流式：POST 到 url，逐事件 yield（meta/step/delta/review/approval/done/error）。 */
+async function* streamSse(
+  url: string,
+  body: unknown,
   signal?: AbortSignal,
 ): AsyncGenerator<CopilotSseEvent> {
-  const response = await fetch('/api/copilot/chat', {
+  const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
+    body: JSON.stringify(body),
     signal,
   })
   if (!response.ok || !response.body) {
@@ -90,6 +99,23 @@ export async function* streamCopilot(
       if (event) yield event
     }
   }
+}
+
+/** 流式 Copilot 对话：POST /api/copilot/chat。 */
+export function streamCopilot(request: CopilotRequest, signal?: AbortSignal) {
+  return streamSse('/api/copilot/chat', request, signal)
+}
+
+export interface CopilotApproveRequest {
+  run_id: string
+  decision: 'approve' | 'reject'
+  conversation_id: string
+  assistant_message_id: string
+}
+
+/** HITL 审批回执：POST /api/copilot/approve，续跑。 */
+export function approveCopilot(request: CopilotApproveRequest, signal?: AbortSignal) {
+  return streamSse('/api/copilot/approve', request, signal)
 }
 
 /** 只读记忆面板数据。 */
