@@ -1,6 +1,7 @@
 """上下文组装单测：引用编号 + 历史 token 预算 + 超预算摘要。"""
 
 import uuid
+from collections.abc import AsyncIterator
 
 from app.integrations.llm import ChatMessage, ChatResult
 from app.integrations.search import WebSearchResult
@@ -50,7 +51,7 @@ class _FixedLLM:
         *,
         temperature: float = 0.7,
         max_tokens: int | None = None,
-    ):
+    ) -> AsyncIterator[str]:
         yield self._text
 
 

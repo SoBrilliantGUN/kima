@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from pathlib import Path
 
 from app.rag.eval_runner import (
     CaseResult,
@@ -31,7 +32,7 @@ async def _retrieve(query: str, kb_id: str) -> list[RetrievedChunk]:
     return [_chunk("包含目标片段的内容"), _chunk("无关内容")]
 
 
-def test_load_retrieval_cases(tmp_path) -> None:
+def test_load_retrieval_cases(tmp_path: Path) -> None:
     path = tmp_path / "golden.json"
     path.write_text(
         json.dumps([{"query": "q", "kb_id": "k", "golden_snippet": "s"}]),

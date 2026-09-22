@@ -16,7 +16,7 @@ from app.integrations.parser import (
     WebDocumentParser,
     WordDocumentParser,
 )
-from app.integrations.web import FakeWebFetcher
+from app.integrations.web import FakeWebFetcher, FetchedPage
 from tests.fakes import FakeFileParser, FakeUrlParser
 
 
@@ -75,6 +75,31 @@ async def test_web_parser_uses_fetcher() -> None:
     result = await parser.parse(url="https://example.com")
     assert result.title == "示例标题"
     assert result.markdown.startswith("#")
+
+
+async def test_web_parser_strips_exact_duplicate_title_heading() -> None:
+    page = FetchedPage(markdown="# 我的文章\n\n这是正文。", title="我的文章")
+    result = await WebDocumentParser(FakeWebFetcher(page)).parse(url="https://example.com")
+    assert result.title == "我的文章"
+    assert result.markdown == "这是正文。"
+
+
+async def test_web_parser_strips_title_with_site_suffix() -> None:
+    page = FetchedPage(markdown="# 我的文章\n\n这是正文。", title="我的文章 - 站点名")
+    result = await WebDocumentParser(FakeWebFetcher(page)).parse(url="https://example.com")
+    assert result.markdown == "这是正文。"
+
+
+async def test_web_parser_keeps_heading_when_title_differs() -> None:
+    page = FetchedPage(markdown="# 示例正文\n\n这是正文。", title="示例标题")
+    result = await WebDocumentParser(FakeWebFetcher(page)).parse(url="https://example.com")
+    assert result.markdown.startswith("# 示例正文")
+
+
+async def test_web_parser_keeps_heading_when_no_title() -> None:
+    page = FetchedPage(markdown="# 示例正文\n\n这是正文。", title=None)
+    result = await WebDocumentParser(FakeWebFetcher(page)).parse(url="https://example.com")
+    assert result.markdown.startswith("# 示例正文")
 
 
 async def test_word_parser_preserves_tables(monkeypatch: pytest.MonkeyPatch) -> None:

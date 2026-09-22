@@ -1,6 +1,8 @@
 """RAG 评估最小集测试：检索指标（纯函数）+ LLM-judge 指标（Fake judge）。"""
 
-from app.integrations.llm import ChatResult
+from collections.abc import AsyncIterator
+
+from app.integrations.llm import ChatMessage, ChatResult
 from app.rag.eval import (
     EvalSample,
     _parse_score,
@@ -17,8 +19,23 @@ class _JudgeLLM:
     def __init__(self, content: str) -> None:
         self._content = content
 
-    async def chat(self, messages, *, temperature=0.7, max_tokens=None) -> ChatResult:
+    async def chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> ChatResult:
         return ChatResult(content=self._content)
+
+    async def stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        yield self._content
 
 
 def test_recall_at_k() -> None:

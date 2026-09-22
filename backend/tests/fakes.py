@@ -1,11 +1,16 @@
+import math
 import uuid
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
 
+from app.agent.guardrail.review import ReviewResult, ReviewVerdict
+from app.integrations.llm import ChatMessage, ChatResult
 from app.integrations.parser import ParsedDocument, ParserError, SourceType
+from app.models.copilot import CopilotEvent, CopilotMemory, MemoryKind
 from app.models.document import MAX_RETRIES, Document, DocumentChunk, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase
 from app.models.note import Note
+from app.services.copilot import ConflictVerdict
 
 
 class FakeKnowledgeBaseRepository:
@@ -96,6 +101,12 @@ class FakeNoteRepository:
         note_ids = {n for (n, k) in self._associations if k == kb_id}
         notes = [self._store[n] for n in note_ids if n in self._store]
         return sorted(notes, key=lambda note: (note.updated_at, note.id), reverse=True)
+
+    async def get_by_content_hash(self, content_hash: str) -> Note | None:
+        for note in self._store.values():
+            if note.content_hash == content_hash:
+                return note
+        return None
 
 
 class FakeDocumentRepository:
@@ -253,3 +264,165 @@ class FakeUrlParser:
     async def parse(self, *, url: str) -> ParsedDocument:
         self.calls.append(self.name)
         return ParsedDocument(markdown=f"# {self.name}")
+
+
+def _cosine_distance(a: list[float], b: list[float]) -> float:
+    """两向量余弦距离（1 - 余弦相似度），FakeCopilotMemoryRepository.search 用。"""
+    if not a or not b:
+        return 1.0
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 1.0
+    return 1.0 - dot / (na * nb)
+
+
+class FakeCopilotMemoryRepository:
+    """内存版记忆仓库：分配 id/时间戳，search 按余弦距离排序（对齐 pgvector 语义）。"""
+
+    def __init__(self) -> None:
+        self._store: dict[uuid.UUID, CopilotMemory] = {}
+
+    async def add(self, memory: CopilotMemory) -> CopilotMemory:
+        memory.id = uuid.uuid4()
+        now = datetime.now(UTC)
+        if memory.created_at is None:
+            memory.created_at = now
+        if memory.updated_at is None:
+            memory.updated_at = now
+        self._store[memory.id] = memory
+        return memory
+
+    async def get(self, memory_id: uuid.UUID) -> CopilotMemory | None:
+        return self._store.get(memory_id)
+
+    async def update(self, memory: CopilotMemory) -> CopilotMemory:
+        memory.updated_at = datetime.now(UTC)
+        self._store[memory.id] = memory
+        return memory
+
+    async def delete(self, memory: CopilotMemory) -> None:
+        self._store.pop(memory.id, None)
+
+    async def search(
+        self, kind: MemoryKind, query_vec: list[float], top_k: int
+    ) -> list[CopilotMemory]:
+        candidates = [
+            m
+            for m in self._store.values()
+            if m.kind == kind and not m.superseded and m.embedding is not None
+        ]
+        candidates.sort(key=lambda m: _cosine_distance(m.embedding or [], query_vec))
+        return candidates[:top_k]
+
+    async def list_active(self, kind: MemoryKind) -> list[CopilotMemory]:
+        return [m for m in self._store.values() if m.kind == kind and not m.superseded]
+
+    async def get_by_entity(self, kind: MemoryKind, entity_id: str) -> CopilotMemory | None:
+        matches = [
+            m
+            for m in self._store.values()
+            if m.kind == kind and m.entity_id == entity_id and not m.superseded
+        ]
+        return max(matches, key=lambda m: m.version) if matches else None
+
+    async def count_active(self, kind: MemoryKind) -> int:
+        return len([m for m in self._store.values() if m.kind == kind and not m.superseded])
+
+    async def touch(self, memory_ids: list[uuid.UUID], now: datetime) -> None:
+        for memory_id in memory_ids:
+            memory = self._store.get(memory_id)
+            if memory is not None:
+                memory.access_count += 1
+                memory.last_access = now
+
+
+class FakeCopilotEventRepository:
+    """内存版事件日志仓库：自增 seq，记录调用供断言。"""
+
+    def __init__(self) -> None:
+        self.events: list[CopilotEvent] = []
+        self._seq = 0
+
+    async def add_event(self, event: CopilotEvent) -> CopilotEvent:
+        self._seq += 1
+        event.seq = self._seq
+        event.id = uuid.uuid4()
+        event.created_at = datetime.now(UTC)
+        self.events.append(event)
+        return event
+
+    async def list_events(self, run_id: uuid.UUID) -> list[CopilotEvent]:
+        return [e for e in self.events if e.run_id == run_id]
+
+
+class FakeConflictJudge:
+    """确定性冲突判定：按给定 verdicts 逐条回放（不足补 none），记录调用。"""
+
+    def __init__(self, verdicts: list[str] | None = None) -> None:
+        self._verdicts = verdicts or []
+        self.calls: list[tuple[str, list[str]]] = []
+
+    async def judge(self, new_content: str, candidates: list[str]) -> list[ConflictVerdict]:
+        self.calls.append((new_content, candidates))
+        verdicts = list(self._verdicts)
+        verdicts = verdicts + ["none"] * (len(candidates) - len(verdicts))
+        return [ConflictVerdict(v) for v in verdicts[: len(candidates)]]
+
+
+class FakeOutputReviewer:
+    """脚本化输出审查器：按给定 results 逐次回放（不足回退 ok），记录调用。"""
+
+    def __init__(self, results: list[ReviewResult] | None = None) -> None:
+        self._results = list(results or [])
+        self.calls: list[tuple[str, str]] = []
+
+    async def review(self, final_answer: str, trace: str) -> ReviewResult:
+        self.calls.append((final_answer, trace))
+        if self._results:
+            return self._results.pop(0)
+        return ReviewResult(verdict=ReviewVerdict.OK, issues=[])
+
+
+class ScriptedLLM:
+    """按序回放内容的自定义 LLMClient（测试自纠错循环：先错后对）。
+
+    ``prompt_tokens`` / ``completion_tokens`` 可选，逐次对齐 ``contents``，用于测试
+    预算记账（不足时回退 0）。
+    """
+
+    def __init__(
+        self,
+        contents: list[str],
+        prompt_tokens: list[int] | None = None,
+        completion_tokens: list[int] | None = None,
+    ) -> None:
+        self._contents = list(contents)
+        self._prompt_tokens = list(prompt_tokens or [])
+        self._completion_tokens = list(completion_tokens or [])
+        self.calls: list[list[ChatMessage]] = []
+
+    async def chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> ChatResult:
+        self.calls.append(messages)
+        content = self._contents.pop(0) if self._contents else ""
+        prompt = self._prompt_tokens.pop(0) if self._prompt_tokens else 0
+        completion = self._completion_tokens.pop(0) if self._completion_tokens else 0
+        return ChatResult(content=content, prompt_tokens=prompt, completion_tokens=completion)
+
+    async def stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        if self._contents:
+            yield self._contents.pop(0)
+

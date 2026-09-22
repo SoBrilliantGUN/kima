@@ -4,6 +4,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Any, cast
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -41,12 +42,13 @@ class FakeChatRepository:
         return self._conversations.get(conversation_id)
 
     async def list_conversations(
-        self, kb_id: uuid.UUID | None, *, limit: int, offset: int
+        self, kb_id: uuid.UUID | None, kind: str | None, *, limit: int, offset: int
     ) -> tuple[list[ChatConversation], int]:
         items = [
             c
             for c in self._conversations.values()
-            if (kb_id is None and c.kb_id is None) or c.kb_id == kb_id
+            if (kind is None or c.kind == kind)
+            and ((kb_id is None and c.kb_id is None) or c.kb_id == kb_id)
         ]
         items.sort(key=lambda c: (c.updated_at, c.id), reverse=True)
         return items[offset : offset + limit], len(items)
@@ -171,7 +173,7 @@ async def test_chat_web_mode_sse(api_client: AsyncClient) -> None:
     assert names[-1] == "done"
 
     citations = next(data for name, data in events if name == "citations")
-    assert len(citations) == 5  # FakeWebSearchClient 默认 top_k=5
+    assert len(cast(list[Any], citations)) == 5  # FakeWebSearchClient 默认 top_k=5
 
 
 async def test_chat_missing_conversation_error(api_client: AsyncClient) -> None:
