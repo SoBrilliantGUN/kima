@@ -22,15 +22,15 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.agent.gateway import LLMGateway
 from app.agent.runtime.budget import BudgetExceeded
 from app.integrations.llm import (
     ChatMessage,
     StructuredParseError,
-    first_validation_error,
-    loads_json_repair,
+    format_instructions,
+    parse_json,
 )
 
 REVIEW_NODE = "review"
@@ -66,17 +66,37 @@ class OutputReviewer(Protocol):
     async def review(self, final_answer: str, trace: str) -> ReviewResult: ...
 
 
+class _ReviewIssue(BaseModel):
+    """一条不一致的完整契约：回答声称做的事、应调用的工具、证据类型。
+
+    字段语义写进 ``description``，``model_json_schema()`` 直接产出带语义的完整 schema，
+    供提示词格式说明引用（不再手写 JSON 示例）。
+    """
+
+    claim: str = Field(description="助手在最终回答里声称完成的事")
+    tool: str = Field(
+        description="该声称对应的写工具名（如 create_note / write_memory / update_profile）"
+    )
+    evidence: Literal["no_tool_call", "tool_failed", "side_effect_missing"] = Field(
+        description="证据类型：no_tool_call=未实际调用对应工具；"
+        "tool_failed=工具返回失败；side_effect_missing=工具声称成功但副作用未落库"
+    )
+
+
 class _ReviewOutput(BaseModel):
     """审查判定的结构化契约：verdict 只允许 ok/mismatch，其余一律视为「审查不可用」。
 
-    ``json.loads`` 只保证语法合法，
-    本模型保证字段名与枚举值合法。verdict 缺字段、拼错、或取值越界（如 "maybe"）都会
-    触发 ValidationError → fail-closed 判 UNVERIFIED，而不是像手写 ``.get()`` 那样
-    静默落到 OK——那正是「格式完美的幻觉值直接污染下游」的入口。
+    ``json.loads`` 只保证语法合法，本模型保证字段名与枚举值合法。verdict 缺字段、拼错、
+    或取值越界（如 "maybe"）都会触发 ValidationError → fail-closed 判 UNVERIFIED，
+    而不是像手写 ``.get()`` 那样静默落到 OK——那正是「格式完美的幻觉值直接污染下游」的入口。
     """
 
-    verdict: Literal["ok", "mismatch"]
-    issues: list[Any] = Field(default_factory=list)
+    verdict: Literal["ok", "mismatch"] = Field(
+        description="判定：ok=一致且无虚假完成；mismatch=存在不一致（配合 issues）"
+    )
+    issues: list[_ReviewIssue] = Field(
+        default_factory=list, description="不一致列表；一致且无虚假完成时为空数组 []"
+    )
 
     @field_validator("verdict", mode="before")
     @classmethod
@@ -100,10 +120,8 @@ class LLMOutputReviewer:
         "重点抓一类错误：助手在回答里声称完成了某个写操作（新建笔记 create_note、"
         "写长期记忆 write_memory、更新档案 update_profile），但轨迹里并未实际调用对应工具，"
         "或该工具返回了失败（如「创建失败」「读取失败」「写入失败」）。"
-        "只输出 JSON，形如 "
-        '{"verdict":"ok","issues":[{"claim":"声称做的事","tool":"对应工具名",'
-        '"evidence":"no_tool_call"}]}。一致且无虚假完成时 verdict=ok、issues 为空数组。'
-    )
+        "一致且无虚假完成时 verdict=ok、issues 为空数组。\n"
+    ) + format_instructions(_ReviewOutput)
 
     def __init__(self, gateway: LLMGateway) -> None:
         self._gateway = gateway
@@ -111,7 +129,7 @@ class LLMOutputReviewer:
     async def review(self, final_answer: str, trace: str) -> ReviewResult:
         user = (
             f"助手最终回答：\n{final_answer}\n\n"
-            f"本轮工具调用轨迹：\n{trace}\n\n只输出 JSON。"
+            f"本轮工具调用轨迹：\n{trace}"
         )
         messages = [ChatMessage("system", self._SYSTEM), ChatMessage("user", user)]
         try:
@@ -138,25 +156,15 @@ class LLMOutputReviewer:
     @staticmethod
     def _parse_strict(raw: str) -> ReviewResult:
         """严格解析：语法/结构/语义任一失败抛 StructuredParseError（带精确错误）。"""
-        data = loads_json_repair(raw)
-        try:
-            out = _ReviewOutput.model_validate(data)
-        except ValidationError as exc:
-            raise StructuredParseError(first_validation_error(exc)) from exc
+        out = parse_json(raw, _ReviewOutput)
         verdict = (
             ReviewVerdict.MISMATCH
             if out.verdict == ReviewVerdict.MISMATCH.value
             else ReviewVerdict.OK
         )
-        # issues 属非核心字段：宽松提取（丢弃非对象项、强转字符串），不因单条细节失配而否定判定
         issues = [
-            ReviewIssue(
-                claim=str(item.get("claim", "")),
-                tool=str(item.get("tool", "")),
-                evidence=str(item.get("evidence", "no_tool_call")),
-            )
+            ReviewIssue(claim=item.claim, tool=item.tool, evidence=item.evidence)
             for item in out.issues
-            if isinstance(item, dict)
         ]
         return ReviewResult(verdict=verdict, issues=issues)
 
