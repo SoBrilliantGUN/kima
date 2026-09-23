@@ -18,5 +18,45 @@ services:
       timeout: 3s
       retries: 10
 
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+    image: kima-backend:latest
+    container_name: kima-backend
+    environment:
+      # 容器内通过服务名访问 db；asyncpg 方言由 SQLAlchemy 消费，checkpointer 用 psycopg 时会
+      # 在 main.py 里把 +asyncpg 替换成 postgresql（见 _setup_copilot_checkpointer）。
+      DATABASE_URL: postgresql+asyncpg://kima:kima@db:5432/kima
+      # LLM / Embedding / Rerank / Search：默认 fake 可空跑；真实密钥从 shell/.env 传入
+      LLM_PROVIDER: ${LLM_PROVIDER:-fake}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-fake}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://api.siliconflow.cn/v1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      RERANK_PROVIDER: ${RERANK_PROVIDER:-fake}
+      RERANK_API_KEY: ${RERANK_API_KEY:-}
+      RERANK_BASE_URL: ${RERANK_BASE_URL:-https://api.siliconflow.cn/v1}
+      RERANK_MODEL: ${RERANK_MODEL:-BAAI/bge-reranker-v2-m3}
+      WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-fake}
+      WEB_SEARCH_API_KEY: ${WEB_SEARCH_API_KEY:-}
+      WEB_SEARCH_BASE_URL: ${WEB_SEARCH_BASE_URL:-https://api.bochaai.com/v1}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/live', timeout=3).status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
 volumes:
   pgdata:
