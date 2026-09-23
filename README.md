@@ -28,11 +28,13 @@ kima/
 
 > pnpm 说明：锁 `pnpm@12.3.4`。pnpm 11+ 的自身配置放在 `frontend/pnpm-workspace.yaml`（已关闭 `minimumReleaseAge` 供应链冷却、放行 esbuild/@parcel/watcher 的 build 脚本），本地与 CI 共用同一份配置。
 
-### 1. 起数据库
+### 1. 起数据库（PostgreSQL + pgvector + pg_jieba）
 
 ```bash
-docker compose up -d
+docker compose up -d db
 ```
+
+> 首次会 build 自编译镜像 `kima-db:pg16-jieba`（多阶段编译 pgvector + pg_jieba，需能访问 GitHub 拉取 pg_jieba 源码）。
 
 等待 `pg_isready` 通过：
 
@@ -40,15 +42,15 @@ docker compose up -d
 docker exec kima-db pg_isready -U kima -d kima
 ```
 
-### 2. 起后端
+### 2. 起后端（Docker）
 
 ```bash
-cd backend
-uv sync                        # 安装依赖（首次）
-cp .env.example .env           # 按需改 DATABASE_URL 等
-uv run alembic upgrade head    # 建表（0001_initial 基线 + 0002_copilot；含 CREATE EXTENSION vector + pg_jieba）
-uv run uvicorn app.main:app --reload
+docker compose build backend   # 构建后端镜像（源码改动后需重 build）
+docker compose up -d backend   # 启动：entrypoint 自动 alembic upgrade head + uvicorn
 ```
+
+> 后端统一在 Docker 里跑：容器内是 Linux + SelectorEventLoop，Copilot 的 checkpoint（`AsyncPostgresSaver`）才落 Postgres、支持崩溃恢复；Windows 裸跑会因 ProactorEventLoop 降级为内存版 checkpoint（重启即失）。
+> 本地跑测试 / lint / 迁移仍可在 host（asyncpg 不挑事件循环）：`cd backend && uv run pytest` / `uv run ruff check .` / `uv run mypy app tests` / `uv run alembic upgrade head`。
 
 ### 3. 起前端
 
@@ -113,10 +115,14 @@ pnpm dev
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/copilot/chat` | Copilot 提问（SSE：`meta → step → delta → done`，工具调用轨迹经 checkpoint + 事件日志落库） |
-| GET | `/api/copilot/memory` | 查看记忆（Soul/User + 三型记忆条目，只读） |
-| GET | `/api/copilot/skills` | 内置技能清单（9 工具） |
-| GET | `/api/conversations?kind=copilot` | Copilot 会话列表（`kind` 区分 qa/copilot） |
+| POST | `/api/copilot/chat` | Copilot 提问（SSE：`meta → step → delta → review? → approval? → done`，工具轨迹经 checkpoint + 事件日志落库） |
+| POST | `/api/copilot/approve` | HITL 审批回执（`run_id` + `decision`，approve 重放写工具 / reject 阻断） |
+| GET | `/api/copilot/approvals/pending` | 找回挂起审批单（超时 fail-close） |
+| POST | `/api/copilot/plan/resume` | planner 崩溃恢复（按 run_id 从计划检查点续跑未完成步骤） |
+| POST | `/api/copilot/resume` | reactive 崩溃恢复（按 run_id 从 checkpoint 续跑） |
+| GET | `/api/copilot/memory` | 查看记忆（Soul/User + 四型记忆条目，只读） |
+| GET | `/api/copilot/skills` | 内置技能清单（11 工具：8 读 3 写） |
+| GET | `/api/conversations` | 会话列表（`kind` 可选：缺省返回 qa+copilot 全部；`kind=qa`/`kind=copilot` 过滤） |
 
 ## 质量门禁
 
@@ -139,6 +145,6 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时自动跑以上检查 + docke
 | 3 | 笔记 / TipTap 编辑器 | ✅ 完成 |
 | 4 | 文档解析与归档（PDF/URL/Word → 解析 → 分块 → 向量化） | ✅ 完成 |
 | 5 | AI 智能问答（Advanced RAG） | ✅ 完成 |
-| 6 | Copilot（知识 Agent：LangGraph 工具调用 + 三型记忆 + 可观测） | 🚧 待实现 |
+| 6 | Copilot（知识 Agent：LangGraph 手写 StateGraph + 四型记忆 + HITL + 容错/崩溃恢复） | ✅ 已实现 |
 
 详细需求见 `docs/requirements.md`；模块 1 设计见 `docs/module-1-infrastructure.md`，模块 2 设计见 `docs/module-2-knowledge-bases.md`，模块 3 设计见 `docs/module-3-notes.md`，模块 4 设计见 `docs/module-4-documents.md`，模块 5 设计见 `docs/module-5-ai-qa.md`，模块 6 设计见 `docs/module-6-copilot.md`。

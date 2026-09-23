@@ -330,7 +330,7 @@ workers/document_worker.py    # 后台轮询循环
 api/routes/documents.py       # 文档端点
 api/routes/notes.py           # 回改：删 from-url 端点
 api/routes/knowledge_bases.py # ContentItem 增 type="document"
-integrations/parser.py        # + MinerU/Word/Web 实现 + 分发工厂
+integrations/parser.py        # 协议 + 分发工厂（MinerU/Word/Web 三实现拆到 parser_mineru.py / parser_word.py / parser_web.py）
 integrations/embedding.py     # + SiliconFlow 实现
 chunking/                     # 分块包（§5）
 core/storage.py               # FileStore Protocol + 本地实现
@@ -508,7 +508,7 @@ router.tsx                # 移除 /documents/:documentId 路由（浮动窗口�
 | T1 | `pyproject.toml` 加 `python-multipart`、`pgvector`、`mammoth`（+ 视需 `tree-sitter`）；`httpx` 移入运行时依赖 | 依赖可装 |
 | T2 | `models/document.py` + 迁移 `0004`（建 documents/document_chunks + drop notes 三列 + 部分 HNSW） | 可 `upgrade head` |
 | T3 | `app/chunking/` 包：markdown-it-py AST 切分 + registry + 3 splitter + parent 切分 + 单测 | 分块能力（可独立验收） |
-| T4 | `integrations/parser.py`（MinerU/Word/Web 三实现 + 分发工厂）+ `integrations/embedding.py`（SiliconFlow） | 解析/向量化真实 provider |
+| T4 | `integrations/parser.py`（协议 + 分发工厂）+ `parser_mineru.py`/`parser_word.py`/`parser_web.py`（三实现）+ `integrations/embedding.py`（SiliconFlow） | 解析/向量化真实 provider |
 | T5 | `core/storage.py`（FileStore）+ `services/ingest.py`（parent→child→embed 流水线） | 核心业务逻辑 |
 | T6 | `repositories/document.py` + `schemas/document.py` | 数据访问/校验层 |
 | T7 | `services/document.py` + `api/routes/documents.py` + contents 扩展 + deps 注入 | 接口层 |
