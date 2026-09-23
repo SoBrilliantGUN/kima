@@ -152,7 +152,7 @@ export interface ChatRequest {
 
 // --- Copilot（知识 Agent） ---
 
-export type CopilotMemoryKind = 'procedural' | 'semantic' | 'episodic'
+export type CopilotMemoryKind = 'constraint' | 'procedural' | 'semantic' | 'episodic'
 
 export interface CopilotStep {
   tool_name: string
@@ -169,7 +169,6 @@ export interface CopilotMemory {
   kind: CopilotMemoryKind
   content: string
   entity_id: string | null
-  importance: number
   access_count: number
   last_access: string | null
   superseded: boolean

@@ -14,6 +14,14 @@ interface PendingApproval {
   runId: string
   tool: string
   args: Record<string, unknown>
+  summary: string
+  level: string
+}
+
+function levelLabel(level: string): string {
+  if (level === 'medium') return '中风险'
+  if (level === 'low') return '低风险'
+  return '高风险'
 }
 
 interface Props {
@@ -83,9 +91,29 @@ export function CopilotChat({
 
       {pendingApproval ? (
         <div className={styles.approval}>
-          <span className={styles.approvalText}>
-            Copilot 想执行「{TOOL_LABELS[pendingApproval.tool] ?? pendingApproval.tool}」，是否确认？
-          </span>
+          <div className={styles.approvalHeader}>
+            <span
+              className={`${styles.approvalBadge} ${
+                pendingApproval.level === 'medium'
+                  ? styles.approvalBadgeMedium
+                  : styles.approvalBadgeHigh
+              }`}
+            >
+              {levelLabel(pendingApproval.level)}
+            </span>
+            <span className={styles.approvalText}>
+              {pendingApproval.summary ||
+                `Copilot 想执行「${TOOL_LABELS[pendingApproval.tool] ?? pendingApproval.tool}」`}
+            </span>
+          </div>
+          {Object.keys(pendingApproval.args).length > 0 ? (
+            <details className={styles.approvalArgs}>
+              <summary className={styles.approvalArgsSummary}>查看操作参数</summary>
+              <pre className={styles.approvalArgsBody}>
+                {JSON.stringify(pendingApproval.args, null, 2)}
+              </pre>
+            </details>
+          ) : null}
           <div className={styles.approvalActions}>
             <button className={styles.approveBtn} onClick={() => onApprove('approve')}>
               确认

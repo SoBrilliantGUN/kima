@@ -73,6 +73,10 @@ export function MemoryManage() {
         {tab === 'longterm' ? (
           <div className={styles.groups}>
             <div className={styles.group}>
+              <div className={styles.groupTitle}>硬约束</div>
+              <MemoryList memories={memories.filter((m) => m.kind === 'constraint')} />
+            </div>
+            <div className={styles.group}>
               <div className={styles.groupTitle}>语义记忆</div>
               <MemoryList memories={memories.filter((m) => m.kind === 'semantic')} />
             </div>

@@ -14,7 +14,14 @@ export type CopilotSseEvent =
   | { type: 'step'; toolName: string; args: Record<string, unknown> }
   | { type: 'delta'; text: string }
   | { type: 'review'; verdict: string; issues: CopilotReviewIssue[] }
-  | { type: 'approval'; runId: string; tool: string; args: Record<string, unknown> }
+  | {
+      type: 'approval'
+      runId: string
+      tool: string
+      args: Record<string, unknown>
+      summary: string
+      level: string
+    }
   | { type: 'done'; assistantMessageId: string }
   | { type: 'error'; code: string; message: string }
 
@@ -56,6 +63,8 @@ function parseSseBlock(block: string): CopilotSseEvent | null {
         runId: String(payload.run_id),
         tool: String(payload.tool),
         args: (payload.args ?? {}) as Record<string, unknown>,
+        summary: String(payload.summary ?? ''),
+        level: String(payload.level ?? 'high'),
       }
     case 'done':
       return { type: 'done', assistantMessageId: String(payload.assistant_message_id) }

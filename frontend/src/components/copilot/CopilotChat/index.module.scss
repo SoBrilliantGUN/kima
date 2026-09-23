@@ -183,9 +183,58 @@
   background: var(--color-bg);
 }
 
+.approvalHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.approvalBadge {
+  flex-shrink: 0;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.approvalBadgeHigh {
+  background: rgba(225, 75, 75, 0.14);
+  color: #e14b4b;
+}
+
+.approvalBadgeMedium {
+  background: rgba(245, 166, 35, 0.14);
+  color: #b87a0a;
+}
+
 .approvalText {
   color: var(--color-text);
   font-size: var(--font-size-base);
+  word-break: break-word;
+}
+
+.approvalArgs {
+  font-size: var(--font-size-sm);
+}
+
+.approvalArgsSummary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  user-select: none;
+}
+
+.approvalArgsBody {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+  max-height: 160px;
+  overflow: auto;
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Code', monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .approvalActions {

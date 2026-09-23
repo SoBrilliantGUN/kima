@@ -58,6 +58,8 @@ export function useCopilot() {
     runId: string
     tool: string
     args: Record<string, unknown>
+    summary: string
+    level: string
   } | null>(null)
   const resumeContextRef = useRef<{
     conversationId: string
@@ -89,7 +91,13 @@ export function useCopilot() {
         )
         break
       case 'approval':
-        setPendingApproval({ runId: event.runId, tool: event.tool, args: event.args })
+        setPendingApproval({
+          runId: event.runId,
+          tool: event.tool,
+          args: event.args,
+          summary: event.summary,
+          level: event.level,
+        })
         break
       case 'error':
         setError(event.message)
