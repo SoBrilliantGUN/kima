@@ -155,7 +155,9 @@ async def test_result_spill(tmp_path: Path) -> None:
     result = await read_note.ainvoke({"note_id": str(long_note.id)})
     assert "结果已落盘" in result
     assert "read_tool_result" in result
-    # read_tool_result 能按占位符路径取回完整内容
     path = result.split("read_tool_result(path='")[1].split("')")[0]
+    # 全文读取有硬上限（资源契约）：超 max_result_chars 截断，防落盘全文灌爆上下文；
+    # 提示用 grep_pattern 缩小范围，而非整段取回。
     full = await read_result.ainvoke({"path": path})
-    assert "长" * 500 in full
+    assert "已截断" in full
+    assert "grep_pattern" in full

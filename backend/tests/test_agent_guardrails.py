@@ -1,18 +1,20 @@
 """Loop 五宪法落地的守卫测试：全局日预算 / 审查 fail-closed / 确定性副作用对账 / 历史截断。"""
 
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from app.agent.gateway import LLMGateway, run_budget
 from app.agent.guardrail.review import (
     LLMOutputReviewer,
     ReviewResult,
     ReviewVerdict,
 )
 from app.agent.guardrail.review_node import _trace_from_messages, build_review_node
+from app.agent.helpers import _truncate_history_tokens
 from app.agent.runtime.budget import (
     BudgetExceeded,
     BudgetTracker,
@@ -20,9 +22,9 @@ from app.agent.runtime.budget import (
     HardBudget,
     Usage,
 )
-from app.agent.service import DbSideEffectVerifier, _truncate_history_tokens
+from app.agent.side_effect import DbSideEffectVerifier
 from app.integrations.embedding import FakeEmbeddingClient
-from app.integrations.llm import ChatMessage
+from app.integrations.llm import ChatMessage, loads_json_repair
 from app.services.copilot import CopilotMemoryService
 from app.services.note import NoteService
 from tests.fakes import (
@@ -66,15 +68,21 @@ def _write_state() -> dict[str, Any]:
     }
 
 
+def test_daily_budget_requires_store() -> None:
+    """Bug #2：DailyBudget 无 store 应报错（构造即 TypeError，避免重启清零绕过日上限）。"""
+    with pytest.raises(TypeError):
+        DailyBudget(max_cost_cny=100.0)  # 缺必填 store
+
+
 def test_daily_budget_token_limit() -> None:
-    budget = DailyBudget(max_cost_usd=100.0, max_tokens=100)
-    budget.record(Usage(input_tokens=150, output_tokens=0))
+    budget = DailyBudget(max_cost_cny=100.0, max_tokens=100, store=_FakeDailyBudgetStore())
+    budget.record(Usage(input_tokens=150, output_tokens=0), cost_cny=0.0)
     with pytest.raises(BudgetExceeded):
         budget.check()
 
 
 class _FakeDailyBudgetStore:
-    """内存版日预算 store，记录 save 调用供断言。"""
+    """内存版日预算 store：`add` 原子累加增量（对齐 DB 的 ON CONFLICT 语义）。"""
 
     def __init__(self) -> None:
         self._rows: dict[date, tuple[float, int]] = {}
@@ -82,21 +90,25 @@ class _FakeDailyBudgetStore:
     async def load(self, day: date) -> tuple[float, int] | None:
         return self._rows.get(day)
 
-    async def save(self, day: date, cost_usd: float, tokens: int) -> None:
-        self._rows[day] = (cost_usd, tokens)
+    async def add(self, day: date, cost_cny: float, tokens: int) -> None:
+        prev = self._rows.get(day)
+        if prev is None:
+            self._rows[day] = (cost_cny, tokens)
+        else:
+            self._rows[day] = (prev[0] + cost_cny, prev[1] + tokens)
 
 
 async def test_daily_budget_load_and_flush() -> None:
     store = _FakeDailyBudgetStore()
     today = datetime.now(UTC).date()
-    await store.save(today, 0.5, 3000)  # 模拟重启前已累计
+    await store.add(today, 0.5, 3000)  # 模拟重启前已累计
 
-    budget = DailyBudget(max_cost_usd=10.0, max_tokens=100_000, store=store)
+    budget = DailyBudget(max_cost_cny=10.0, max_tokens=100_000, store=store)
     await budget.load()
-    assert budget.cost_usd == 0.5
+    assert budget.cost_cny == 0.5
     assert budget.tokens == 3000
 
-    budget.record(Usage(input_tokens=1000, output_tokens=0))
+    budget.record(Usage(input_tokens=1000, output_tokens=0), cost_cny=0.001)
     await budget.flush()
     loaded = await store.load(today)
     assert loaded is not None
@@ -105,10 +117,54 @@ async def test_daily_budget_load_and_flush() -> None:
     assert cost > 0.5
 
 
+async def test_daily_budget_flush_sends_delta_not_absolute() -> None:
+    """flush 只投递增量：并发进程各自 flush 时累加，而非「后写覆盖先写」。"""
+    store = _FakeDailyBudgetStore()
+    today = datetime.now(UTC).date()
+    await store.add(today, 0.5, 3000)  # 已有存量
+
+    budget = DailyBudget(max_cost_cny=10.0, max_tokens=100_000, store=store)
+    await budget.load()
+    budget.record(Usage(input_tokens=1000, output_tokens=0), cost_cny=0.0)
+    await budget.flush()
+    budget.record(Usage(input_tokens=2000, output_tokens=0), cost_cny=0.0)
+    await budget.flush()  # 第二次 flush 只投递第二次增量
+
+    loaded = await store.load(today)
+    assert loaded is not None
+    _, tokens = loaded
+    assert tokens == 6000  # 3000 + 1000 + 2000（增量累加，不丢任何一次）
+
+
+async def test_daily_budget_rollover_preserves_unflushed() -> None:
+    """Bug #3：跨天时未 flush 的增量不丢，转入待清账缓冲区并 flush 到旧 day。"""
+    store = _FakeDailyBudgetStore()
+    budget = DailyBudget(max_cost_cny=10.0, max_tokens=100_000, store=store)
+    today = datetime.now(UTC).date()
+    yesterday = today - timedelta(days=1)
+
+    # 手动构造「昨天有未 flush 增量」的状态（白盒：直接置 day 与 unflushed）
+    budget._day = yesterday
+    budget._cost_cny = 0.5
+    budget._tokens = 1000
+    budget._unflushed_cost_cny = 0.5
+    budget._unflushed_tokens = 1000
+
+    budget._rollover()  # 跨天：旧增量转入 pending，当天归零
+
+    assert budget._day == today
+    assert budget.cost_cny == 0.0
+    assert budget._pending_rollover == [(yesterday, 0.5, 1000)]
+
+    await budget.flush()
+    row = await store.load(yesterday)
+    assert row == (0.5, 1000)  # 旧 day 增量被正确落库，不丢
+
+
 def test_budget_tracker_forwards_to_sink() -> None:
-    sink = DailyBudget(max_cost_usd=100.0, max_tokens=100_000)
+    sink = DailyBudget(max_cost_cny=100.0, max_tokens=100_000, store=_FakeDailyBudgetStore())
     tracker = BudgetTracker(HardBudget(), sink=sink)
-    tracker.record(Usage(input_tokens=1000, output_tokens=500))
+    tracker.record(Usage(input_tokens=1000, output_tokens=500), cost_cny=0.0)
     assert sink.tokens == 1500
 
 
@@ -130,28 +186,48 @@ def test_reviewer_parse_fail_closed_on_structural_mismatch() -> None:
     assert LLMOutputReviewer._parse('{"verdict":" OK "}').verdict is ReviewVerdict.OK
 
 
-async def test_reviewer_self_corrects_parse_failure() -> None:
-    llm = ScriptedLLM(
-        [
-            '{"verdict":"oops"}',
-            '{"verdict":"mismatch","issues":[{"claim":"已写入","tool":"write_memory",'
-            '"evidence":"no_tool_call"}]}',
-        ]
-    )
-    reviewer = LLMOutputReviewer(llm)
+async def test_reviewer_fail_closed_on_semantic_mismatch() -> None:
+    """语义层 mismatch（合法 JSON 但 verdict 越界）→ 单次调用即 fail-closed，不再自纠错。"""
+    llm = ScriptedLLM(['{"verdict":"oops"}'])
+    reviewer = LLMOutputReviewer(LLMGateway(llm=llm))
     result = await reviewer.review("最终回答", "轨迹")
-    assert result.verdict is ReviewVerdict.MISMATCH
-    assert len(llm.calls) == 2
-    # 第二次调用带上了精确错误反馈
-    assert "校验失败" in llm.calls[-1][-1].content
+    assert result.verdict is ReviewVerdict.UNVERIFIED
+    assert len(llm.calls) == 1
 
 
-async def test_reviewer_records_usage_to_sink() -> None:
-    sink = DailyBudget(max_cost_usd=100.0, max_tokens=100_000)
-    llm = ScriptedLLM(['{"verdict":"ok","issues":[]}'], prompt_tokens=[500], completion_tokens=[50])
-    reviewer = LLMOutputReviewer(llm, sink=sink)
-    await reviewer.review("最终回答", "轨迹")
-    assert sink.tokens == 550  # 500 + 50（无 cache）
+def test_loads_json_repair_fixes_malformed_json() -> None:
+    """语法坏 JSON（尾逗号/未加引号 key/代码块外壳）被 json_repair 确定性修复。"""
+    assert loads_json_repair('{"verdict":"ok",}') == {"verdict": "ok"}
+    assert loads_json_repair('{verdict: "ok"}') == {"verdict": "ok"}
+    assert loads_json_repair("```json\n{\"verdict\":\"ok\"}\n```") == {"verdict": "ok"}
+
+
+def test_loads_json_repair_keeps_json_word_inside_content() -> None:
+    """回归：fence 无语言标签或标签大小写不同时，内容里的 'json' 不被误删。"""
+    assert loads_json_repair('```\n{"note": "export to json"}\n```') == {
+        "note": "export to json"
+    }
+    assert loads_json_repair('```JSON\n{"json": 1}\n```') == {"json": 1}
+
+
+async def test_reviewer_repairs_malformed_json_without_retry() -> None:
+    """尾逗号坏 JSON 以前要靠自纠错再烧一次，现在 json_repair 修好、单次调用即 OK。"""
+    llm = ScriptedLLM(['{"verdict":"ok","issues":[],}'])
+    reviewer = LLMOutputReviewer(LLMGateway(llm=llm))
+    result = await reviewer.review("最终回答", "轨迹")
+    assert result.verdict is ReviewVerdict.OK
+    assert len(llm.calls) == 1
+
+
+async def test_reviewer_propagates_budget_exceeded() -> None:
+    """预算硬停（BudgetExceeded）应上抛中止 run，不被吞成 UNVERIFIED（决策 D2「该停就停」）。"""
+    llm = ScriptedLLM(['{"verdict":"ok","issues":[]}'])
+    gateway = LLMGateway(llm=llm)
+    reviewer = LLMOutputReviewer(gateway)
+    with run_budget(BudgetTracker(HardBudget(max_turns=0))):  # turn_count 0 >= 0 → 预检即超限
+        with pytest.raises(BudgetExceeded):
+            await reviewer.review("最终回答", "轨迹")
+    assert len(llm.calls) == 0  # 预检即中止，根本没调 LLM
 
 
 def test_trace_from_messages_pairs_calls_with_results_by_id() -> None:
@@ -183,6 +259,38 @@ def test_trace_from_messages_marks_missing_result() -> None:
     ]
     trace = _trace_from_messages(messages)
     assert 'create_note({"title": "A"}) → （未返回）' in trace
+
+
+def test_trace_from_messages_keeps_orphan_results_in_stream_order() -> None:
+    """配不上任何调用的孤儿返回，应夹在它在流中的位置，而非甩到末尾。"""
+    messages = [
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "create_note", "args": {"title": "A"}, "id": "c1"}],
+        ),
+        ToolMessage(content="无主返回", tool_call_id="missing"),  # id 配不到任何调用
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "create_note", "args": {"title": "B"}, "id": "c2"}],
+        ),
+        ToolMessage(content="已创建 B", tool_call_id="c2"),
+        ToolMessage(content="已创建 A", tool_call_id="c1"),
+    ]
+    lines = _trace_from_messages(messages).splitlines()
+    assert lines[0] == "工具轨迹："
+    assert lines[1].startswith('- create_note({"title": "A"})')
+    assert lines[2] == "- unknown → 无主返回"
+    assert lines[3].startswith('- create_note({"title": "B"})')
+
+
+def test_trace_from_messages_keeps_nameless_call_paired() -> None:
+    """无名调用不跳过，渲染为 unknown(args) 并按 id 配对。"""
+    messages = [
+        AIMessage(content="", tool_calls=[{"name": "", "args": {"title": "X"}, "id": "c1"}]),
+        ToolMessage(content="已创建 X", tool_call_id="c1"),
+    ]
+    trace = _trace_from_messages(messages)
+    assert 'unknown({"title": "X"}) → 已创建 X' in trace
 
 
 async def test_review_node_verifier_forces_mismatch() -> None:

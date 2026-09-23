@@ -91,7 +91,7 @@ def test_rrf_fuse_score() -> None:
 async def test_rerank_chunks_top_n() -> None:
     ids = [uuid.uuid4() for _ in range(5)]
     chunks = [_chunk(SourceType.DOCUMENT, chunk_id) for chunk_id in ids]
-    ranked = await rerank_chunks("q", chunks, FakeRerankerClient(), top_n=3, min_score=0.0)
+    ranked = await rerank_chunks("q", chunks, FakeRerankerClient().rerank, top_n=3, min_score=0.0)
     # FakeReranker 按 index 递减分，故 top_n 保留前 3 个
     assert [chunk.chunk_id for chunk in ranked] == ids[:3]
 
@@ -108,7 +108,7 @@ async def test_rerank_chunks_filters_low_score() -> None:
                 RerankResult(index=2, score=0.8),
             ]
 
-    ranked = await rerank_chunks("q", chunks, _Reranker(), top_n=3, min_score=0.3)
+    ranked = await rerank_chunks("q", chunks, _Reranker().rerank, top_n=3, min_score=0.3)
     # 0.1 低于阈值被过滤，剩余按分数降序
     assert [chunk.chunk_id for chunk in ranked] == [ids[0], ids[2]]
 

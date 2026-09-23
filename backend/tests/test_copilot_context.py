@@ -27,6 +27,7 @@ def _mem(kind: MemoryKind, content: str) -> CopilotMemory:
 
 def _recalled(**kwargs: list[CopilotMemory]) -> RecalledMemories:
     return RecalledMemories(
+        constraint=kwargs.get("constraint", []),
         procedural=kwargs.get("procedural", []),
         semantic=kwargs.get("semantic", []),
         episodic=kwargs.get("episodic", []),

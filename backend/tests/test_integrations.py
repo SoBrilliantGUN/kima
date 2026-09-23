@@ -108,7 +108,7 @@ async def test_word_parser_preserves_tables(monkeypatch: pytest.MonkeyPatch) -> 
         "<tbody><tr><td>RAG</td><td>检索增强</td></tr></tbody></table>"
     )
     monkeypatch.setattr(
-        "app.integrations.parser.mammoth.convert_to_html",
+        "app.integrations.parser_word.mammoth.convert_to_html",
         lambda _: SimpleNamespace(value=html),
     )
 

@@ -12,6 +12,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage
 
 from app.agent.service import CopilotService
+from app.agent.tuning import CopilotTuning
 from app.api.deps import get_chat_service, get_copilot_service
 from app.core.memory_store import FileMemoryStore
 from app.integrations.embedding import FakeEmbeddingClient
@@ -131,7 +132,7 @@ def _make_copilot_service(tmp_path: Path) -> tuple[CopilotService, FakeChatRepos
         memory_store=FileMemoryStore(tmp_path),
         chat_repository=chat_repo,
         event_repository=FakeCopilotEventRepository(),
-        max_result_chars=4000,
+        tuning=CopilotTuning(max_result_chars=4000),
     )
     return service, chat_repo
 

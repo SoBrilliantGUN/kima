@@ -8,6 +8,7 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from app.agent.approval import ApprovalPolicy
 from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.reactive import build_reactive_graph
 from app.agent.toolmeta import SideEffectLevel, ToolMeta
@@ -15,6 +16,11 @@ from app.agent.toolmeta import SideEffectLevel, ToolMeta
 # 把 create_note 标为写工具（MEDIUM），使 HITL 门禁生效（不强制幂等，测试工具无该参数）
 _WRITE_REGISTRY = {
     "create_note": ToolMeta("create_note", SideEffectLevel.MEDIUM, "tool_result", 500)
+}
+
+# HIGH 写工具（update_profile 覆盖人设档案）：分级审批里唯一同步打断人的操作
+_HIGH_REGISTRY = {
+    "update_profile": ToolMeta("update_profile", SideEffectLevel.HIGH, "tool_result", 100)
 }
 
 
@@ -119,3 +125,78 @@ async def test_write_tool_interrupt_and_reject() -> None:
     ]
     assert calls == []  # 工具未被调用
     assert any("tools" in c for c in resumed)
+
+
+async def test_medium_write_auto_executes_under_graded_policy() -> None:
+    """分级模式下 MEDIUM 写（建笔记）自动放行 + 事后审计，不打断人。"""
+    calls: list[str] = []
+
+    @tool
+    async def create_note(title: str, content: str) -> str:
+        """写笔记。"""
+        calls.append(title)
+        return f"created {title}"
+
+    model = Model(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "create_note", "args": {"title": "t", "content": "c"}, "id": "c1"}
+                ],
+            ),
+            AIMessage(content="写好了。"),
+        ]
+    )
+    graph = build_reactive_graph(
+        model,
+        [create_note],
+        checkpointer=InMemorySaver(),
+        runtime=RuntimeConfig(approval_policy=ApprovalPolicy.graded()),
+        registry=_WRITE_REGISTRY,  # create_note = MEDIUM → NOTIFY
+    )
+    config = {"configurable": {"thread_id": "t3"}}
+    chunks = [c async for c in graph.astream(_initial(), config=config, stream_mode="updates")]
+    assert not any("__interrupt__" in c for c in chunks)  # 不打断
+    assert calls == ["t"]  # 自动执行
+
+
+async def test_high_write_interrupt_carries_evidence() -> None:
+    """分级模式下 HIGH 写（覆盖人设档案）打断人，interrupt 载荷带证据包（level+summary）。"""
+    calls: list[str] = []
+
+    @tool
+    async def update_profile(kind: str, content: str) -> str:
+        """改档案。"""
+        calls.append(kind)
+        return f"updated {kind}"
+
+    model = Model(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "update_profile",
+                        "args": {"kind": "soul", "content": "x"},
+                        "id": "c1",
+                    }
+                ],
+            ),
+            AIMessage(content="好的。"),
+        ]
+    )
+    graph = build_reactive_graph(
+        model,
+        [update_profile],
+        checkpointer=InMemorySaver(),
+        runtime=RuntimeConfig(approval_policy=ApprovalPolicy.graded()),
+        registry=_HIGH_REGISTRY,
+    )
+    config = {"configurable": {"thread_id": "t4"}}
+    chunks = [c async for c in graph.astream(_initial(), config=config, stream_mode="updates")]
+    interrupts = [c["__interrupt__"][0].value for c in chunks if "__interrupt__" in c]
+    assert len(interrupts) == 1
+    assert interrupts[0]["level"] == "high"
+    assert interrupts[0]["summary"] == "覆盖 soul 人设档案"
+    assert calls == []  # 未执行

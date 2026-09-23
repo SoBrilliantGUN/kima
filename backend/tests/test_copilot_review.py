@@ -7,8 +7,10 @@ from pathlib import Path
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
+from app.agent.events import CopilotReviewEvent
 from app.agent.guardrail.review import ReviewIssue, ReviewResult, ReviewVerdict
-from app.agent.service import CopilotReviewEvent, CopilotService
+from app.agent.service import CopilotService
+from app.agent.tuning import CopilotTuning
 from app.core.memory_store import FileMemoryStore
 from app.integrations.embedding import FakeEmbeddingClient
 from app.integrations.rerank import FakeRerankerClient
@@ -137,9 +139,8 @@ def make_service(
         memory_store=FileMemoryStore(tmp_path),
         chat_repository=chat_repo,
         event_repository=event_repo,
-        max_result_chars=4000,
+        tuning=CopilotTuning(max_result_chars=4000, review_max_attempts=review_max_attempts),
         reviewer=reviewer,
-        review_max_attempts=review_max_attempts,
     )
     return service, event_repo, chat_repo, memory_repo
 

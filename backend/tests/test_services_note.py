@@ -59,6 +59,24 @@ async def test_update_title_and_content(service: NoteService) -> None:
     assert updated.content_markdown == "# 正文"
 
 
+async def test_create_with_content_dedups_same_hash(service: NoteService) -> None:
+    """Copilot create_note 幂等去重：同正文两次创建返回同一篇（崩溃重放不重复建）。"""
+    first = await service.create_with_content("标题", "正文")
+    second = await service.create_with_content("另一标题", "正文")
+    assert second.id == first.id
+    assert second.title == "标题"  # 返回已存在的那篇，不覆盖标题
+    _, total = await service.list(limit=10, offset=0)
+    assert total == 1
+
+
+async def test_update_content_clears_dedup_hash(service: NoteService) -> None:
+    """手工编辑退出 Copilot 去重域：改正文后 content_hash 置 NULL，不再作为去重锚点。"""
+    note = await service.create_with_content("标题", "正文")
+    await service.update(note.id, NoteUpdate(content_markdown="新正文"))
+    updated = await service.get(note.id)
+    assert updated.content_hash is None
+
+
 async def test_update_missing_raises_not_found(service: NoteService) -> None:
     with pytest.raises(NotFoundError):
         await service.update(uuid.uuid4(), NoteUpdate(title="标题"))

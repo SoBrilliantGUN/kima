@@ -2,11 +2,12 @@
 
 import pytest
 
-from app.agent.runtime.budget import DailyBudget
+from app.agent.gateway import LLMGateway
 from app.integrations.embedding import FakeEmbeddingClient
 from app.integrations.llm import StructuredParseError
 from app.models.copilot import MemoryKind
-from app.services.copilot import ConflictVerdict, CopilotMemoryService, LLMConflictJudge
+from app.services.conflict import ConflictVerdict, LLMConflictJudge
+from app.services.copilot import CopilotMemoryService
 from tests.fakes import FakeConflictJudge, FakeCopilotMemoryRepository, ScriptedLLM
 
 
@@ -23,16 +24,27 @@ def make_service(judge: FakeConflictJudge) -> CopilotMemoryService:
     )
 
 
-async def test_duplicate_supersedes_old() -> None:
+async def test_duplicate_dedups_no_new_row() -> None:
     judge = FakeConflictJudge(["duplicate"])
     service = make_service(judge)
     first = await service.write_memory(MemoryKind.EPISODIC, "用户喜欢简洁回答")
     second = await service.write_memory(MemoryKind.EPISODIC, "用户喜欢简洁回答")
 
-    assert first.id != second.id
-    assert first.superseded is True  # 输家留痕
-    assert second.superseded is False
-    assert judge.calls  # LLM 判定被调用
+    assert second.id == first.id  # 去重：不新建行，返回旧条目
+    assert first.superseded is False  # 旧条目不被废弃
+    assert first.access_count == 1  # 去重即「又命中」：touch 续命
+    assert judge.calls  # LLM 判定被调用（第二次写入时）
+
+
+async def test_cross_kind_duplicate_does_not_dedup() -> None:
+    """跨型「语义等价」不去重：情节/事实角色不同，同文本也各留一条。"""
+    judge = FakeConflictJudge(["duplicate"])
+    service = make_service(judge)
+    fact = await service.write_memory(MemoryKind.SEMANTIC, "用户是副总经理")
+    episode = await service.write_memory(MemoryKind.EPISODIC, "用户是副总经理")
+
+    assert episode.id != fact.id  # 不同型不去重，照写新行
+    assert fact.superseded is False  # 事实也不被废弃
 
 
 async def test_contradiction_new_wins() -> None:
@@ -68,6 +80,28 @@ async def test_semantic_entity_override_increments_version() -> None:
     assert second.content == "用户是副总经理"
 
 
+async def test_cross_kind_conflict_supersedes_preference() -> None:
+    """跨型冲突（文章「套餐灾难」）：新情节 supersede 旧偏好。"""
+    judge = FakeConflictJudge(["contradiction"])
+    service = make_service(judge)
+    preference = await service.write_memory(MemoryKind.PROCEDURAL, "喜欢 VIP 免费洗车权益")
+    episodic = await service.write_memory(MemoryKind.EPISODIC, "因成本控制降级为基础版")
+
+    assert preference.superseded is True  # 情节压过偏好（跨型）
+    assert preference.superseded_by == episodic.id  # 留痕：谁压了它
+    assert episodic.superseded is False
+
+
+async def test_soft_write_does_not_supersede_constraint() -> None:
+    """约束是红线孤岛：软记忆（情节）的跨型冲突候选不含 constraint，约束不被覆盖。"""
+    judge = FakeConflictJudge(["contradiction"])
+    service = make_service(judge)
+    constraint = await service.write_memory(MemoryKind.CONSTRAINT, "禁止使用 ORM")
+    await service.write_memory(MemoryKind.EPISODIC, "昨天用 ORM 连了数据库")
+
+    assert constraint.superseded is False
+
+
 def test_conflict_parse_strict_rejects_bad_length() -> None:
     with pytest.raises(StructuredParseError):
         LLMConflictJudge._parse_strict('["duplicate"]', expected=2)
@@ -88,17 +122,9 @@ def test_conflict_parse_strict_normalizes_whitespace() -> None:
     assert verdicts == [ConflictVerdict.DUPLICATE, ConflictVerdict.NONE]
 
 
-async def test_conflict_self_corrects_bad_length() -> None:
-    llm = ScriptedLLM(['["duplicate"]', '["duplicate","none"]'])
-    judge = LLMConflictJudge(llm)
+async def test_conflict_fail_closed_on_bad_length() -> None:
+    llm = ScriptedLLM(['["duplicate"]'])
+    judge = LLMConflictJudge(LLMGateway(llm=llm))
     verdicts = await judge.judge("新记忆", ["候选0", "候选1"])
-    assert verdicts == [ConflictVerdict.DUPLICATE, ConflictVerdict.NONE]
-    assert len(llm.calls) == 2
-
-
-async def test_conflict_records_usage_to_sink() -> None:
-    sink = DailyBudget(max_cost_usd=100.0, max_tokens=100_000)
-    llm = ScriptedLLM(['["duplicate"]'], prompt_tokens=[300], completion_tokens=[30])
-    judge = LLMConflictJudge(llm, sink=sink)
-    await judge.judge("新记忆", ["候选0"])
-    assert sink.tokens == 330  # 300 + 30（无 cache）
+    assert verdicts == [ConflictVerdict.NONE, ConflictVerdict.NONE]
+    assert len(llm.calls) == 1

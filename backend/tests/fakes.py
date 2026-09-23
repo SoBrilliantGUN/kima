@@ -1,16 +1,18 @@
 import math
 import uuid
 from collections.abc import AsyncIterator, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 from app.agent.guardrail.review import ReviewResult, ReviewVerdict
+from app.agent.memory_classifier import MemoryClassification
 from app.integrations.llm import ChatMessage, ChatResult
 from app.integrations.parser import ParsedDocument, ParserError, SourceType
 from app.models.copilot import CopilotEvent, CopilotMemory, MemoryKind
 from app.models.document import MAX_RETRIES, Document, DocumentChunk, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase
 from app.models.note import Note
-from app.services.copilot import ConflictVerdict
+from app.services.conflict import ConflictVerdict
 
 
 class FakeKnowledgeBaseRepository:
@@ -107,6 +109,14 @@ class FakeNoteRepository:
             if note.content_hash == content_hash:
                 return note
         return None
+
+    async def create_unique(self, note: Note) -> Note | None:
+        """模拟唯一索引：content_hash 已存在（且非空）则返回 None，否则落库。"""
+        for existing in self._store.values():
+            if existing.content_hash is not None and existing.content_hash == note.content_hash:
+                return None
+        await self.add(note)
+        return note
 
 
 class FakeDocumentRepository:
@@ -213,6 +223,23 @@ class FakeFileStore:
             self.deleted.append(path)
 
 
+class FakeDailyBudgetStore:
+    """内存版日预算 store：``add`` 原子累加增量（对齐 DB 的 ON CONFLICT 语义）。"""
+
+    def __init__(self) -> None:
+        self._rows: dict[date, tuple[float, int]] = {}
+
+    async def load(self, day: date) -> tuple[float, int] | None:
+        return self._rows.get(day)
+
+    async def add(self, day: date, cost_cny: float, tokens: int) -> None:
+        prev = self._rows.get(day)
+        if prev is None:
+            self._rows[day] = (cost_cny, tokens)
+        else:
+            self._rows[day] = (prev[0] + cost_cny, prev[1] + tokens)
+
+
 class FakeDocumentParser:
     """假分发器（满足 DocumentParser 胖签名），ingest/worker 注入用。"""
 
@@ -291,11 +318,17 @@ class FakeCopilotMemoryRepository:
             memory.created_at = now
         if memory.updated_at is None:
             memory.updated_at = now
+        # 模拟列默认值（SQLAlchemy 在 INSERT 时才会应用 default=0，直接构造时为 None）
+        if memory.access_count is None:
+            memory.access_count = 0
         self._store[memory.id] = memory
         return memory
 
     async def get(self, memory_id: uuid.UUID) -> CopilotMemory | None:
         return self._store.get(memory_id)
+
+    async def get_many(self, memory_ids: list[uuid.UUID]) -> list[CopilotMemory]:
+        return [self._store[mid] for mid in memory_ids if mid in self._store]
 
     async def update(self, memory: CopilotMemory) -> CopilotMemory:
         memory.updated_at = datetime.now(UTC)
@@ -305,6 +338,16 @@ class FakeCopilotMemoryRepository:
     async def delete(self, memory: CopilotMemory) -> None:
         self._store.pop(memory.id, None)
 
+    async def delete_superseded_older_than(self, cutoff: datetime) -> int:
+        doomed = [
+            m
+            for m in self._store.values()
+            if m.superseded and m.superseded_at is not None and m.superseded_at < cutoff
+        ]
+        for memory in doomed:
+            self._store.pop(memory.id, None)
+        return len(doomed)
+
     async def search(
         self, kind: MemoryKind, query_vec: list[float], top_k: int
     ) -> list[CopilotMemory]:
@@ -312,6 +355,51 @@ class FakeCopilotMemoryRepository:
             m
             for m in self._store.values()
             if m.kind == kind and not m.superseded and m.embedding is not None
+        ]
+        candidates.sort(key=lambda m: _cosine_distance(m.embedding or [], query_vec))
+        return candidates[:top_k]
+
+    async def search_lexical(
+        self, kind: MemoryKind, query: str, top_k: int
+    ) -> list[CopilotMemory]:
+        """词法召回模拟：子串命中（单测无 pg_jieba，用「query 出现在 content 里」近似 BM25）。"""
+        candidates = [
+            m
+            for m in self._store.values()
+            if m.kind == kind and not m.superseded and query in m.content
+        ]
+        return candidates[:top_k]
+
+    async def search_cross_kind(
+        self, kinds: list[MemoryKind], query_vec: list[float], top_k: int
+    ) -> list[CopilotMemory]:
+        candidates = [
+            m
+            for m in self._store.values()
+            if m.kind in kinds and not m.superseded and m.embedding is not None
+        ]
+        candidates.sort(key=lambda m: _cosine_distance(m.embedding or [], query_vec))
+        return candidates[:top_k]
+
+    async def search_recoverable(
+        self,
+        kinds: list[MemoryKind],
+        query_vec: list[float],
+        similarity_threshold: float,
+        now: datetime,
+        window: timedelta,
+        top_k: int,
+    ) -> list[CopilotMemory]:
+        cutoff = now - window
+        candidates = [
+            m
+            for m in self._store.values()
+            if m.kind in kinds
+            and m.superseded
+            and m.superseded_at is not None
+            and m.superseded_at >= cutoff
+            and m.embedding is not None
+            and _cosine_distance(m.embedding or [], query_vec) <= 1.0 - similarity_threshold
         ]
         candidates.sort(key=lambda m: _cosine_distance(m.embedding or [], query_vec))
         return candidates[:top_k]
@@ -326,6 +414,22 @@ class FakeCopilotMemoryRepository:
             if m.kind == kind and m.entity_id == entity_id and not m.superseded
         ]
         return max(matches, key=lambda m: m.version) if matches else None
+
+    async def overwrite_entity(
+        self,
+        memory_id: uuid.UUID,
+        content: str,
+        embedding: list[float],
+        trigger_conditions: dict[str, Any] | None,
+    ) -> CopilotMemory:
+        memory = self._store.get(memory_id)
+        assert memory is not None
+        memory.content = content
+        memory.embedding = embedding
+        memory.trigger_conditions = trigger_conditions
+        memory.version += 1
+        memory.updated_at = datetime.now(UTC)
+        return memory
 
     async def count_active(self, kind: MemoryKind) -> int:
         return len([m for m in self._store.values() if m.kind == kind and not m.superseded])
@@ -369,6 +473,20 @@ class FakeConflictJudge:
         verdicts = list(self._verdicts)
         verdicts = verdicts + ["none"] * (len(candidates) - len(verdicts))
         return [ConflictVerdict(v) for v in verdicts[: len(candidates)]]
+
+
+class FakeMemoryClassifier:
+    """确定性分类器：按给定分类逐次回放（无结果回退 None），记录调用。"""
+
+    def __init__(self, classifications: list[MemoryClassification | None] | None = None) -> None:
+        self._classifications = list(classifications or [])
+        self.calls: list[str] = []
+
+    async def classify(self, raw: str) -> MemoryClassification | None:
+        self.calls.append(raw)
+        if self._classifications:
+            return self._classifications.pop(0)
+        return None
 
 
 class FakeOutputReviewer:

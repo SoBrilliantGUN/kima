@@ -89,3 +89,151 @@ async def test_search_memory_touches_access_count() -> None:
     assert len(hits) == 1
     assert hits[0].access_count == 1
     assert hits[0].last_access is not None
+
+
+async def test_recall_touches_recalled_memories() -> None:
+    """召回命中回写 access_count/last_access（ACT-R 频率/近期增益的活水）。"""
+    repository = FakeCopilotMemoryRepository()
+    service = make_service(repository)
+    await service.write_memory(MemoryKind.SEMANTIC, "用户是副总经理", entity_id="user:role")
+
+    recalled = await service.recall("用户是副总经理")
+    assert len(recalled.semantic) == 1
+    assert recalled.semantic[0].access_count >= 1
+    assert recalled.semantic[0].last_access is not None
+
+
+async def test_recall_revives_superseded_within_window() -> None:
+    """软删除窗口：窗口期内被强命中的 superseded 记忆翻回 active，重新上场。"""
+    repository = FakeCopilotMemoryRepository()
+    embedder = FakeEmbeddingClient(dimension=8)
+    memory = CopilotMemory(
+        kind=MemoryKind.SEMANTIC,
+        content="用户是副总经理",
+        embedding=await embedder.embed_query("用户是副总经理"),
+        superseded=True,
+        superseded_at=datetime.now(UTC),
+    )
+    await repository.add(memory)
+    service = make_service(repository)
+
+    recalled = await service.recall("用户是副总经理")
+    assert len(recalled.semantic) == 1
+    assert recalled.semantic[0].superseded is False  # 已复活
+    assert recalled.semantic[0].superseded_at is None
+
+
+async def test_recall_does_not_revive_when_superseder_alive() -> None:
+    """复活守卫：压它的那条记忆还活着 → 真冲突仍成立，不复活。"""
+    repository = FakeCopilotMemoryRepository()
+    embedder = FakeEmbeddingClient(dimension=8)
+    winner = CopilotMemory(
+        kind=MemoryKind.SEMANTIC,
+        content="用户改用 React",
+        embedding=await embedder.embed_query("用户改用 React"),
+        superseded=False,
+    )
+    await repository.add(winner)
+    loser = CopilotMemory(
+        kind=MemoryKind.SEMANTIC,
+        content="用户用 Vue",
+        embedding=await embedder.embed_query("用户用 Vue"),
+        superseded=True,
+        superseded_at=datetime.now(UTC),
+        superseded_by=winner.id,
+    )
+    await repository.add(loser)
+    service = make_service(repository)
+
+    recalled = await service.recall("用户用 Vue")
+    assert all(m.content != "用户用 Vue" for m in recalled.semantic)
+    assert loser.superseded is True  # 未被复活
+
+
+async def test_recall_revives_when_superseder_gone() -> None:
+    """压它的那条已废弃（superseded）→ 复活守卫放行，旧记忆翻回。"""
+    repository = FakeCopilotMemoryRepository()
+    embedder = FakeEmbeddingClient(dimension=8)
+    winner = CopilotMemory(
+        kind=MemoryKind.SEMANTIC,
+        content="用户改用 React",
+        embedding=await embedder.embed_query("用户改用 React"),
+        superseded=True,
+    )
+    await repository.add(winner)
+    loser = CopilotMemory(
+        kind=MemoryKind.SEMANTIC,
+        content="用户用 Vue",
+        embedding=await embedder.embed_query("用户用 Vue"),
+        superseded=True,
+        superseded_at=datetime.now(UTC),
+        superseded_by=winner.id,
+    )
+    await repository.add(loser)
+    service = make_service(repository)
+
+    recalled = await service.recall("用户用 Vue")
+    assert any(m.content == "用户用 Vue" for m in recalled.semantic)
+
+
+async def test_recall_does_not_revive_outside_window() -> None:
+    """软删除窗口过期：superseded_at 超过 N 天，不再复活。"""
+    repository = FakeCopilotMemoryRepository()
+    embedder = FakeEmbeddingClient(dimension=8)
+    memory = CopilotMemory(
+        kind=MemoryKind.SEMANTIC,
+        content="用户是副总经理",
+        embedding=await embedder.embed_query("用户是副总经理"),
+        superseded=True,
+        superseded_at=datetime.now(UTC) - timedelta(days=30),
+    )
+    await repository.add(memory)
+    service = make_service(repository)
+
+    recalled = await service.recall("用户是副总经理")
+    assert len(recalled.semantic) == 0
+
+
+async def test_recall_does_not_revive_below_floor() -> None:
+    """激活门槛：衰减到 recall floor 以下的 superseded 情节不复活（防僵尸 active 行）。"""
+    repository = FakeCopilotMemoryRepository()
+    embedder = FakeEmbeddingClient(dimension=8)
+    memory = CopilotMemory(
+        kind=MemoryKind.EPISODIC,
+        content="很久以前的事件",
+        embedding=await embedder.embed_query("很久以前的事件"),
+        ttl_days=30,
+        created_at=datetime.now(UTC).replace(year=2000),
+        superseded=True,
+        superseded_at=datetime.now(UTC),
+    )
+    await repository.add(memory)
+    service = make_service(repository)
+
+    await service.recall("很久以前的事件")
+    assert memory.superseded is True  # 未被复活
+
+
+async def test_delete_superseded_older_than_removes_expired() -> None:
+    """遗忘收尾：软删除窗口过期的 superseded 记忆被硬删，窗口内的保留。"""
+    repository = FakeCopilotMemoryRepository()
+    now = datetime.now(UTC)
+    expired = CopilotMemory(
+        kind=MemoryKind.SEMANTIC,
+        content="过期记忆",
+        superseded=True,
+        superseded_at=now - timedelta(days=8),
+    )
+    in_window = CopilotMemory(
+        kind=MemoryKind.SEMANTIC,
+        content="窗口内记忆",
+        superseded=True,
+        superseded_at=now - timedelta(days=1),
+    )
+    await repository.add(expired)
+    await repository.add(in_window)
+
+    deleted = await repository.delete_superseded_older_than(now - timedelta(days=7))
+    assert deleted == 1
+    assert await repository.get(expired.id) is None  # 已删
+    assert await repository.get(in_window.id) is not None  # 保留

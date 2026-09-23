@@ -1,8 +1,27 @@
-"""错误分级 + 退避重试：瞬时异常重试、永久异常不重试。"""
+"""错误分级 + 退避重试 + 幂等键稳定序号 + 熔断持久化/级联 + last_error 分类。
 
-from app.agent.resilience.error_classifier import is_retryable
+对照《Agent 挂了，如何不丢状态、不丢钱、不丢数据地拉起来？》的三大容错：
+- exactly-once：幂等键必须来自持久化稳定序号，而非「消息内下标」或「运行时局部变量」；
+- 动作指纹持久化：熔断失败计数跨崩溃不归零；
+- 级联熔断：共享依赖挂 → 同资源工具一起熔断；
+- 崩溃现场：last_error 分类标签随检查点持久化。
+"""
+
+import time
+from typing import cast
+
+from langchain_core.messages import AIMessage
+
+from app.agent.resilience.circuit_breaker import CircuitBreaker
+from app.agent.resilience.error_classifier import classify_error, is_retryable
+from app.agent.resilience.result import ToolFailure, ToolOutcome
 from app.agent.resilience.retry import Backoff, RetryPolicy, with_retry
+from app.agent.runtime.planner import Plan, PlanStep
+from app.agent.runtime.reactive import _inject_idempotency_keys
+from app.agent.runtime.state import AgentState
+from app.agent.toolmeta import SideEffectLevel, ToolMeta
 from app.core.exceptions import NotFoundError
+from app.repositories.breaker import InMemoryBreakerStore
 
 
 def test_is_retryable() -> None:
@@ -46,3 +65,98 @@ async def test_with_retry_no_retry_permanent() -> None:
     else:
         raise AssertionError("应抛 NotFoundError")
     assert attempts == 1
+
+
+# —— 幂等键稳定序号 / 熔断持久化 / 级联 / last_error 分类 ——
+
+# 两个强制幂等的写工具（create_note / write_memory），用于幂等键碰撞回归
+_WRITE_REGISTRY = {
+    "create_note": ToolMeta("create_note", SideEffectLevel.MEDIUM, "tool_result", 500, True),
+    "write_memory": ToolMeta("write_memory", SideEffectLevel.MEDIUM, "tool_result", 5000, True),
+}
+
+
+def _idempotency_key(state: AgentState) -> str:
+    last = state["messages"][-1]
+    assert isinstance(last, AIMessage)
+    return str(last.tool_calls[0]["args"]["idempotency_key"])
+
+
+def test_idempotency_keys_monotonic_no_collision() -> None:
+    """P0-1 回归：幂等键用单调序号而非消息内下标，跨轮不碰撞。
+
+    旧实现用 ``enumerate`` 下标做键——第 1 轮的 create_note 和第 2 轮的 write_memory 都拿
+    ``{run_id}:0``，``IdempotencyRegistry`` 命中缓存后第二次写被静默吞掉（丢数据）。
+    """
+    run_id = "r1"
+    turn1 = cast(
+        AgentState,
+        {"messages": [AIMessage(content="", tool_calls=[
+            {"name": "create_note", "args": {"title": "a"}, "id": "c1"},
+        ])]},
+    )
+    s1, seq1 = _inject_idempotency_keys(turn1, run_id, _WRITE_REGISTRY, 0)
+    assert _idempotency_key(s1) == "r1:0"
+    assert seq1 == 1
+
+    turn2 = cast(
+        AgentState,
+        {"messages": [AIMessage(content="", tool_calls=[
+            {"name": "write_memory", "args": {"kind": "semantic"}, "id": "c2"},
+        ])]},
+    )
+    s2, seq2 = _inject_idempotency_keys(turn2, run_id, _WRITE_REGISTRY, seq1)
+    assert _idempotency_key(s2) == "r1:1"
+    assert seq2 == 2
+
+
+def test_plan_roundtrip_preserves_idempotency_seq_and_last_error() -> None:
+    """P0-2：plan 检查点序列化往返保留 idempotency_seq 与 last_error。"""
+    plan = Plan(steps=(PlanStep(step_id="1", action="create_note", params={}),))
+    plan.idempotency_seq = 5
+    plan.last_error = {"message": "boom", "kind": "permanent"}
+    restored = Plan.from_dict(plan.to_dict())
+    assert restored.idempotency_seq == 5
+    assert restored.last_error == {"message": "boom", "kind": "permanent"}
+
+
+def test_classify_error_transient_vs_permanent() -> None:
+    """崩溃现场（第五层）的分类标签：瞬时可重试 / 永久别重试。"""
+    assert classify_error(ConnectionError("x")) == "transient"
+    assert classify_error(TimeoutError()) == "transient"
+    assert classify_error(ToolFailure(outcome=ToolOutcome.TRANSIENT, reason="r")) == "transient"
+    assert classify_error(ToolFailure(outcome=ToolOutcome.PERMANENT, reason="r")) == "permanent"
+    assert classify_error(NotFoundError("不存在")) == "permanent"
+
+
+async def test_breaker_load_restores_failure_count() -> None:
+    """熔断失败计数跨崩溃不归零：崩溃前已失败 2 次，恢复后第 3 次即熔断（而非从头算）。"""
+    store = InMemoryBreakerStore()
+    # 模拟崩溃前落库的失败计数（threshold=3，还差 1 次即熔断）
+    await store.save("flaky", "closed", [time.time(), time.time()])
+
+    breaker = CircuitBreaker(failure_threshold=3, store=store)
+    await breaker.load_all()
+    assert breaker.is_available("flaky") is True  # 尚未到阈值
+
+    breaker.record_failure("flaky")  # 恢复后第 3 次 → OPEN
+    assert breaker.is_available("flaky") is False
+
+
+def test_breaker_cascade_resource_trips_all_tools() -> None:
+    """级联熔断：共享依赖（db）挂 → 同资源所有工具一起熔断，不同资源不受影响。"""
+    breaker = CircuitBreaker(failure_threshold=2)
+    # 两个 db 工具各自失败 1 次，db 资源累计 2 次 → resource:db 熔断
+    breaker.record_failure("search_kb", resource="db")
+    breaker.record_failure("list_notes", resource="db")
+
+    assert breaker.is_available("search_kb", "db") is False
+    assert breaker.is_available("read_doc", "db") is False  # 自己没失败过，但被资源拖累
+    assert breaker.is_available("search_web", "web") is True  # 非 db 不受影响
+
+    # available() 按资源过滤：db 工具全部剔除
+    remaining = breaker.available(
+        ["search_kb", "read_doc", "search_web"],
+        {"search_kb": "db", "read_doc": "db", "search_web": "web"},
+    )
+    assert remaining == ["search_web"]

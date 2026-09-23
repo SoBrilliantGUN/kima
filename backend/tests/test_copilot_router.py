@@ -6,15 +6,16 @@ from pathlib import Path
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 
-from app.agent.runtime.router import Intent, classify_by_rules, classify_intent
-from app.agent.runtime.workflow import COMPLAINT_RESPONSE, REJECT_RESPONSE
-from app.agent.service import (
+from app.agent.events import (
     CopilotDeltaEvent,
     CopilotDoneEvent,
     CopilotMetaEvent,
-    CopilotService,
     CopilotStreamEvent,
 )
+from app.agent.runtime.router import Intent, classify_by_rules, classify_intent
+from app.agent.runtime.workflow import COMPLAINT_RESPONSE, REJECT_RESPONSE
+from app.agent.service import CopilotService
+from app.agent.tuning import CopilotTuning
 from app.core.memory_store import FileMemoryStore
 from app.integrations.embedding import FakeEmbeddingClient
 from app.integrations.rerank import FakeRerankerClient
@@ -143,7 +144,7 @@ def make_service(
         memory_store=FileMemoryStore(tmp_path),
         chat_repository=chat_repo,
         event_repository=event_repo,
-        max_result_chars=4000,
+        tuning=CopilotTuning(max_result_chars=4000),
     ), event_repo, chat_repo
 
 

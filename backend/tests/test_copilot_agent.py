@@ -7,13 +7,16 @@ from pathlib import Path
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
-from app.agent.service import (
+from app.agent.events import (
     CopilotDeltaEvent,
     CopilotDoneEvent,
     CopilotMetaEvent,
-    CopilotService,
     CopilotStepEvent,
 )
+from app.agent.runtime.budget import HardBudget
+from app.agent.runtime.config import RuntimeConfig
+from app.agent.service import CopilotService
+from app.agent.tuning import CopilotTuning
 from app.core.memory_store import FileMemoryStore
 from app.integrations.embedding import FakeEmbeddingClient
 from app.integrations.rerank import FakeRerankerClient
@@ -96,7 +99,7 @@ class FakeChatRepository:
 
 
 def make_service(
-    tmp_path: Path, model: ScriptedAgentModel
+    tmp_path: Path, model: ScriptedAgentModel, runtime: RuntimeConfig | None = None
 ) -> tuple[CopilotService, FakeCopilotEventRepository, FakeChatRepository]:
     kb_repo = FakeKnowledgeBaseRepository()
     kb_service = KnowledgeBaseService(kb_repo)
@@ -131,7 +134,8 @@ def make_service(
         memory_store=FileMemoryStore(tmp_path),
         chat_repository=chat_repo,
         event_repository=event_repo,
-        max_result_chars=4000,
+        tuning=CopilotTuning(max_result_chars=4000),
+        runtime=runtime,
     ), event_repo, chat_repo
 
 
@@ -174,3 +178,33 @@ async def test_agent_tool_loop_and_event_log(tmp_path: Path) -> None:
     assistant = next(m for m in messages if m.role.value == "assistant")
     assert assistant.steps == [{"tool_name": "list_notes", "args": {}}]
     assert done.assistant_message_id == assistant.id
+
+
+async def test_done_event_records_accounting_and_attribution(tmp_path: Path) -> None:
+    """done 事件落「单位任务账本」：intent/model 归因 + 账本快照（成本/token/缓存命中/轮数）。"""
+    model = ScriptedAgentModel(responses=[AIMessage(content="你好。")])
+    runtime = RuntimeConfig(budget=HardBudget(max_turns=5))
+    service, event_repo, _ = make_service(tmp_path, model, runtime=runtime)
+
+    events = [event async for event in service.run(CopilotRequest(question="你好"))]
+
+    assert isinstance(events[-1], CopilotDoneEvent)
+    done = event_repo.events[-1]
+    assert done.type == "done"
+    payload = done.payload
+    assert payload["intent"] == "task"
+    assert payload["model"] == "unknown"
+    accounting = payload["accounting"]
+    assert set(accounting) >= {
+        "cost_cny",
+        "tokens",
+        "input_tokens",
+        "cache_read_tokens",
+        "cache_hit_rate",
+        "turn_count",
+        "tool_call_count",
+    }
+    # fake 模型无 usage_metadata → 用量全 0，但账本结构仍在；turn 计了 1 轮
+    assert accounting["turn_count"] == 1
+    assert accounting["cost_cny"] == 0.0
+    assert accounting["cache_hit_rate"] is None

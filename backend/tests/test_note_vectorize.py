@@ -34,8 +34,11 @@ class FakeNoteChunkRepository:
     async def add_chunks(self, chunks: list[NoteChunk]) -> None:
         self.added.extend(chunks)
 
-    async def mark_vectorized(self, note_id: uuid.UUID, timestamp: datetime) -> None:
+    async def mark_vectorized(
+        self, note_id: uuid.UUID, timestamp: datetime, expected_updated_at: datetime | None
+    ) -> bool:
         self.marked.append((note_id, timestamp))
+        return True
 
     async def close(self) -> None:
         return None
