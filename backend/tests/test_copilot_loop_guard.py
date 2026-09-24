@@ -8,16 +8,16 @@ from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.loop_guard import (
     InfiniteLoopDetected,
     LoopGuard,
-    _fingerprint,
+    fingerprint,
 )
 from app.agent.runtime.reactive import build_reactive_graph
 
 
-def test_fingerprint_ignores_volatile_keys() -> None:
-    a = _fingerprint("search", {"query": "x", "limit": 5})
-    b = _fingerprint("search", {"query": "x", "limit": 10})
+def testfingerprint_ignores_volatile_keys() -> None:
+    a = fingerprint("search", {"query": "x", "limit": 5})
+    b = fingerprint("search", {"query": "x", "limit": 10})
     assert a == b
-    assert a != _fingerprint("search", {"query": "y"})
+    assert a != fingerprint("search", {"query": "y"})
 
 
 def test_dead_loop_detected() -> None:

@@ -13,8 +13,8 @@ from app.agent.guardrail.review import (
     ReviewResult,
     ReviewVerdict,
 )
-from app.agent.guardrail.review_node import _trace_from_messages, build_review_node
-from app.agent.helpers import _truncate_history_tokens
+from app.agent.guardrail.review_node import trace_from_messages, build_review_node
+from app.agent.helpers import truncate_history_tokens
 from app.agent.runtime.budget import (
     BudgetExceeded,
     BudgetTracker,
@@ -230,7 +230,7 @@ async def test_reviewer_propagates_budget_exceeded() -> None:
     assert len(llm.calls) == 0  # 预检即中止，根本没调 LLM
 
 
-def test_trace_from_messages_pairs_calls_with_results_by_id() -> None:
+def testtrace_from_messages_pairs_calls_with_results_by_id() -> None:
     """同名工具多次调用时，返回必须按 tool_call_id 配到对应调用，而非按位置对齐。"""
     messages = [
         AIMessage(
@@ -244,12 +244,12 @@ def test_trace_from_messages_pairs_calls_with_results_by_id() -> None:
         ToolMessage(content="创建失败", tool_call_id="c2"),
         ToolMessage(content="创建成功", tool_call_id="c1"),
     ]
-    trace = _trace_from_messages(messages)
+    trace = trace_from_messages(messages)
     assert 'create_note({"title": "A"}) → 创建成功' in trace
     assert 'create_note({"title": "B"}) → 创建失败' in trace
 
 
-def test_trace_from_messages_marks_missing_result() -> None:
+def testtrace_from_messages_marks_missing_result() -> None:
     """某次调用没回 ToolMessage（如中断）时，应显式标「未返回」而非静默错位。"""
     messages = [
         AIMessage(
@@ -257,11 +257,11 @@ def test_trace_from_messages_marks_missing_result() -> None:
             tool_calls=[{"name": "create_note", "args": {"title": "A"}, "id": "c1"}],
         ),
     ]
-    trace = _trace_from_messages(messages)
+    trace = trace_from_messages(messages)
     assert 'create_note({"title": "A"}) → （未返回）' in trace
 
 
-def test_trace_from_messages_keeps_orphan_results_in_stream_order() -> None:
+def testtrace_from_messages_keeps_orphan_results_in_stream_order() -> None:
     """配不上任何调用的孤儿返回，应夹在它在流中的位置，而非甩到末尾。"""
     messages = [
         AIMessage(
@@ -276,20 +276,20 @@ def test_trace_from_messages_keeps_orphan_results_in_stream_order() -> None:
         ToolMessage(content="已创建 B", tool_call_id="c2"),
         ToolMessage(content="已创建 A", tool_call_id="c1"),
     ]
-    lines = _trace_from_messages(messages).splitlines()
+    lines = trace_from_messages(messages).splitlines()
     assert lines[0] == "工具轨迹："
     assert lines[1].startswith('- create_note({"title": "A"})')
     assert lines[2] == "- unknown → 无主返回"
     assert lines[3].startswith('- create_note({"title": "B"})')
 
 
-def test_trace_from_messages_keeps_nameless_call_paired() -> None:
+def testtrace_from_messages_keeps_nameless_call_paired() -> None:
     """无名调用不跳过，渲染为 unknown(args) 并按 id 配对。"""
     messages = [
         AIMessage(content="", tool_calls=[{"name": "", "args": {"title": "X"}, "id": "c1"}]),
         ToolMessage(content="已创建 X", tool_call_id="c1"),
     ]
-    trace = _trace_from_messages(messages)
+    trace = trace_from_messages(messages)
     assert 'unknown({"title": "X"}) → 已创建 X' in trace
 
 
@@ -353,12 +353,12 @@ async def test_side_effect_verifier_note() -> None:
     assert skipped is None
 
 
-def test_truncate_history_tokens() -> None:
+def testtruncate_history_tokens() -> None:
     msgs = [
         ChatMessage("user", "甲" * 100),
         ChatMessage("assistant", "乙" * 100),
     ]
-    trimmed = _truncate_history_tokens(msgs, budget=120)
+    trimmed = truncate_history_tokens(msgs, budget=120)
     assert len(trimmed) == 1
     assert trimmed[0].content == "乙" * 100
     assert trimmed[0].role == "assistant"

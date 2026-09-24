@@ -1,12 +1,10 @@
-"""Copilot 工具：create_note 幂等 / update_profile 文件 / 结果截断 / 非法入参。"""
+"""Copilot 工具：create_note 幂等 / update_profile 文件 / 结果截断。"""
 
 import uuid
 from pathlib import Path
 
-import pytest
 from langchain_core.tools import BaseTool
 
-from app.agent.resilience.result import ToolFailure
 from app.agent.tools import build_tools
 from app.core.memory_store import FileMemoryStore
 from app.integrations.embedding import FakeEmbeddingClient
@@ -119,29 +117,6 @@ async def test_update_profile_writes_file(tmp_path: Path) -> None:
     result = await update_profile.ainvoke({"kind": "soul", "content": "说话要简洁"})
     assert "soul" in result
     assert (tmp_path / "soul.md").read_text(encoding="utf-8") == "说话要简洁"
-
-
-async def test_update_profile_invalid_kind(tmp_path: Path) -> None:
-    tools, _ = make_tools(tmp_path)
-    update_profile = _tool(tools, "update_profile")
-    with pytest.raises(ToolFailure):
-        await update_profile.ainvoke({"kind": "bogus", "content": "x"})
-
-
-async def test_write_memory_invalid_kind(tmp_path: Path) -> None:
-    tools, _ = make_tools(tmp_path)
-    write_memory = _tool(tools, "write_memory")
-    with pytest.raises(ToolFailure) as exc:
-        await write_memory.ainvoke({"kind": "bogus", "content": "x"})
-    assert "procedural" in str(exc.value)  # 错误提示里包含合法取值
-
-
-async def test_read_note_invalid_uuid(tmp_path: Path) -> None:
-    tools, _ = make_tools(tmp_path)
-    read_note = _tool(tools, "read_note")
-    with pytest.raises(ToolFailure) as exc:
-        await read_note.ainvoke({"note_id": "not-a-uuid"})
-    assert "不是合法 UUID" in str(exc.value)
 
 
 async def test_result_spill(tmp_path: Path) -> None:

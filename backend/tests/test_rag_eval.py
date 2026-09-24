@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from app.integrations.llm import ChatMessage, ChatResult
 from app.rag.eval import (
     EvalSample,
-    _parse_score,
+    parse_score,
     answer_relevancy,
     context_relevancy,
     faithfulness,
@@ -60,12 +60,12 @@ def test_mean_metrics() -> None:
     assert mean_mrr(cases) == 0.75  # (1.0 + 0.5) / 2
 
 
-def test_parse_score() -> None:
-    assert _parse_score("5") == 1.0
-    assert _parse_score("1") == 0.0
-    assert _parse_score("3") == 0.5
-    assert _parse_score("评分：4分") == 0.75
-    assert _parse_score("没有数字") == 0.0
+def testparse_score() -> None:
+    assert parse_score("5") == 1.0
+    assert parse_score("1") == 0.0
+    assert parse_score("3") == 0.5
+    assert parse_score("评分：4分") == 0.75
+    assert parse_score("没有数字") == 0.0
 
 
 async def test_faithfulness_uses_judge_score() -> None:

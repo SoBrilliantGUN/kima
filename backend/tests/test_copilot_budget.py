@@ -54,14 +54,15 @@ def test_tracker_check_turns() -> None:
         raise AssertionError("应抛 BudgetExceeded")
 
 
-def test_tracker_check_seconds() -> None:
+def test_tracker_check_skips_seconds_axis() -> None:
+    """seconds 轴不进 check()：时间超限由 reactive 节点的 asyncio.wait_for 硬熔断。
+
+    check() 只预检 turns/tokens/cost/tool_calls 这些离散轴；seconds 是连续轴，靠
+    ``wait_for(remaining_seconds())`` 在调用途中熔断，而非进模型前预检（见 budget.py
+    里 ``# 时间使用asyncio.wait_for硬熔断`` 的注释）。
+    """
     tracker = BudgetTracker(HardBudget(max_seconds=0.0))
-    try:
-        tracker.check()
-    except BudgetExceeded as exc:
-        assert "seconds" in str(exc)
-    else:
-        raise AssertionError("应抛 BudgetExceeded")
+    tracker.check()  # 不抛 BudgetExceeded：seconds 不参与 check() 预检
 
 
 def test_tracker_record_accumulates() -> None:

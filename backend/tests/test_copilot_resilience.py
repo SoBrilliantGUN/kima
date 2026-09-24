@@ -17,7 +17,7 @@ from app.agent.resilience.error_classifier import classify_error, is_retryable
 from app.agent.resilience.result import ToolFailure, ToolOutcome
 from app.agent.resilience.retry import Backoff, RetryPolicy, with_retry
 from app.agent.runtime.planner import Plan, PlanStep
-from app.agent.runtime.reactive import _inject_idempotency_keys
+from app.agent.runtime.reactive import inject_idempotency_keys
 from app.agent.runtime.state import AgentState
 from app.agent.toolmeta import SideEffectLevel, ToolMeta
 from app.core.exceptions import NotFoundError
@@ -95,7 +95,7 @@ def test_idempotency_keys_monotonic_no_collision() -> None:
             {"name": "create_note", "args": {"title": "a"}, "id": "c1"},
         ])]},
     )
-    s1, seq1 = _inject_idempotency_keys(turn1, run_id, _WRITE_REGISTRY, 0)
+    s1, seq1 = inject_idempotency_keys(turn1, run_id, _WRITE_REGISTRY, 0)
     assert _idempotency_key(s1) == "r1:0"
     assert seq1 == 1
 
@@ -105,7 +105,7 @@ def test_idempotency_keys_monotonic_no_collision() -> None:
             {"name": "write_memory", "args": {"kind": "semantic"}, "id": "c2"},
         ])]},
     )
-    s2, seq2 = _inject_idempotency_keys(turn2, run_id, _WRITE_REGISTRY, seq1)
+    s2, seq2 = inject_idempotency_keys(turn2, run_id, _WRITE_REGISTRY, seq1)
     assert _idempotency_key(s2) == "r1:1"
     assert seq2 == 2
 
