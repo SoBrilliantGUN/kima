@@ -1,7 +1,7 @@
 """输出审查（guardrail）的图内节点层：review 节点 + 路由。
 
 内容层（reviewer 协议 / LLM 实现 / 判定契约）见 `review.py`。本模块是节点层，负责：
-- 从消息流还原「最终回答 vs 工具轨迹」（`_last_answer` / `_trace_from_messages`）、
+- 从消息流还原「最终回答 vs 工具轨迹」（`_last_answer` / `trace_from_messages`）、
   提取写工具副作用（`_write_side_effects`）供确定性对账；
 - `build_review_node` 产出图内 review 节点——先跑确定性 `verifier` 回查副作用，
   再跑 `reviewer` 的 LLM 判定，不一致则注入纠正指令回环（有界），超限则诚实更正；
@@ -37,7 +37,7 @@ def _last_answer(messages: list[AnyMessage]) -> str:
     return ""
 
 
-def _trace_from_messages(messages: Sequence[BaseMessage]) -> str:
+def trace_from_messages(messages: Sequence[BaseMessage]) -> str:
     """从消息流还原工具轨迹（工具调用 + 工具返回），供审查器对账。
 
     按 ``tool_call_id`` 显式把「调用」与「返回」配成对，而非分成两段列表——审查器的
@@ -182,7 +182,7 @@ def build_review_node(
                 run_id = str(config.get("configurable", {}).get("thread_id", "")) or None
             with run_budget(tracker, run_id=run_id):
                 result = await reviewer.review(
-                    _last_answer(messages), _trace_from_messages(messages)
+                    _last_answer(messages), trace_from_messages(messages)
                 )
 
         attempts = state.get("attempts", 0)

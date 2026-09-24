@@ -107,7 +107,7 @@ def disposition(score: float) -> Disposition:
 def sanitize_content(content: str, source: str) -> tuple[str, float]:
     """对一份不可信内容做红线阻断 / 隔离 / 脱敏，返回 (处置后内容, 节点信任分)。
 
-    供非 LangGraph 的执行路径（planner 工具结果）复用 reactive 里 `_evaluate_tool_results`
+    供非 LangGraph 的执行路径（planner 工具结果）复用 reactive 里 `evaluate_tool_results`
     的同一套处置逻辑：红线直接毙、其余按综合分五档处置、节点信任只减不增。
     """
     if is_red_line(content):
