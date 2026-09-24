@@ -69,10 +69,16 @@ async def test_with_retry_no_retry_permanent() -> None:
 
 # —— 幂等键稳定序号 / 熔断持久化 / 级联 / last_error 分类 ——
 
-# 两个强制幂等的写工具（create_note / write_memory），用于幂等键碰撞回归
+# 两个强制幂等的写工具（create_note / write_memory），用于幂等键派生回归
 _WRITE_REGISTRY = {
-    "create_note": ToolMeta("create_note", SideEffectLevel.MEDIUM, "tool_result", 500, True),
-    "write_memory": ToolMeta("write_memory", SideEffectLevel.MEDIUM, "tool_result", 5000, True),
+    "create_note": ToolMeta(
+        "create_note", SideEffectLevel.MEDIUM, "tool_result", 500, True,
+        idempotency_key_fields=("content",),
+    ),
+    "write_memory": ToolMeta(
+        "write_memory", SideEffectLevel.MEDIUM, "tool_result", 5000, True,
+        idempotency_key_fields=("kind", "content", "entity_id"),
+    ),
 }
 
 
@@ -82,41 +88,49 @@ def _idempotency_key(state: AgentState) -> str:
     return str(last.tool_calls[0]["args"]["idempotency_key"])
 
 
-def test_idempotency_keys_monotonic_no_collision() -> None:
-    """P0-1 回归：幂等键用单调序号而非消息内下标，跨轮不碰撞。
+def test_idempotency_keys_content_derived_stable() -> None:
+    """P0-1 回归：幂等键由「业务意图」（key_fields 内容哈希）派生，而非位置序号。
 
-    旧实现用 ``enumerate`` 下标做键——第 1 轮的 create_note 和第 2 轮的 write_memory 都拿
-    ``{run_id}:0``，``IdempotencyRegistry`` 命中缓存后第二次写被静默吞掉（丢数据）。
+    同一内容跨轮/重发拿到同一个键（快路径去重能命中）；不同内容键不同；键含 tool_name
+    与 run_id 前缀（跨工具/跨 run 隔离）。非 key_fields 的参数（如 title）不影响键。
     """
     run_id = "r1"
     turn1 = cast(
         AgentState,
         {"messages": [AIMessage(content="", tool_calls=[
-            {"name": "create_note", "args": {"title": "a"}, "id": "c1"},
+            {"name": "create_note", "args": {"title": "a", "content": "正文一"}, "id": "c1"},
         ])]},
     )
-    s1, seq1 = inject_idempotency_keys(turn1, run_id, _WRITE_REGISTRY, 0)
-    assert _idempotency_key(s1) == "r1:0"
-    assert seq1 == 1
+    s1 = inject_idempotency_keys(turn1, run_id, _WRITE_REGISTRY)
+    key1 = _idempotency_key(s1)
+    assert key1.startswith(f"{run_id}:create_note:")
 
+    # 同内容、不同标题（非 key_fields）→ 同一键（业务身份只看 content）
+    turn1b = cast(
+        AgentState,
+        {"messages": [AIMessage(content="", tool_calls=[
+            {"name": "create_note", "args": {"title": "b", "content": "正文一"}, "id": "c1b"},
+        ])]},
+    )
+    s1b = inject_idempotency_keys(turn1b, run_id, _WRITE_REGISTRY)
+    assert _idempotency_key(s1b) == key1
+
+    # 不同内容 → 不同键
     turn2 = cast(
         AgentState,
         {"messages": [AIMessage(content="", tool_calls=[
-            {"name": "write_memory", "args": {"kind": "semantic"}, "id": "c2"},
+            {"name": "create_note", "args": {"title": "a", "content": "正文二"}, "id": "c2"},
         ])]},
     )
-    s2, seq2 = inject_idempotency_keys(turn2, run_id, _WRITE_REGISTRY, seq1)
-    assert _idempotency_key(s2) == "r1:1"
-    assert seq2 == 2
+    s2 = inject_idempotency_keys(turn2, run_id, _WRITE_REGISTRY)
+    assert _idempotency_key(s2) != key1
 
 
-def test_plan_roundtrip_preserves_idempotency_seq_and_last_error() -> None:
-    """P0-2：plan 检查点序列化往返保留 idempotency_seq 与 last_error。"""
+def test_plan_roundtrip_preserves_last_error() -> None:
+    """P0-2：plan 检查点序列化往返保留 last_error（崩溃现场）。"""
     plan = Plan(steps=(PlanStep(step_id="1", action="create_note", params={}),))
-    plan.idempotency_seq = 5
     plan.last_error = {"message": "boom", "kind": "permanent"}
     restored = Plan.from_dict(plan.to_dict())
-    assert restored.idempotency_seq == 5
     assert restored.last_error == {"message": "boom", "kind": "permanent"}
 
 

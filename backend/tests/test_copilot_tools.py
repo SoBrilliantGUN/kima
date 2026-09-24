@@ -3,8 +3,10 @@
 import uuid
 from pathlib import Path
 
+import pytest
 from langchain_core.tools import BaseTool
 
+from app.agent.resilience.result import ToolFailure
 from app.agent.tools import build_tools
 from app.core.memory_store import FileMemoryStore
 from app.integrations.embedding import FakeEmbeddingClient
@@ -94,20 +96,21 @@ async def test_create_note_idempotent(tmp_path: Path) -> None:
     assert total == 1
 
 
-async def test_create_note_idempotency_key(tmp_path: Path) -> None:
-    """位置幂等键命中 → 直接返回缓存，不重复建笔记（执行契约）。"""
+async def test_create_note_idempotency_key_conflict(tmp_path: Path) -> None:
+    """同幂等键不同参数 → 拒绝执行，不静默返回旧结果（文章 §5.4）。"""
     tools, note_repo = make_tools(tmp_path)
     create_note = _tool(tools, "create_note")
 
     first = await create_note.ainvoke(
         {"title": "A", "content": "正文一", "idempotency_key": "k1"}
     )
-    second = await create_note.ainvoke(
-        {"title": "B", "content": "正文二（不同）", "idempotency_key": "k1"}
-    )
-    assert first == second  # 幂等键命中，返回缓存结果
+    assert "已创建" in first
+    with pytest.raises(ToolFailure):
+        await create_note.ainvoke(
+            {"title": "B", "content": "正文二（不同）", "idempotency_key": "k1"}
+        )
     _, total = await note_repo.list(limit=10, offset=0)
-    assert total == 1
+    assert total == 1  # 仅第一次真正建了笔记
 
 
 async def test_update_profile_writes_file(tmp_path: Path) -> None:
