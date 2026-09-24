@@ -2,7 +2,12 @@ import { useCallback, useRef, useState } from 'react'
 
 import { useQueryClient } from '@tanstack/react-query'
 
-import { approveCopilot, getCopilotConversation, streamCopilot } from '@/api/copilot'
+import {
+  approveCopilot,
+  getCopilotConversation,
+  getPendingApprovals,
+  streamCopilot,
+} from '@/api/copilot'
 import type { CopilotSseEvent } from '@/api/copilot'
 import type { ChatMessage, CopilotStep } from '@/api/types'
 
@@ -60,6 +65,8 @@ export function useCopilot() {
     args: Record<string, unknown>
     summary: string
     level: string
+    conversationId: string
+    assistantMessageId: string
   } | null>(null)
   const resumeContextRef = useRef<{
     conversationId: string
@@ -97,6 +104,8 @@ export function useCopilot() {
           args: event.args,
           summary: event.summary,
           level: event.level,
+          conversationId: resumeContextRef.current?.conversationId ?? '',
+          assistantMessageId: resumeContextRef.current?.assistantMessageId ?? '',
         })
         break
       case 'error':
@@ -147,12 +156,20 @@ export function useCopilot() {
   const approve = useCallback(
     async (decision: 'approve' | 'reject') => {
       const approval = pendingApproval
-      const resumeContext = resumeContextRef.current
-      const assistantId = activeAssistantIdRef.current
-      if (!approval || !resumeContext || !assistantId) return
+      if (!approval) return
       setPendingApproval(null)
       setStreaming(true)
       setError(null)
+
+      // 确定 assistant 占位：live 审批沿用活动占位；刷新后找回的审批单没有占位，则新建一个
+      let assistantId = activeAssistantIdRef.current
+      if (!assistantId) {
+        const assistantMsg = createTempMessage('assistant', '', approval.conversationId)
+        assistantId = assistantMsg.id
+        activeAssistantIdRef.current = assistantId
+        setMessages((prev) => [...prev, assistantMsg])
+      }
+
       const controller = new AbortController()
       abortRef.current = controller
       try {
@@ -160,8 +177,8 @@ export function useCopilot() {
           {
             run_id: approval.runId,
             decision,
-            conversation_id: resumeContext.conversationId,
-            assistant_message_id: resumeContext.assistantMessageId,
+            conversation_id: approval.conversationId,
+            assistant_message_id: approval.assistantMessageId,
           },
           controller.signal,
         )) {
@@ -184,6 +201,29 @@ export function useCopilot() {
     setStreaming(false)
   }, [])
 
+  /** 找回挂起审批：按会话匹配待审单并恢复审批卡（刷新/切换会话后无感知续批）。 */
+  const restoreApprovals = useCallback(async (convId: string) => {
+    try {
+      const { items } = await getPendingApprovals()
+      const match = items.find((a) => a.conversation_id === convId)
+      if (match?.conversation_id && match.assistant_message_id) {
+        setPendingApproval({
+          runId: match.run_id,
+          tool: match.tool,
+          args: match.args,
+          summary: match.summary,
+          level: match.level,
+          conversationId: match.conversation_id,
+          assistantMessageId: match.assistant_message_id,
+        })
+      } else {
+        setPendingApproval(null)
+      }
+    } catch {
+      // 找回失败静默降级：不阻断会话加载，仅不展示挂起审批卡
+    }
+  }, [])
+
   /** 选中会话并加载其历史消息（普通对话形态用）。 */
   const selectConversation = useCallback(
     async (id: string) => {
@@ -192,14 +232,18 @@ export function useCopilot() {
       setStreaming(false)
       setConversationId(id)
       setError(null)
+      setPendingApproval(null)
+      activeAssistantIdRef.current = null
+      resumeContextRef.current = null
       try {
         const detail = await getCopilotConversation(id)
         setMessages(detail.messages)
+        void restoreApprovals(id)
       } catch (err) {
         setError(err instanceof Error ? err.message : '加载会话失败')
       }
     },
-    [conversationId],
+    [conversationId, restoreApprovals],
   )
 
   /** 新建会话：清空当前状态，等待下一条消息创建会话。 */
@@ -209,6 +253,9 @@ export function useCopilot() {
     setMessages([])
     setError(null)
     setStreaming(false)
+    setPendingApproval(null)
+    activeAssistantIdRef.current = null
+    resumeContextRef.current = null
   }, [])
 
   /** 复位（悬浮窗最小化/关闭用，不加载历史）。 */
@@ -218,16 +265,26 @@ export function useCopilot() {
     setMessages([])
     setError(null)
     setStreaming(false)
+    setPendingApproval(null)
+    activeAssistantIdRef.current = null
+    resumeContextRef.current = null
   }, [])
 
   /** 直接灌入会话状态（弹窗/回到主窗口的转移用，不走后端拉取）。 */
-  const hydrate = useCallback((id: string | null, msgs: ChatMessage[]) => {
-    abortRef.current?.abort()
-    setConversationId(id)
-    setMessages(msgs)
-    setError(null)
-    setStreaming(false)
-  }, [])
+  const hydrate = useCallback(
+    (id: string | null, msgs: ChatMessage[]) => {
+      abortRef.current?.abort()
+      setConversationId(id)
+      setMessages(msgs)
+      setError(null)
+      setStreaming(false)
+      setPendingApproval(null)
+      activeAssistantIdRef.current = null
+      resumeContextRef.current = null
+      if (id) void restoreApprovals(id)
+    },
+    [restoreApprovals],
+  )
 
   return {
     conversationId,

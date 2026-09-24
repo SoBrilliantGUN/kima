@@ -1,6 +1,7 @@
 import { api } from '@/api/client'
 import type {
   ConversationDetail,
+  CopilotApprovalList,
   CopilotMemoryList,
   CopilotRequest,
   CopilotSkillsList,
@@ -130,6 +131,11 @@ export function approveCopilot(request: CopilotApproveRequest, signal?: AbortSig
 /** 只读记忆面板数据。 */
 export function getCopilotMemory(): Promise<CopilotMemoryList> {
   return api.get<CopilotMemoryList>('/api/copilot/memory')
+}
+
+/** 待审审批单列表（找回挂起审批：刷新/关闭后据此续批）。 */
+export function getPendingApprovals(): Promise<CopilotApprovalList> {
+  return api.get<CopilotApprovalList>('/api/copilot/approvals/pending')
 }
 
 /** 内置技能清单。 */

@@ -191,3 +191,21 @@ export interface CopilotSkill {
 export interface CopilotSkillsList {
   items: CopilotSkill[]
 }
+
+export interface CopilotApproval {
+  id: string
+  run_id: string
+  conversation_id: string | null
+  assistant_message_id: string | null
+  tool: string
+  args: Record<string, unknown>
+  summary: string
+  level: string
+  status: string
+  expires_at: string | null
+  created_at: string
+}
+
+export interface CopilotApprovalList {
+  items: CopilotApproval[]
+}
