@@ -133,13 +133,15 @@ class RunAccounting:
 class BudgetTracker:
     """一次 run 的四轴累计器（闭包捕获，不进 LangGraph state，避免序列化 start_time）。
 
-    `sink` 为可选全局日预算：`record()` 时把用量同步回写，使跨 run 的日上限生效。
-    cost 不再自算——由调用方（网关）经 `PricingService` 算好后以 `cost_cny` 传入。
+    `budget` 可空：`None` = 无 per-run 硬限（非循环调用，如 worker/RAG 检索），只做记账 +
+    sink 回写，真正的限额落在跨 run 的 `DailyBudget` 与网关的 per-call 超时。`sink` 为
+    可选全局日预算：`record()` 时把用量同步回写，使跨 run 的日上限生效。cost 不再自算——
+    由调用方（网关）经 `PricingService` 算好后以 `cost_cny` 传入。
     """
 
     def __init__(
         self,
-        budget: HardBudget,
+        budget: HardBudget | None,
         sink: DailyBudget | None = None,
     ) -> None:
         self._budget = budget
@@ -166,6 +168,8 @@ class BudgetTracker:
         agent 已计 1 turn 后、执行工具时 turns 轴被提前触发，导致本应执行的工具被误杀。
         """
         self._tool_call_count += n
+        if self._budget is None:
+            return
         if (
             self._budget.max_tool_calls is not None
             and self._tool_call_count > self._budget.max_tool_calls
@@ -178,10 +182,14 @@ class BudgetTracker:
         return time.monotonic() - self._start
 
     def remaining_seconds(self) -> float:
+        if self._budget is None:
+            return float("inf")
         return self._budget.max_seconds - self.elapsed()
 
     def usage_ratio(self) -> float:
         """四轴占用比例的最大值（≥0），供 80% 软提示判定（<100% 时软性施压收尾）。"""
+        if self._budget is None:
+            return 0.0
         b = self._budget
         ratios = [
             self._turn_count / b.max_turns if b.max_turns > 0 else 0.0,
@@ -193,7 +201,9 @@ class BudgetTracker:
         return max(ratios)
 
     def check(self) -> None:
-        """进模型前预检四轴；超限抛 BudgetExceeded。"""
+        """进模型前预检四轴；超限抛 BudgetExceeded。budget 为 None 时跳过（无 per-run 硬限）。"""
+        if self._budget is None:
+            return
         if self._turn_count >= self._budget.max_turns:
             raise BudgetExceeded(f"turns 超限：{self._turn_count}/{self._budget.max_turns}")
         # 时间使用asyncio.wait_for硬熔断
