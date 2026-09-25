@@ -1,7 +1,7 @@
 """写工具幂等去重表：业务意图键 + 原子状态转换（见 docs/module-6-copilot.md §4.16）
 
 Revision ID: 0013_idempotency
-Revises: 0012_pricing
+Revises: 0013_copilot_approval_resume_ctx
 Create Date: 2026-09-24
 
 - 新增 `copilot_idempotency`：幂等键标识「一次业务意图」（编排层注入的内容派生键），
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0013_idempotency"
-down_revision = "0012_pricing"
+down_revision = "0013_copilot_approval_resume_ctx"
 branch_labels = None
 depends_on = None
 
