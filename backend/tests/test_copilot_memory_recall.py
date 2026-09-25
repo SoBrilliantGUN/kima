@@ -7,7 +7,6 @@ Agent 把「禁止 ORM」当语义事实写进去、从而走向量 top-k 漏召
 
 from datetime import UTC, datetime
 
-from app.agent.gateway import LLMGateway
 from app.agent.memory import format_memory_block
 from app.agent.memory_classifier import LLMMemoryClassifier, MemoryClassification
 from app.integrations.embedding import FakeEmbeddingClient
@@ -18,6 +17,8 @@ from tests.fakes import (
     FakeCopilotMemoryRepository,
     FakeMemoryClassifier,
     ScriptedLLM,
+    gateway_run,
+    make_gateway,
 )
 
 
@@ -27,7 +28,7 @@ def make_service(
 ) -> CopilotMemoryService:
     return CopilotMemoryService(
         repository=repository or FakeCopilotMemoryRepository(),
-        embedder=FakeEmbeddingClient(dimension=8),
+        gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=8)),
         judge=FakeConflictJudge(),
         classifier=classifier,
         capacity=200,
@@ -45,9 +46,9 @@ def _mem(kind: MemoryKind, content: str) -> CopilotMemory:
 async def test_recall_constraint_hard_recall_regardless_of_query() -> None:
     """约束是硬召回：即使 query 与约束毫无语义重叠，也全量在场（不过相似度阈值）。"""
     service = make_service()
-    await service.write_memory(MemoryKind.CONSTRAINT, "禁止使用 ORM")
-
-    recalled = await service.recall("给报表模块写数据库访问层")
+    async with gateway_run():
+        await service.write_memory(MemoryKind.CONSTRAINT, "禁止使用 ORM")
+        recalled = await service.recall("给报表模块写数据库访问层")
     assert [m.content for m in recalled.constraint] == ["禁止使用 ORM"]
 
 
@@ -64,7 +65,8 @@ async def test_recall_constraint_not_filtered_by_floor() -> None:
         )
     )
     service = make_service(repository=repository)
-    recalled = await service.recall("任意查询")
+    async with gateway_run():
+        recalled = await service.recall("任意查询")
     assert len(recalled.constraint) == 1
 
 
@@ -79,12 +81,12 @@ async def test_classifier_overrides_agent_kind_to_constraint() -> None:
         ]
     )
     service = make_service(classifier=classifier)
-    memory = await service.write_memory(MemoryKind.SEMANTIC, "禁止使用 ORM")
-
-    assert memory.kind == MemoryKind.CONSTRAINT
-    assert memory.trigger_conditions == {"type": "domain", "value": "database"}
-    # 之后走 constraint 硬召回，不再走 semantic 向量
-    recalled = await service.recall("任意")
+    async with gateway_run():
+        memory = await service.write_memory(MemoryKind.SEMANTIC, "禁止使用 ORM")
+        assert memory.kind == MemoryKind.CONSTRAINT
+        assert memory.trigger_conditions == {"type": "domain", "value": "database"}
+        # 之后走 constraint 硬召回，不再走 semantic 向量
+        recalled = await service.recall("任意")
     assert any(m.content == "禁止使用 ORM" for m in recalled.constraint)
     assert all(m.content != "禁止使用 ORM" for m in recalled.semantic)
 
@@ -93,17 +95,21 @@ async def test_classifier_none_falls_back_to_agent_kind() -> None:
     """分类器失败（None）→ 不覆盖，回退到 Agent 自报 kind（与现状一致）。"""
     classifier = FakeMemoryClassifier([None])
     service = make_service(classifier=classifier)
-    memory = await service.write_memory(
-        MemoryKind.SEMANTIC, "用户是产品经理", entity_id="user:role"
-    )
+    async with gateway_run():
+        memory = await service.write_memory(
+            MemoryKind.SEMANTIC, "用户是产品经理", entity_id="user:role"
+        )
     assert memory.kind == MemoryKind.SEMANTIC
 
 
 async def test_recall_semantic_hybrid_returns_exact_term() -> None:
     """语义召回走 dense + lexical 混合：精确词命中（词法通道）也能进场（烟测不报错）。"""
     service = make_service()
-    await service.write_memory(MemoryKind.SEMANTIC, "生产库连接串 postgres://prod", entity_id="e1")
-    recalled = await service.recall("postgres")
+    async with gateway_run():
+        await service.write_memory(
+            MemoryKind.SEMANTIC, "生产库连接串 postgres://prod", entity_id="e1"
+        )
+        recalled = await service.recall("postgres")
     assert any("postgres" in m.content for m in recalled.semantic)
 
 
@@ -111,8 +117,9 @@ async def test_llm_classifier_maps_constraint() -> None:
     llm = ScriptedLLM(
         ['{"memory_type":"constraint","entity_id":null,"trigger_condition":{"type":"domain","value":"database"}}']
     )
-    classifier = LLMMemoryClassifier(LLMGateway(llm=llm))
-    result = await classifier.classify("禁止使用 ORM")
+    classifier = LLMMemoryClassifier(make_gateway(llm=llm))
+    async with gateway_run():
+        result = await classifier.classify("禁止使用 ORM")
     assert result is not None
     assert result.kind == MemoryKind.CONSTRAINT
     assert result.trigger_conditions == {"type": "domain", "value": "database"}
@@ -120,8 +127,9 @@ async def test_llm_classifier_maps_constraint() -> None:
 
 async def test_llm_classifier_maps_fact_with_entity() -> None:
     llm = ScriptedLLM(['{"memory_type":"fact","entity_id":"user:role","trigger_condition":null}'])
-    classifier = LLMMemoryClassifier(LLMGateway(llm=llm))
-    result = await classifier.classify("用户是产品经理")
+    classifier = LLMMemoryClassifier(make_gateway(llm=llm))
+    async with gateway_run():
+        result = await classifier.classify("用户是产品经理")
     assert result is not None
     assert result.kind == MemoryKind.SEMANTIC
     assert result.entity_id == "user:role"
@@ -130,8 +138,9 @@ async def test_llm_classifier_maps_fact_with_entity() -> None:
 async def test_llm_classifier_fallback_none_on_parse_failure() -> None:
     """解析失败 → 回退 None，不静默降级成某个可能漏掉红线的桶。"""
     llm = ScriptedLLM(["not json"])
-    classifier = LLMMemoryClassifier(LLMGateway(llm=llm))
-    result = await classifier.classify("禁止使用 ORM")
+    classifier = LLMMemoryClassifier(make_gateway(llm=llm))
+    async with gateway_run():
+        result = await classifier.classify("禁止使用 ORM")
     assert result is None
 
 

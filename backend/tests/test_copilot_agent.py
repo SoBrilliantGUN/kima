@@ -37,6 +37,7 @@ from tests.fakes import (
     FakeFileStore,
     FakeKnowledgeBaseRepository,
     FakeNoteRepository,
+    make_gateway,
 )
 
 
@@ -106,12 +107,13 @@ def make_service(
     note_service = NoteService(FakeNoteRepository(), kb_repo)
     document_service = DocumentService(FakeDocumentRepository(), kb_repo, FakeFileStore())
     embedder = FakeEmbeddingClient(dimension=8)
+    gateway = make_gateway(embedder=embedder, reranker=FakeRerankerClient())
     retriever = RagRetriever(
-        repository=_EmptyRetrievalRepo(), embedder=embedder, reranker=FakeRerankerClient()
+        repository=_EmptyRetrievalRepo(), gateway=gateway
     )
     memory_service = CopilotMemoryService(
         repository=FakeCopilotMemoryRepository(),
-        embedder=embedder,
+        gateway=gateway,
         judge=FakeConflictJudge(),
         capacity=200,
         episodic_ttl_days=30,
@@ -204,7 +206,7 @@ async def test_done_event_records_accounting_and_attribution(tmp_path: Path) -> 
         "turn_count",
         "tool_call_count",
     }
-    # fake 模型无 usage_metadata → 用量全 0，但账本结构仍在；turn 计了 1 轮
+    # fake 模型无 usage_metadata，但召回 embedding 经网关计了 input token（无缓存命中）
     assert accounting["turn_count"] == 1
     assert accounting["cost_cny"] == 0.0
-    assert accounting["cache_hit_rate"] is None
+    assert accounting["cache_hit_rate"] == 0.0

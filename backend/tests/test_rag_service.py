@@ -11,6 +11,7 @@ from app.rag.generate import AnswerCitations, AnswerDelta, AnswerEvent
 from app.rag.retriever import RagRetriever
 from app.rag.schema import RetrievedChunk, SourceType
 from app.rag.service import RagService
+from tests.fakes import make_gateway
 
 
 class _FakeRepo:
@@ -33,8 +34,9 @@ class _FakeRepo:
 def _service() -> RagService:
     retriever = RagRetriever(
         repository=_FakeRepo(),
-        embedder=FakeEmbeddingClient(dimension=4),
-        reranker=FakeRerankerClient(),
+        gateway=make_gateway(
+            embedder=FakeEmbeddingClient(dimension=4), reranker=FakeRerankerClient()
+        ),
     )
     return RagService(
         retriever=retriever,

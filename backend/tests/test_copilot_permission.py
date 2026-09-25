@@ -13,7 +13,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
-from app.agent.gateway import LLMGateway
+from app.agent.gateway import GatewayConfig, run_budget
 from app.agent.guardrail.sensitive import redact_sensitive
 from app.agent.resilience.security_breaker import SecurityBreaker, SecurityBreakerTripped
 from app.agent.runtime.budget import BudgetExceeded, BudgetTracker, HardBudget
@@ -26,7 +26,7 @@ from app.agent.toolmeta import (
     validate_param_contract,
 )
 from app.integrations.llm import ChatMessage
-from tests.fakes import ScriptedLLM
+from tests.fakes import ScriptedLLM, make_gateway
 
 # --- 防线③：敏感信息脱敏（中国场景 PII） ---
 
@@ -60,10 +60,11 @@ def test_redact_does_not_touch_short_numbers() -> None:
 
 async def test_gateway_complete_redacts_pii_before_send() -> None:
     llm = ScriptedLLM(["ok"])
-    gateway = LLMGateway(llm=llm)
-    await gateway.complete(
-        "review", [ChatMessage("user", "手机号 13800138000 身份证 11010119900307777X")]
-    )
+    gateway = make_gateway(llm=llm)
+    with run_budget(BudgetTracker(HardBudget()), run_id="r1"):
+        await gateway.complete(
+            "review", [ChatMessage("user", "手机号 13800138000 身份证 11010119900307777X")]
+        )
     sent = llm.calls[-1][0].content
     assert "13800138000" not in sent
     assert "11010119900307777X" not in sent
@@ -72,8 +73,9 @@ async def test_gateway_complete_redacts_pii_before_send() -> None:
 
 async def test_gateway_complete_dlp_off_passes_through() -> None:
     llm = ScriptedLLM(["ok"])
-    gateway = LLMGateway(llm=llm, dlp_redact=False)
-    await gateway.complete("review", [ChatMessage("user", "手机号 13800138000")])
+    gateway = make_gateway(llm=llm, config=GatewayConfig(dlp_redact=False))
+    with run_budget(BudgetTracker(HardBudget()), run_id="r1"):
+        await gateway.complete("review", [ChatMessage("user", "手机号 13800138000")])
     sent = llm.calls[-1][0].content
     assert "13800138000" in sent
 

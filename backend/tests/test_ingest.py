@@ -5,7 +5,7 @@ import uuid
 from app.integrations.embedding import FakeEmbeddingClient
 from app.models.document import MAX_RETRIES, Document, DocumentStatus, DocumentType
 from app.services.ingest import IngestService
-from tests.fakes import FakeDocumentParser, FakeDocumentRepository, FakeFileStore
+from tests.fakes import FakeDocumentParser, FakeDocumentRepository, FakeFileStore, make_gateway
 
 
 class _RaisingEmbedder:
@@ -45,7 +45,7 @@ async def test_ingest_done_writes_parent_child_chunks() -> None:
     ingest = IngestService(
         repository=repo,
         parser=parser,
-        embedder=FakeEmbeddingClient(1024),
+        gateway=make_gateway(embedder=FakeEmbeddingClient(1024)),
         file_store=file_store,
     )
 
@@ -74,7 +74,7 @@ async def test_ingest_parse_failure_schedules_retry() -> None:
     ingest = IngestService(
         repository=repo,
         parser=FakeDocumentParser(fail=True),
-        embedder=FakeEmbeddingClient(1024),
+        gateway=make_gateway(embedder=FakeEmbeddingClient(1024)),
         file_store=file_store,
     )
 
@@ -93,7 +93,7 @@ async def test_ingest_retry_exhausted_becomes_error() -> None:
     ingest = IngestService(
         repository=repo,
         parser=FakeDocumentParser(fail=True),
-        embedder=FakeEmbeddingClient(1024),
+        gateway=make_gateway(embedder=FakeEmbeddingClient(1024)),
         file_store=file_store,
     )
 
@@ -131,7 +131,7 @@ async def test_ingest_embed_failure_schedules_retry() -> None:
     ingest = IngestService(
         repository=repo,
         parser=parser,
-        embedder=_RaisingEmbedder(),
+        gateway=make_gateway(embedder=_RaisingEmbedder()),
         file_store=file_store,
     )
 
@@ -147,7 +147,7 @@ async def test_ingest_url_updates_title() -> None:
     ingest = IngestService(
         repository=repo,
         parser=FakeDocumentParser(markdown="# 网页正文", title="真标题"),
-        embedder=FakeEmbeddingClient(1024),
+        gateway=make_gateway(embedder=FakeEmbeddingClient(1024)),
         file_store=file_store,
     )
 
@@ -172,7 +172,7 @@ async def test_ingest_clears_old_chunks_on_retry() -> None:
     ingest = IngestService(
         repository=repo,
         parser=FakeDocumentParser(),
-        embedder=FakeEmbeddingClient(1024),
+        gateway=make_gateway(embedder=FakeEmbeddingClient(1024)),
         file_store=file_store,
     )
     doc = await _make_pdf(repo, file_store)

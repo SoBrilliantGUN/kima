@@ -17,7 +17,7 @@ from app.agent.resilience.error_classifier import classify_error, is_retryable
 from app.agent.resilience.result import ToolFailure, ToolOutcome
 from app.agent.resilience.retry import Backoff, RetryPolicy, with_retry
 from app.agent.runtime.planner import Plan, PlanStep
-from app.agent.runtime.reactive import inject_idempotency_keys
+from app.agent.runtime.reactive_helpers import inject_idempotency_keys
 from app.agent.runtime.state import AgentState
 from app.agent.toolmeta import SideEffectLevel, ToolMeta
 from app.core.exceptions import NotFoundError

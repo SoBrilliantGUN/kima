@@ -9,13 +9,13 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from pydantic import PrivateAttr
 
-from app.agent.gateway import LLMGateway
 from app.agent.guardrail.review import (
     ReviewIssue,
     ReviewResult,
     ReviewVerdict,
     SideEffectVerifier,
 )
+from app.agent.runtime.budget import BudgetTracker, HardBudget
 from app.agent.runtime.planner import LLMPlanner, Plan, PlanStep, StepStatus
 from app.agent.service import CopilotService
 from app.agent.toolmeta import OutputContract, apply_output_contract
@@ -41,6 +41,8 @@ from tests.fakes import (
     FakeNoteRepository,
     FakeOutputReviewer,
     ScriptedLLM,
+    gateway_run,
+    make_gateway,
 )
 
 # --- OutputContract 上行契约关（纯函数） ---
@@ -85,8 +87,9 @@ def test_contract_rejects_non_json() -> None:
 
 async def test_planner_generate_carries_constraints() -> None:
     llm = ScriptedLLM(['{"steps":[]}'])
-    planner = LLMPlanner(LLMGateway(llm=llm))
-    await planner.generate("总结文档", ["search"], constraints="[MEMORY]\n- 禁止使用 ORM")
+    planner = LLMPlanner(make_gateway(llm=llm))
+    async with gateway_run():
+        await planner.generate("总结文档", ["search"], constraints="[MEMORY]\n- 禁止使用 ORM")
     assert len(llm.calls) == 1
     user_content = llm.calls[0][1].content
     assert "禁止使用 ORM" in user_content
@@ -178,12 +181,13 @@ def _make_service(
     note_service = NoteService(FakeNoteRepository(), kb_repo)
     document_service = DocumentService(FakeDocumentRepository(), kb_repo, FakeFileStore())
     embedder = FakeEmbeddingClient(dimension=8)
+    gateway = make_gateway(embedder=embedder, reranker=FakeRerankerClient())
     retriever = RagRetriever(
-        repository=_EmptyRetrievalRepo(), embedder=embedder, reranker=FakeRerankerClient()
+        repository=_EmptyRetrievalRepo(), gateway=gateway
     )
     memory_service = CopilotMemoryService(
         repository=FakeCopilotMemoryRepository(),
-        embedder=embedder,
+        gateway=gateway,
         judge=FakeConflictJudge(),
         capacity=200,
         episodic_ttl_days=30,
@@ -218,7 +222,7 @@ async def test_synthesize_carries_constraints(tmp_path: Path) -> None:
     answer = await service._synthesize_plan_answer(
         "任务",
         {"1": "r1"},
-        None,
+        BudgetTracker(HardBudget()),
         uuid.uuid4(),
         plan,
         system_prompt="【系统】SYS底线",
@@ -253,7 +257,9 @@ async def test_plan_review_appends_correction_on_mismatch(tmp_path: Path) -> Non
         )
     )
 
-    answer = await service._review_plan_answer("已创建笔记", plan, {"1": "r1"}, uuid.uuid4(), None)
+    answer = await service._review_plan_answer(
+        "已创建笔记", plan, {"1": "r1"}, uuid.uuid4(), BudgetTracker(HardBudget())
+    )
     assert "自检更正" in answer
     assert len(reviewer.calls) == 1
 
@@ -266,7 +272,9 @@ async def test_plan_review_passes_when_ok(tmp_path: Path) -> None:
         steps=(PlanStep(step_id="1", action="search", params={}, status=StepStatus.COMPLETED),)
     )
 
-    answer = await service._review_plan_answer("普通回答", plan, {"1": "r1"}, uuid.uuid4(), None)
+    answer = await service._review_plan_answer(
+        "普通回答", plan, {"1": "r1"}, uuid.uuid4(), BudgetTracker(HardBudget())
+    )
     assert answer == "普通回答"
     assert len(reviewer.calls) == 1
 
@@ -299,7 +307,7 @@ async def test_plan_review_deterministic_verifier_forces_correction(tmp_path: Pa
         plan,
         {"1": "已创建笔记 00000000-0000-0000-0000-000000000001"},
         uuid.uuid4(),
-        None,
+        BudgetTracker(HardBudget()),
     )
     assert "自检更正" in answer
     assert len(reviewer.calls) == 0  # 确定性对账先命中，LLM 审查器没跑

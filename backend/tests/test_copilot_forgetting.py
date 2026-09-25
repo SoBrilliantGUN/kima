@@ -8,7 +8,12 @@ import pytest
 from app.integrations.embedding import FakeEmbeddingClient
 from app.models.copilot import CopilotMemory, MemoryKind
 from app.services.copilot import CopilotMemoryService
-from tests.fakes import FakeConflictJudge, FakeCopilotMemoryRepository
+from tests.fakes import (
+    FakeConflictJudge,
+    FakeCopilotMemoryRepository,
+    gateway_run,
+    make_gateway,
+)
 
 
 def make_service(
@@ -16,7 +21,7 @@ def make_service(
 ) -> CopilotMemoryService:
     return CopilotMemoryService(
         repository=repository or FakeCopilotMemoryRepository(),
-        embedder=FakeEmbeddingClient(dimension=8),
+        gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=8)),
         judge=FakeConflictJudge(),
         capacity=capacity,
         episodic_ttl_days=30,
@@ -62,9 +67,10 @@ async def test_activation_recency_bonus() -> None:
 async def test_capacity_eviction_keeps_latest() -> None:
     repository = FakeCopilotMemoryRepository()
     service = make_service(repository, capacity=2)
-    await service.write_memory(MemoryKind.EPISODIC, "事件 1")
-    await service.write_memory(MemoryKind.EPISODIC, "事件 2")
-    await service.write_memory(MemoryKind.EPISODIC, "事件 3")  # 触发淘汰
+    async with gateway_run():
+        await service.write_memory(MemoryKind.EPISODIC, "事件 1")
+        await service.write_memory(MemoryKind.EPISODIC, "事件 2")
+        await service.write_memory(MemoryKind.EPISODIC, "事件 3")  # 触发淘汰
 
     active = await repository.count_active(MemoryKind.EPISODIC)
     assert active == 2  # 硬淘汰到容量
@@ -73,9 +79,10 @@ async def test_capacity_eviction_keeps_latest() -> None:
 async def test_capacity_eviction_skips_procedural() -> None:
     repository = FakeCopilotMemoryRepository()
     service = make_service(repository, capacity=2)
-    await service.write_memory(MemoryKind.PROCEDURAL, "规则 1")
-    await service.write_memory(MemoryKind.PROCEDURAL, "规则 2")
-    await service.write_memory(MemoryKind.PROCEDURAL, "规则 3")  # procedural 不淘汰
+    async with gateway_run():
+        await service.write_memory(MemoryKind.PROCEDURAL, "规则 1")
+        await service.write_memory(MemoryKind.PROCEDURAL, "规则 2")
+        await service.write_memory(MemoryKind.PROCEDURAL, "规则 3")  # procedural 不淘汰
 
     assert await repository.count_active(MemoryKind.PROCEDURAL) == 3
 
@@ -83,9 +90,9 @@ async def test_capacity_eviction_skips_procedural() -> None:
 async def test_search_memory_touches_access_count() -> None:
     repository = FakeCopilotMemoryRepository()
     service = make_service(repository)
-    await service.write_memory(MemoryKind.SEMANTIC, "用户是副总经理", entity_id="user:role")
-
-    hits = await service.search_memory("用户是副总经理", MemoryKind.SEMANTIC)
+    async with gateway_run():
+        await service.write_memory(MemoryKind.SEMANTIC, "用户是副总经理", entity_id="user:role")
+        hits = await service.search_memory("用户是副总经理", MemoryKind.SEMANTIC)
     assert len(hits) == 1
     assert hits[0].access_count == 1
     assert hits[0].last_access is not None
@@ -95,9 +102,9 @@ async def test_recall_touches_recalled_memories() -> None:
     """召回命中回写 access_count/last_access（ACT-R 频率/近期增益的活水）。"""
     repository = FakeCopilotMemoryRepository()
     service = make_service(repository)
-    await service.write_memory(MemoryKind.SEMANTIC, "用户是副总经理", entity_id="user:role")
-
-    recalled = await service.recall("用户是副总经理")
+    async with gateway_run():
+        await service.write_memory(MemoryKind.SEMANTIC, "用户是副总经理", entity_id="user:role")
+        recalled = await service.recall("用户是副总经理")
     assert len(recalled.semantic) == 1
     assert recalled.semantic[0].access_count >= 1
     assert recalled.semantic[0].last_access is not None
@@ -117,7 +124,8 @@ async def test_recall_revives_superseded_within_window() -> None:
     await repository.add(memory)
     service = make_service(repository)
 
-    recalled = await service.recall("用户是副总经理")
+    async with gateway_run():
+        recalled = await service.recall("用户是副总经理")
     assert len(recalled.semantic) == 1
     assert recalled.semantic[0].superseded is False  # 已复活
     assert recalled.semantic[0].superseded_at is None
@@ -145,7 +153,8 @@ async def test_recall_does_not_revive_when_superseder_alive() -> None:
     await repository.add(loser)
     service = make_service(repository)
 
-    recalled = await service.recall("用户用 Vue")
+    async with gateway_run():
+        recalled = await service.recall("用户用 Vue")
     assert all(m.content != "用户用 Vue" for m in recalled.semantic)
     assert loser.superseded is True  # 未被复活
 
@@ -172,7 +181,8 @@ async def test_recall_revives_when_superseder_gone() -> None:
     await repository.add(loser)
     service = make_service(repository)
 
-    recalled = await service.recall("用户用 Vue")
+    async with gateway_run():
+        recalled = await service.recall("用户用 Vue")
     assert any(m.content == "用户用 Vue" for m in recalled.semantic)
 
 
@@ -190,7 +200,8 @@ async def test_recall_does_not_revive_outside_window() -> None:
     await repository.add(memory)
     service = make_service(repository)
 
-    recalled = await service.recall("用户是副总经理")
+    async with gateway_run():
+        recalled = await service.recall("用户是副总经理")
     assert len(recalled.semantic) == 0
 
 
@@ -210,7 +221,8 @@ async def test_recall_does_not_revive_below_floor() -> None:
     await repository.add(memory)
     service = make_service(repository)
 
-    await service.recall("很久以前的事件")
+    async with gateway_run():
+        await service.recall("很久以前的事件")
     assert memory.superseded is True  # 未被复活
 
 

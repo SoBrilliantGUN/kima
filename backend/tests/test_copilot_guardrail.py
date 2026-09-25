@@ -25,7 +25,8 @@ from app.agent.guardrail.trust import (
     source_trust,
 )
 from app.agent.runtime.config import RuntimeConfig
-from app.agent.runtime.reactive import evaluate_tool_results, build_reactive_graph
+from app.agent.runtime.reactive import build_reactive_graph
+from app.agent.runtime.reactive_helpers import evaluate_tool_results
 from app.agent.runtime.state import AgentState
 from app.agent.toolmeta import SideEffectLevel, ToolMeta
 

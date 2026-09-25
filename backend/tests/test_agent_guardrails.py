@@ -7,13 +7,13 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from app.agent.gateway import LLMGateway, run_budget
+from app.agent.gateway import run_budget
 from app.agent.guardrail.review import (
     LLMOutputReviewer,
     ReviewResult,
     ReviewVerdict,
 )
-from app.agent.guardrail.review_node import trace_from_messages, build_review_node
+from app.agent.guardrail.review_node import build_review_node, trace_from_messages
 from app.agent.helpers import truncate_history_tokens
 from app.agent.runtime.budget import (
     BudgetExceeded,
@@ -34,6 +34,7 @@ from tests.fakes import (
     FakeNoteRepository,
     FakeOutputReviewer,
     ScriptedLLM,
+    make_gateway,
 )
 
 
@@ -71,7 +72,8 @@ def _write_state() -> dict[str, Any]:
 def test_daily_budget_requires_store() -> None:
     """Bug #2：DailyBudget 无 store 应报错（构造即 TypeError，避免重启清零绕过日上限）。"""
     with pytest.raises(TypeError):
-        DailyBudget(max_cost_cny=100.0)  # 缺必填 store
+        # 故意缺必填 store，验证构造拒绝（Bug #2）。
+        DailyBudget(max_cost_cny=100.0)  # type: ignore[call-arg]
 
 
 def test_daily_budget_token_limit() -> None:
@@ -189,8 +191,9 @@ def test_reviewer_parse_fail_closed_on_structural_mismatch() -> None:
 async def test_reviewer_fail_closed_on_semantic_mismatch() -> None:
     """语义层 mismatch（合法 JSON 但 verdict 越界）→ 单次调用即 fail-closed，不再自纠错。"""
     llm = ScriptedLLM(['{"verdict":"oops"}'])
-    reviewer = LLMOutputReviewer(LLMGateway(llm=llm))
-    result = await reviewer.review("最终回答", "轨迹")
+    reviewer = LLMOutputReviewer(make_gateway(llm=llm))
+    with run_budget(BudgetTracker(HardBudget()), run_id="r1"):
+        result = await reviewer.review("最终回答", "轨迹")
     assert result.verdict is ReviewVerdict.UNVERIFIED
     assert len(llm.calls) == 1
 
@@ -213,8 +216,9 @@ def test_loads_json_repair_keeps_json_word_inside_content() -> None:
 async def test_reviewer_repairs_malformed_json_without_retry() -> None:
     """尾逗号坏 JSON 以前要靠自纠错再烧一次，现在 json_repair 修好、单次调用即 OK。"""
     llm = ScriptedLLM(['{"verdict":"ok","issues":[],}'])
-    reviewer = LLMOutputReviewer(LLMGateway(llm=llm))
-    result = await reviewer.review("最终回答", "轨迹")
+    reviewer = LLMOutputReviewer(make_gateway(llm=llm))
+    with run_budget(BudgetTracker(HardBudget()), run_id="r1"):
+        result = await reviewer.review("最终回答", "轨迹")
     assert result.verdict is ReviewVerdict.OK
     assert len(llm.calls) == 1
 
@@ -222,9 +226,10 @@ async def test_reviewer_repairs_malformed_json_without_retry() -> None:
 async def test_reviewer_propagates_budget_exceeded() -> None:
     """预算硬停（BudgetExceeded）应上抛中止 run，不被吞成 UNVERIFIED（决策 D2「该停就停」）。"""
     llm = ScriptedLLM(['{"verdict":"ok","issues":[]}'])
-    gateway = LLMGateway(llm=llm)
+    gateway = make_gateway(llm=llm)
     reviewer = LLMOutputReviewer(gateway)
-    with run_budget(BudgetTracker(HardBudget(max_turns=0))):  # turn_count 0 >= 0 → 预检即超限
+    # turn_count 0 >= 0 → 预检即超限
+    with run_budget(BudgetTracker(HardBudget(max_turns=0)), run_id="r1"):
         with pytest.raises(BudgetExceeded):
             await reviewer.review("最终回答", "轨迹")
     assert len(llm.calls) == 0  # 预检即中止，根本没调 LLM
@@ -313,7 +318,7 @@ async def test_review_node_unverified_correction() -> None:
         results=[ReviewResult(verdict=ReviewVerdict.UNVERIFIED, issues=[])]
     )
     node = build_review_node(reviewer, review_max_attempts=2)
-    result = await node(_write_state())
+    result = await node(_write_state(), {"configurable": {"thread_id": "t1"}})
     assert result["review_verdict"] == "unverified"
     assert result["correction"]
 
@@ -323,7 +328,7 @@ async def test_side_effect_verifier_note() -> None:
     note_service = NoteService(FakeNoteRepository(), kb_repo)
     memory_service = CopilotMemoryService(
         repository=FakeCopilotMemoryRepository(),
-        embedder=FakeEmbeddingClient(dimension=8),
+        gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=8)),
         judge=FakeConflictJudge(),
         capacity=200,
         episodic_ttl_days=30,
@@ -369,7 +374,7 @@ async def test_side_effect_verifier_memory_missing() -> None:
     note_service = NoteService(FakeNoteRepository(), kb_repo)
     memory_service = CopilotMemoryService(
         repository=FakeCopilotMemoryRepository(),
-        embedder=FakeEmbeddingClient(dimension=8),
+        gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=8)),
         judge=FakeConflictJudge(),
         capacity=200,
         episodic_ttl_days=30,

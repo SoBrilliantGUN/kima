@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.api.deps import get_kb_service
+from app.api.deps_core import get_kb_service
 from app.main import app
 from app.services.knowledge_base import KnowledgeBaseService
 from tests.fakes import FakeKnowledgeBaseRepository

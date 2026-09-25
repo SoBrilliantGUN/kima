@@ -8,6 +8,7 @@ from app.models.note import Note
 from app.models.note_chunk import NoteChunk
 from app.services.note_vectorize import NoteVectorizeService
 from app.workers.note_vectorize_worker import NoteVectorizeWorker
+from tests.fakes import make_gateway
 
 
 class FakeNoteChunkRepository:
@@ -51,7 +52,9 @@ def _note(content: str) -> Note:
 async def test_vectorize_deletes_and_adds() -> None:
     note = _note("# 标题\n\n一段内容，足够长以产生至少一个 chunk。")
     repo = FakeNoteChunkRepository([note])
-    service = NoteVectorizeService(repository=repo, embedder=FakeEmbeddingClient(dimension=4))
+    service = NoteVectorizeService(
+        repository=repo, gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=4))
+    )
 
     await service.vectorize(note.id)
 
@@ -72,7 +75,9 @@ async def test_vectorize_deletes_and_adds() -> None:
 async def test_vectorize_empty_note_marks_vectorized() -> None:
     note = _note("")
     repo = FakeNoteChunkRepository([note])
-    service = NoteVectorizeService(repository=repo, embedder=FakeEmbeddingClient(dimension=4))
+    service = NoteVectorizeService(
+        repository=repo, gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=4))
+    )
 
     await service.vectorize(note.id)
 
@@ -86,7 +91,7 @@ async def test_worker_passes_idle_threshold_and_processes() -> None:
     worker = NoteVectorizeWorker(
         repo_factory=lambda: repo,
         service_factory=lambda: NoteVectorizeService(
-            repository=repo, embedder=FakeEmbeddingClient(dimension=4)
+            repository=repo, gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=4))
         ),
         idle_seconds=120,
     )
@@ -103,7 +108,7 @@ async def test_worker_no_due_notes() -> None:
     worker = NoteVectorizeWorker(
         repo_factory=lambda: repo,
         service_factory=lambda: NoteVectorizeService(
-            repository=repo, embedder=FakeEmbeddingClient(dimension=4)
+            repository=repo, gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=4))
         ),
         idle_seconds=120,
     )

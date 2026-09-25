@@ -5,10 +5,10 @@ from collections.abc import AsyncIterator
 from app.integrations.llm import ChatMessage, ChatResult
 from app.rag.eval import (
     EvalSample,
-    parse_score,
     answer_relevancy,
     context_relevancy,
     faithfulness,
+    parse_score,
 )
 from app.rag.metrics import mean_mrr, mean_recall_at_k, mrr, recall_at_k
 

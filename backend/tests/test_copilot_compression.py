@@ -13,7 +13,6 @@ from langchain_core.outputs import ChatResult
 from langchain_core.tools import tool
 from pydantic import Field
 
-from app.agent.gateway import LLMGateway
 from app.agent.runtime.context import (
     CompressionLevel,
     ContextConfig,
@@ -22,7 +21,7 @@ from app.agent.runtime.context import (
     pick_level,
 )
 from app.agent.runtime.reactive import build_reactive_graph
-from tests.fakes import ScriptedLLM
+from tests.fakes import ScriptedLLM, gateway_run, make_gateway
 
 
 def _messages_with_tool_cycles(cycles: int) -> list[BaseMessage]:
@@ -57,13 +56,14 @@ def test_pick_level_thresholds() -> None:
 
 async def test_tool_compress_with_summarizer() -> None:
     cfg = ContextConfig(tool_result_min_chars=10)
-    mgr = ContextManager(cfg, summarizer=LLMGateway(llm=ScriptedLLM(contents=["中间摘要"])))
+    mgr = ContextManager(cfg, summarizer=make_gateway(llm=ScriptedLLM(contents=["中间摘要"])))
     messages = [
         SystemMessage(content="system"),
         HumanMessage(content="q"),
         ToolMessage(content="A" * 5000, tool_call_id="c0"),
     ]
-    out = await mgr.compress(messages, CompressionLevel.TOOL_COMPRESS)
+    async with gateway_run():
+        out = await mgr.compress(messages, CompressionLevel.TOOL_COMPRESS)
     compressed = out[2]
     assert isinstance(compressed, ToolMessage)
     assert compressed.tool_call_id == "c0"
@@ -86,9 +86,10 @@ async def test_tool_compress_without_summarizer_truncates() -> None:
 
 async def test_history_summary_keeps_head_and_recent_turn() -> None:
     cfg = ContextConfig(recent_turns=1)
-    mgr = ContextManager(cfg, summarizer=LLMGateway(llm=ScriptedLLM(contents=["历史摘要内容"])))
+    mgr = ContextManager(cfg, summarizer=make_gateway(llm=ScriptedLLM(contents=["历史摘要内容"])))
     messages = _messages_with_tool_cycles(3)  # [system, q] + 3 轮工具 = 8 条
-    out = await mgr.compress(messages, CompressionLevel.HISTORY_SUMMARY)
+    async with gateway_run():
+        out = await mgr.compress(messages, CompressionLevel.HISTORY_SUMMARY)
     # head(2) + summary(1) + tail(最近 1 轮 = 2) = 5
     assert len(out) == 5
     assert out[0].type == "system"

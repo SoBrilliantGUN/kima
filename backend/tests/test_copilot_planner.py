@@ -5,7 +5,6 @@ from typing import Any
 
 import pytest
 
-from app.agent.gateway import LLMGateway
 from app.agent.runtime.executor import PlanExecutionError, execute_plan
 from app.agent.runtime.planner import (
     LLMPlanner,
@@ -16,7 +15,7 @@ from app.agent.runtime.planner import (
     validate_plan,
 )
 from app.repositories.plan import InMemoryPlanStore
-from tests.fakes import ScriptedLLM
+from tests.fakes import ScriptedLLM, gateway_run, make_gateway
 
 
 def test_parse_plan() -> None:
@@ -168,19 +167,21 @@ def test_plan_to_from_dict_roundtrip() -> None:
 
 async def test_planner_fail_closed_on_hallucinated_tool() -> None:
     llm = ScriptedLLM(['{"steps":[{"id":"1","action":"nope","params":{}}]}'])
-    planner = LLMPlanner(LLMGateway(llm=llm))
-    plan = await planner.generate("查点东西", ["search", "read"])
+    planner = LLMPlanner(make_gateway(llm=llm))
+    async with gateway_run():
+        plan = await planner.generate("查点东西", ["search", "read"])
     assert plan.steps == ()
     assert len(llm.calls) == 1
 
 
 async def test_replan_rejects_hallucinated_tool() -> None:
     llm = ScriptedLLM(['{"steps":[{"id":"2r","action":"nope","params":{}}]}'])
-    planner = LLMPlanner(LLMGateway(llm=llm))
+    planner = LLMPlanner(make_gateway(llm=llm))
     plan = Plan(steps=(PlanStep(step_id="2", action="transfer", params={}),))
     failed = plan.get_step("2")
     assert failed is not None
-    result = await planner.replan(plan, failed, "boom", ["transfer"])
+    async with gateway_run():
+        result = await planner.replan(plan, failed, "boom", ["transfer"])
     assert result == []
 
 

@@ -7,7 +7,7 @@ from urllib.parse import quote
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.api.deps import get_document_service, get_note_service
+from app.api.deps_core import get_document_service, get_note_service
 from app.main import app
 from app.models.document import DocumentStatus
 from app.models.knowledge_base import KnowledgeBase

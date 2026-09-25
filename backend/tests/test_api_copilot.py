@@ -13,7 +13,8 @@ from langchain_core.messages import AIMessage
 
 from app.agent.service import CopilotService
 from app.agent.tuning import CopilotTuning
-from app.api.deps import get_chat_service, get_copilot_service
+from app.api.deps_copilot import get_copilot_service
+from app.api.deps_core import get_chat_service
 from app.core.memory_store import FileMemoryStore
 from app.integrations.embedding import FakeEmbeddingClient
 from app.integrations.rerank import FakeRerankerClient
@@ -35,6 +36,7 @@ from tests.fakes import (
     FakeFileStore,
     FakeKnowledgeBaseRepository,
     FakeNoteRepository,
+    make_gateway,
 )
 
 
@@ -105,12 +107,13 @@ def _make_copilot_service(tmp_path: Path) -> tuple[CopilotService, FakeChatRepos
     note_service = NoteService(FakeNoteRepository(), kb_repo)
     document_service = DocumentService(FakeDocumentRepository(), kb_repo, FakeFileStore())
     embedder = FakeEmbeddingClient(dimension=8)
+    gateway = make_gateway(embedder=embedder, reranker=FakeRerankerClient())
     retriever = RagRetriever(
-        repository=_EmptyRetrievalRepo(), embedder=embedder, reranker=FakeRerankerClient()
+        repository=_EmptyRetrievalRepo(), gateway=gateway
     )
     memory_service = CopilotMemoryService(
         repository=FakeCopilotMemoryRepository(),
-        embedder=embedder,
+        gateway=gateway,
         judge=FakeConflictJudge(),
         capacity=200,
         episodic_ttl_days=30,

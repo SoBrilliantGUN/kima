@@ -33,6 +33,7 @@ from tests.fakes import (
     FakeKnowledgeBaseRepository,
     FakeNoteRepository,
     FakeOutputReviewer,
+    make_gateway,
 )
 
 
@@ -110,13 +111,14 @@ def make_service(
     note_service = NoteService(FakeNoteRepository(), kb_repo)
     document_service = DocumentService(FakeDocumentRepository(), kb_repo, FakeFileStore())
     embedder = FakeEmbeddingClient(dimension=8)
+    gateway = make_gateway(embedder=embedder, reranker=FakeRerankerClient())
     retriever = RagRetriever(
-        repository=_EmptyRetrievalRepo(), embedder=embedder, reranker=FakeRerankerClient()
+        repository=_EmptyRetrievalRepo(), gateway=gateway
     )
     memory_repo = FakeCopilotMemoryRepository()
     memory_service = CopilotMemoryService(
         repository=memory_repo,
-        embedder=embedder,
+        gateway=gateway,
         judge=FakeConflictJudge(),
         capacity=200,
         episodic_ttl_days=30,
@@ -128,6 +130,7 @@ def make_service(
     chat_repo = FakeChatRepository()
     service = CopilotService(
         model=model,
+        gateway=gateway,
         checkpointer=None,
         tracer=None,
         rag_retriever=retriever,

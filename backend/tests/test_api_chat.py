@@ -9,7 +9,7 @@ from typing import Any, cast
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.api.deps import get_chat_service
+from app.api.deps_core import get_chat_service
 from app.integrations.embedding import FakeEmbeddingClient
 from app.integrations.llm import FakeLLMClient
 from app.integrations.rerank import FakeRerankerClient
@@ -20,7 +20,7 @@ from app.rag.retriever import RagRetriever
 from app.rag.schema import RetrievedChunk
 from app.rag.service import RagService
 from app.services.chat import ChatService
-from tests.fakes import FakeKnowledgeBaseRepository
+from tests.fakes import FakeKnowledgeBaseRepository, make_gateway
 
 
 class FakeChatRepository:
@@ -91,8 +91,9 @@ class _EmptyRetrievalRepo:
 def _make_rag_service() -> RagService:
     retriever = RagRetriever(
         repository=_EmptyRetrievalRepo(),
-        embedder=FakeEmbeddingClient(dimension=4),
-        reranker=FakeRerankerClient(),
+        gateway=make_gateway(
+            embedder=FakeEmbeddingClient(dimension=4), reranker=FakeRerankerClient()
+        ),
     )
     return RagService(
         retriever=retriever,

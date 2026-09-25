@@ -10,6 +10,7 @@ from app.rag.hybrid import rrf_fuse
 from app.rag.rerank import rerank_chunks
 from app.rag.retriever import RagRetriever
 from app.rag.schema import RetrievedChunk, SourceType
+from tests.fakes import gateway_run, make_gateway
 
 
 def _chunk(
@@ -135,14 +136,16 @@ async def test_retriever_resolves_parent() -> None:
     )
     retriever = RagRetriever(
         repository=repository,
-        embedder=FakeEmbeddingClient(dimension=4),
-        reranker=FakeRerankerClient(),
+        gateway=make_gateway(
+            embedder=FakeEmbeddingClient(dimension=4), reranker=FakeRerankerClient()
+        ),
         dense_top_k=20,
         lexical_top_k=20,
         rerank_top_n=6,
     )
 
-    result = await retriever.retrieve("问一下", [kb_id])
+    async with gateway_run():
+        result = await retriever.retrieve("问一下", [kb_id])
 
     assert repository.dense_calls == 1
     assert repository.lexical_calls == 1

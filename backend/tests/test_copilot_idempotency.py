@@ -34,6 +34,7 @@ from tests.fakes import (
     FakeFileStore,
     FakeKnowledgeBaseRepository,
     FakeNoteRepository,
+    make_gateway,
 )
 
 
@@ -145,12 +146,13 @@ def _make_tools(
     note_service = _CountingNoteService(note_repo, kb_repo)
     document_service = DocumentService(FakeDocumentRepository(), kb_repo, FakeFileStore())
     embedder = FakeEmbeddingClient(dimension=8)
+    gateway = make_gateway(embedder=embedder, reranker=FakeRerankerClient())
     retriever = RagRetriever(
-        repository=_EmptyRetrievalRepo(), embedder=embedder, reranker=FakeRerankerClient()
+        repository=_EmptyRetrievalRepo(), gateway=gateway
     )
     memory_service = CopilotMemoryService(
         repository=FakeCopilotMemoryRepository(),
-        embedder=embedder,
+        gateway=gateway,
         judge=FakeConflictJudge(),
         capacity=200,
         episodic_ttl_days=30,

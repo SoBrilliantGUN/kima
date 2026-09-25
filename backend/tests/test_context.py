@@ -123,15 +123,23 @@ def test_split_history_recent_never_fits() -> None:
 async def test_summarize_history_truncates_to_budget() -> None:
     llm = _FixedLLM("x" * 1000)
     older = [ChatMessage("user", "q")]
-    summary = await summarize_history(llm, older, budget=10, estimate=len)
+
+    async def summarize(messages: list[ChatMessage]) -> str:
+        return (await llm.chat(messages, temperature=0)).content
+
+    summary = await summarize_history(summarize, older, budget=10, estimate=len)
     assert len(summary) <= 10
 
 
 async def test_assemble_history_no_summary() -> None:
     llm = _FixedLLM("摘要")
     history = [ChatMessage("user", "hi"), ChatMessage("assistant", "hello")]
+
+    async def summarize(messages: list[ChatMessage]) -> str:
+        return (await llm.chat(messages, temperature=0)).content
+
     result = await assemble_history(
-        llm, history, recent_turns=3, history_budget=1000, estimate=len
+        summarize, history, recent_turns=3, history_budget=1000, estimate=len
     )
     assert result == history
 
@@ -144,8 +152,12 @@ async def test_assemble_history_with_summary() -> None:
         ChatMessage("user", "c" * 100),
         ChatMessage("assistant", "d" * 100),
     ]
+
+    async def summarize(messages: list[ChatMessage]) -> str:
+        return (await llm.chat(messages, temperature=0)).content
+
     result = await assemble_history(
-        llm, history, recent_turns=1, history_budget=250, estimate=len
+        summarize, history, recent_turns=1, history_budget=250, estimate=len
     )
     assert len(result) == 3  # 摘要 + 最近 2 条
     assert result[0].role == "user"

@@ -8,7 +8,7 @@ from app.integrations.embedding import FakeEmbeddingClient
 from app.models.document import MAX_RETRIES, Document, DocumentStatus, DocumentType
 from app.services.ingest import IngestService
 from app.workers.document_worker import DocumentWorker
-from tests.fakes import FakeDocumentParser, FakeDocumentRepository, FakeFileStore
+from tests.fakes import FakeDocumentParser, FakeDocumentRepository, FakeFileStore, make_gateway
 
 
 async def _make_url_doc(
@@ -39,7 +39,7 @@ def _make_worker(
         ingest_factory=lambda: IngestService(
             repository=repo,
             parser=parser,
-            embedder=FakeEmbeddingClient(1024),
+            gateway=make_gateway(embedder=FakeEmbeddingClient(1024)),
             file_store=FakeFileStore(),
             base_delay=base_delay,
         ),
@@ -117,7 +117,7 @@ async def test_worker_wakes_on_event_and_processes() -> None:
         ingest_factory=lambda: IngestService(
             repository=repo,
             parser=FakeDocumentParser(),
-            embedder=FakeEmbeddingClient(1024),
+            gateway=make_gateway(embedder=FakeEmbeddingClient(1024)),
             file_store=FakeFileStore(),
         ),
         wake_event=wake,

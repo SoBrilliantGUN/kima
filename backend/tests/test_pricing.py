@@ -31,7 +31,13 @@ _DEEPSEEK_FULL_DAY = [
 ]
 
 
-def _policy(repo: InMemoryPricingRepository, vendor: str, model: str, start, end) -> None:
+def _policy(
+    repo: InMemoryPricingRepository,
+    vendor: str,
+    model: str,
+    start: datetime,
+    end: datetime,
+) -> None:
     repo.add(vendor, model, start, end, _DEEPSEEK_DAY)
 
 

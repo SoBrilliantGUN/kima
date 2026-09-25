@@ -1,17 +1,28 @@
 import math
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from app.agent.gateway import GatewayConfig, LLMGateway, run_budget
 from app.agent.guardrail.review import ReviewResult, ReviewVerdict
 from app.agent.memory_classifier import MemoryClassification
-from app.integrations.llm import ChatMessage, ChatResult
+from app.agent.pricing import PriceQuote, PricingService
+from app.agent.resilience.circuit_breaker import CircuitBreaker
+from app.agent.resilience.retry import Backoff, RetryPolicy
+from app.agent.runtime.budget import BudgetTracker, DailyBudget, HardBudget, Usage
+from app.agent.snapshot import InMemorySnapshotStore, SnapshotStore
+from app.integrations.embedding import EmbeddingClient, FakeEmbeddingClient
+from app.integrations.llm import ChatMessage, ChatResult, LLMClient
 from app.integrations.parser import ParsedDocument, ParserError, SourceType
+from app.integrations.rerank import FakeRerankerClient, RerankerClient
 from app.models.copilot import CopilotEvent, CopilotMemory, MemoryKind
 from app.models.document import MAX_RETRIES, Document, DocumentChunk, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase
 from app.models.note import Note
+from app.repositories.llm_cost import CostStore, InMemoryCostStore
+from app.repositories.pricing import InMemoryPricingRepository
 from app.services.conflict import ConflictVerdict
 
 
@@ -543,4 +554,65 @@ class ScriptedLLM:
     ) -> AsyncIterator[str]:
         if self._contents:
             yield self._contents.pop(0)
+
+
+class FakePricingService(PricingService):
+    """测试替身：任意厂商 resolve 返回 ¥0 全时段报价，compute_cost 恒 0（不碰 DB/strategy）。
+
+    网关只在真实厂商（非 fake/空）下走定价；真实厂商用例（如 deepseek）经本替身直接 ¥0 通过，
+    避免每个用例都去 seed 价格目录。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(InMemoryPricingRepository(), cache_ttl_seconds=0)
+
+    async def resolve(self, vendor: str, model: str, now: datetime) -> PriceQuote:
+        return PriceQuote(policy_id=None, slot_start="00:00", slot_end="24:00", prices={})
+
+    def compute_cost(self, vendor: str, usage: Usage, quote: PriceQuote) -> float:
+        return 0.0
+
+
+def make_gateway(
+    *,
+    config: GatewayConfig | None = None,
+    llm: LLMClient | None = None,
+    daily_budget: DailyBudget | None = None,
+    breaker: CircuitBreaker | None = None,
+    retry: RetryPolicy | None = None,
+    snapshots: SnapshotStore | None = None,
+    embedder: EmbeddingClient | None = None,
+    reranker: RerankerClient | None = None,
+    pricing: PricingService | None = None,
+    cost_store: CostStore | None = None,
+) -> LLMGateway:
+    """构造一个全协作者就位的 ``LLMGateway``（默认全 fake/no-op），可按需覆盖任一协作者。
+
+    网关要求所有协作者非空；测试统一经本工厂装配默认 fake，避免每个用例重复传一堆无关依赖，
+    也避免网关构造签名变化时逐个改用例。
+    """
+    return LLMGateway(
+        config=config or GatewayConfig(),
+        llm=llm or ScriptedLLM(["ok"]),
+        daily_budget=daily_budget
+        or DailyBudget(max_cost_cny=1e9, max_tokens=10**12, store=FakeDailyBudgetStore()),
+        breaker=breaker or CircuitBreaker(failure_threshold=10_000),
+        retry=retry or RetryPolicy(max_attempts=1, base_delay=0.0, backoff=Backoff.FIXED),
+        snapshots=snapshots or InMemorySnapshotStore(),
+        embedder=embedder or FakeEmbeddingClient(dimension=8),
+        reranker=reranker or FakeRerankerClient(),
+        pricing=pricing or FakePricingService(),
+        cost_store=cost_store or InMemoryCostStore(),
+    )
+
+
+@asynccontextmanager
+async def gateway_run(run_id: str = "r1") -> AsyncIterator[None]:
+    """测试辅助：给一次/多次网关调用提供最小 run 上下文（无上限 tracker + run_id）。
+
+    网关只能在 run_budget 里跑，直接调 LLM 后端组件（planner/classifier/reviewer/
+    summarizer/judge）前用它包裹，模拟「处于一次 copilot run 中」。
+    """
+    with run_budget(BudgetTracker(HardBudget()), run_id=run_id):
+        yield
 
