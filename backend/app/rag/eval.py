@@ -60,10 +60,10 @@ async def _score(llm: LLMClient, instruction: str) -> float:
         [ChatMessage("system", _SCORE_SYSTEM), ChatMessage("user", instruction)],
         temperature=0,
     )
-    return _parse_score(result.content)
+    return parse_score(result.content)
 
 
-def _parse_score(text: str) -> float:
+def parse_score(text: str) -> float:
     """从 judge 输出里提取第一个 1–5 数字，归一化到 0–1；无数字记 0。"""
     match = re.search(r"[1-5]", text)
     if match is None:
