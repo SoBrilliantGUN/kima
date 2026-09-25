@@ -184,3 +184,49 @@ async def test_ingest_clears_old_chunks_on_retry() -> None:
     new_ids = {chunk.id for chunk in repo.chunks_of(doc.id)}
     assert new_ids
     assert old_ids.isdisjoint(new_ids)  # 旧 chunk 已清理，重写全新 chunk
+
+
+async def test_ingest_large_document_needs_approval() -> None:
+    """大文档警告：child token 预估超阈值 → 置 needs_approval，不嵌入。"""
+    repo = FakeDocumentRepository()
+    file_store = FakeFileStore()
+    parser = FakeDocumentParser(markdown="这是正文。" * 2000)  # 足够长 → 超阈值
+    ingest = IngestService(
+        repository=repo,
+        parser=parser,
+        gateway=make_gateway(embedder=FakeEmbeddingClient(1024)),
+        file_store=file_store,
+        warn_tokens=10,  # 极小阈值 → 必触发
+    )
+
+    doc = await _make_pdf(repo, file_store)
+    await ingest.ingest(doc.id)
+
+    assert doc.status == DocumentStatus.NEEDS_APPROVAL
+    assert repo.chunks_of(doc.id) == []  # 未嵌入、未落 chunk
+
+
+async def test_ingest_large_document_approved_then_embeds() -> None:
+    """确认后重跑：embedding_approved=True → 跳过阈值检查，正常嵌入 done。"""
+    repo = FakeDocumentRepository()
+    file_store = FakeFileStore()
+    parser = FakeDocumentParser(markdown="这是正文。" * 2000)
+    ingest = IngestService(
+        repository=repo,
+        parser=parser,
+        gateway=make_gateway(embedder=FakeEmbeddingClient(1024)),
+        file_store=file_store,
+        warn_tokens=10,
+    )
+
+    doc = await _make_pdf(repo, file_store)
+    await ingest.ingest(doc.id)
+    assert doc.status == DocumentStatus.NEEDS_APPROVAL
+
+    # 模拟用户确认：置 approved + 回 pending，重跑
+    doc.embedding_approved = True
+    doc.status = DocumentStatus.PENDING
+    await ingest.ingest(doc.id)
+
+    assert doc.status == DocumentStatus.DONE
+    assert repo.chunks_of(doc.id)  # 已嵌入落 chunk
