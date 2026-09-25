@@ -160,7 +160,6 @@ async def test_graph_compress_node_replaces_messages() -> None:
         "review_verdict": "",
         "review_issues": [],
         "correction": "",
-        "trust": 100.0,
         "compression_level": 0,
     }
     updates = [u async for u in graph.astream(initial, stream_mode="updates")]

@@ -86,6 +86,29 @@ class _HangingLLM:
         yield "ok"
 
 
+class _HangingStreamLLM:
+    """chat 正常、stream 挂起，用于流式超时熔断测试。"""
+
+    async def chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> ChatResult:
+        return ChatResult(content="ok")
+
+    async def stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        await asyncio.sleep(10)
+        yield "never"
+
+
 def _fast_retry(attempts: int) -> RetryPolicy:
     return RetryPolicy(max_attempts=attempts, base_delay=0.0, backoff=Backoff.FIXED)
 
@@ -317,3 +340,42 @@ async def test_embed_snapshot_reuses() -> None:
 
     assert first == second
     assert len(store._rows) == 1  # 只落一条快照：第二次命中缓存、不重跑嵌入
+
+
+async def test_stream_records_usage_without_counting_turn() -> None:
+    sink = DailyBudget(max_cost_cny=100.0, max_tokens=100_000, store=FakeDailyBudgetStore())
+    tracker = BudgetTracker(HardBudget(), sink=sink)
+    gateway = make_gateway(llm=ScriptedLLM(["hello world"]), retry=_fast_retry(1))
+
+    with run_budget(tracker, run_id="r1"):
+        parts = [delta async for delta in gateway.stream("answer", [ChatMessage("user", "hi")])]
+
+    assert "".join(parts) == "hello world"
+    assert tracker.turn_count == 0  # 生成不计 turn
+    assert sink.tokens > 0  # 粗估计入（非 0）
+
+
+async def test_stream_snapshot_reuses() -> None:
+    store = InMemorySnapshotStore()
+    gateway = make_gateway(
+        llm=ScriptedLLM(["hello world"]), snapshots=store, retry=_fast_retry(1)
+    )
+    messages = [ChatMessage("user", "hi")]
+
+    with run_budget(BudgetTracker(HardBudget()), run_id="r1"):
+        first = [delta async for delta in gateway.stream("answer", messages)]
+        second = [delta async for delta in gateway.stream("answer", messages)]
+
+    assert "".join(first) == "hello world"
+    assert "".join(second) == "hello world"
+    assert len(store._rows) == 1  # 第二次命中快照、未重跑
+
+
+async def test_stream_timeout_raises() -> None:
+    gateway = make_gateway(
+        llm=_HangingStreamLLM(), retry=_fast_retry(1), config=GatewayConfig(timeout=0.01)
+    )
+
+    with run_budget(BudgetTracker(HardBudget()), run_id="r1"):
+        with pytest.raises(TimeoutError):
+            _ = [delta async for delta in gateway.stream("answer", [ChatMessage("user", "hi")])]

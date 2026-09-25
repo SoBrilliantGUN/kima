@@ -105,7 +105,6 @@ async def test_constraint_reminder_is_tail_message_every_round() -> None:
         "review_verdict": "",
         "review_issues": [],
         "correction": "",
-        "trust": 100.0,
     }
     async for _ in graph.astream(initial, stream_mode="updates"):
         pass
@@ -127,7 +126,6 @@ async def test_no_reminder_when_disabled() -> None:
         "review_verdict": "",
         "review_issues": [],
         "correction": "",
-        "trust": 100.0,
     }
     async for _ in graph.astream(initial, stream_mode="updates"):
         pass

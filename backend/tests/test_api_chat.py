@@ -89,15 +89,15 @@ class _EmptyRetrievalRepo:
 
 
 def _make_rag_service() -> RagService:
-    retriever = RagRetriever(
-        repository=_EmptyRetrievalRepo(),
-        gateway=make_gateway(
-            embedder=FakeEmbeddingClient(dimension=4), reranker=FakeRerankerClient()
-        ),
+    gateway = make_gateway(
+        llm=FakeLLMClient(),
+        embedder=FakeEmbeddingClient(dimension=4),
+        reranker=FakeRerankerClient(),
     )
+    retriever = RagRetriever(repository=_EmptyRetrievalRepo(), gateway=gateway)
     return RagService(
         retriever=retriever,
-        llm=FakeLLMClient(),
+        gateway=gateway,
         web_search=FakeWebSearchClient(),
         context_max_tokens=6000,
         history_recent_turns=3,
