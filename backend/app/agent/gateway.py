@@ -12,9 +12,10 @@
 **铁律**：所有 LLM 出口必须经本网关，禁止直接调用 ``LLMClient.chat`` /
 ``BaseChatModel.ainvoke`` / ``EmbeddingClient.embed_*`` / ``RerankerClient.rerank``。
 
-两套调用形态统一抽象（D6）：
+三套调用形态统一抽象（D6）：
 - 形态 A（一次性结构化）：``complete()`` → 包 ``LLMClient.chat``；
-- 形态 B（流式工具调用）：``invoke_model()`` → 包 ``BaseChatModel.ainvoke``。
+- 形态 B（流式工具调用）：``invoke_model()`` → 包 ``BaseChatModel.ainvoke``；
+- 形态 C（流式生成）：``stream()`` → 包 ``LLMClient.stream``，逐 token yield 同时缓冲全文记账/快照。
 
 run 期上下文注入（``run_budget``）与序列化/指纹/脱敏纯函数分别见
 ``gateway_context.py`` / ``gateway_codec.py``。
@@ -320,7 +321,7 @@ class LLMGateway:
         assert last_exc is not None  # for 循环至少执行一次
         raise last_exc
 
-    # --- 两套调用形态 ---
+    # --- 三套调用形态 ---
 
     async def complete(
         self,
