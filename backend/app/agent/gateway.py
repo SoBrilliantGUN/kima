@@ -23,7 +23,7 @@ run 期上下文注入（``run_budget``）与序列化/指纹/脱敏纯函数分
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, TypeVar
@@ -206,6 +206,62 @@ class LLMGateway:
 
     # --- 执行管线 ---
 
+    async def _account(
+        self,
+        *,
+        call_key: str,
+        kind: str,
+        usage: Usage,
+        count_turn: bool,
+        encode_result: dict[str, Any],
+    ) -> None:
+        """调用成功后的记账/快照/成本明细落库（``_invoke`` 与 ``stream`` 共用）。
+
+        ``encode_result`` 是已编码的结果 payload（供快照落库），``usage`` 是本次调用用量；
+        ``count_turn`` 仅 agent 主循环计 turn，辅助/生成调用不计。
+        """
+        vendor, model = self._vendor_model(kind)
+        # fail-closed（账单完整性）：真实厂商（非 fake/空）返回的用量缺失（input/output 双 0）
+        # 时立即中止。token/cost 两轴预算与成本审计都依赖 usage，若静默按 0 记账这两轴会假死、
+        # 成本记 ¥0，失控调用可超预算烧钱。宁可不放行，也不盲记 0。
+        if (
+            vendor not in ("", "fake")
+            and usage.input_tokens == 0
+            and usage.output_tokens == 0
+        ):
+            raise UsageMissingError(
+                f"{kind} 调用（{vendor}/{model}）未返回 token 用量：usage_metadata 缺失或"
+                "厂商未上报，"
+                "已中止本次调用以保护预算门禁（避免 token/cost 轴静默失效、成本审计记 ¥0）"
+            )
+        # 计价：成本只在网关算一次（docs/pricing.md 铁律），找不到生效价抛 PricingError fail-closed
+        # fake/空厂商不计价（¥0、不落成本明细）：真实厂商才走定价解析与成本审计。
+        cost_cny = 0.0
+        quote: PriceQuote | None = None
+        if vendor not in ("", "fake"):
+            quote = await self._pricing.resolve(vendor, model, datetime.now(UTC))
+            cost_cny = self._pricing.compute_cost(vendor, usage, quote)
+        self._record(usage, count_turn=count_turn, cost_cny=cost_cny)
+        self._breaker.record_success(self._breaker_key(kind))
+        await self._snapshots.put(
+            current().run_id,
+            call_key,
+            kind=kind,
+            output=encode_result,
+            usage=usage_to_dict(usage),
+        )
+        if vendor not in ("", "fake"):
+            await self._cost_store.put(
+                current().run_id,
+                call_key,
+                vendor=vendor,
+                model=model,
+                pricing_policy_id=quote.policy_id if quote is not None else None,
+                price_snapshot=_quote_snapshot(quote),
+                usage=usage,
+                cost_cny=cost_cny,
+            )
+
     async def _invoke(
         self,
         node: str,
@@ -232,47 +288,13 @@ class LLMGateway:
 
         result = await self._retry_call(call, kind)
         usage = extract(result)
-        vendor, model = self._vendor_model(kind)
-        # fail-closed（账单完整性）：真实厂商（非 fake/空）返回的用量缺失（input/output 双 0）
-        # 时立即中止。token/cost 两轴预算与成本审计都依赖 usage，若静默按 0 记账这两轴会假死、
-        # 成本记 ¥0，失控调用可超预算烧钱。宁可不放行，也不盲记 0。
-        if (
-            vendor not in ("", "fake")
-            and usage.input_tokens == 0
-            and usage.output_tokens == 0
-        ):
-            raise UsageMissingError(
-                f"{kind} 调用（{vendor}/{model}）未返回 token 用量：usage_metadata 缺失或"
-                "厂商未上报，"
-                "已中止本次调用以保护预算门禁（避免 token/cost 轴静默失效、成本审计记 ¥0）"
-            )
-        # 计价：成本只在网关算一次（docs/pricing.md 铁律），找不到生效价抛 PricingError fail-closed
-        # fake/空厂商不计价（¥0、不落成本明细）：真实厂商才走定价解析与成本审计。
-        cost_cny = 0.0
-        quote: PriceQuote | None = None
-        if vendor not in ("", "fake"):
-            quote = await self._pricing.resolve(vendor, model, datetime.now(UTC))
-            cost_cny = self._pricing.compute_cost(vendor, usage, quote)
-        self._record(usage, count_turn=count_turn, cost_cny=cost_cny)
-        self._breaker.record_success(self._breaker_key(kind))
-        await snapshots.put(
-            run_id,
-            call_key,
+        await self._account(
+            call_key=call_key,
             kind=kind,
-            output=encode(result),
-            usage=usage_to_dict(usage),
+            usage=usage,
+            count_turn=count_turn,
+            encode_result=encode(result),
         )
-        if vendor not in ("", "fake"):
-            await self._cost_store.put(
-                run_id,
-                call_key,
-                vendor=vendor,
-                model=model,
-                pricing_policy_id=quote.policy_id if quote is not None else None,
-                price_snapshot=_quote_snapshot(quote),
-                usage=usage,
-                cost_cny=cost_cny,
-            )
         return result
 
     async def _retry_call(self, call: Callable[[], Awaitable[_T]], kind: str) -> _T:
@@ -358,6 +380,58 @@ class LLMGateway:
             encode=aimessage_to_dict,
             decode=dict_to_aimessage,
             fingerprint=fingerprint,
+        )
+
+    async def stream(
+        self,
+        node: str,
+        messages: list[ChatMessage],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        """形态 C：流式生成（包 ``LLMClient.stream``），逐 token yield 同时缓冲全文供记账/快照。
+
+        ``LLMClient.stream`` 不返回 usage，用量按 ``estimate_text_tokens`` 粗估（与 embed/rerank
+        同理）。流式已部分输出无法重试；不注入软提示（最终答案非 agent 循环）。
+        """
+        fingerprint = canonical_chat(messages)
+        if self._dlp_redact:
+            messages = redact_chat(messages)
+        self._preflight("chat")
+        run_id = current().run_id
+        call_key = make_call_key(node, fingerprint)
+        cached = await self._snapshots.get(run_id, call_key)
+        if cached is not None:
+            # 命中：复用已成功落盘的全文，作为单个 chunk yield（不重跑、不计账）
+            logger.debug("LLM 快照命中 node=%s", node)
+            yield dict_to_chat_result(cached).content
+            return
+
+        parts: list[str] = []
+        try:
+            # 秒轴硬熔断包住整个流式消费（LLM 挂起保护，与 _retry_call 的恒生效语义一致）
+            async with asyncio.timeout(self._timeout):
+                async for delta in self._llm.stream(
+                    messages, temperature=temperature, max_tokens=max_tokens
+                ):
+                    parts.append(delta)
+                    yield delta
+        except Exception:  # noqa: BLE001 - 流式无重试，记录失败后上抛
+            self._breaker.record_failure(self._breaker_key("chat"))
+            raise
+
+        text = "".join(parts)
+        usage = Usage(
+            input_tokens=estimate_text_tokens([m.content for m in messages]),
+            output_tokens=estimate_text_tokens([text]),
+        )
+        await self._account(
+            call_key=call_key,
+            kind="chat",
+            usage=usage,
+            count_turn=False,
+            encode_result=chat_result_to_dict(ChatResult(content=text)),
         )
 
     # --- 嵌入 / 精排（决策 D1：模块 5 也纳入网关） ---
