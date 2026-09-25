@@ -5,10 +5,10 @@
 历史用 LLM 压缩成摘要，并硬截断到剩余预算内，保证总 token 不超预算。
 """
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from app.chunking.base import estimate_tokens
-from app.integrations.llm import ChatMessage, LLMClient
+from app.integrations.llm import ChatMessage
 from app.integrations.search import WebSearchResult
 from app.rag.schema import Citation, RetrievedChunk, SourceType
 
@@ -19,6 +19,9 @@ _SUMMARY_SYSTEM = (
 )
 
 TokenEstimator = Callable[[str], int]
+# 历史摘要器：消息 → 摘要文本。模块 5 与 Copilot 都传「经网关 complete」，
+# 接进同一套 token 预算 + 截断逻辑。
+HistorySummarizer = Callable[[list[ChatMessage]], Awaitable[str]]
 
 
 def format_kb_context(chunks: list[RetrievedChunk]) -> tuple[str, list[Citation]]:
@@ -106,7 +109,7 @@ def _truncate_to_tokens(text: str, max_tokens: int, estimate: TokenEstimator) ->
 
 
 async def summarize_history(
-    llm: LLMClient,
+    summarize: HistorySummarizer,
     older: list[ChatMessage],
     *,
     budget: int,
@@ -117,12 +120,12 @@ async def summarize_history(
         return ""
     system = f"{_SUMMARY_SYSTEM}（尽量精简，控制在 {budget} token 以内）"
     messages = [ChatMessage("system", system), *older]
-    result = await llm.chat(messages, temperature=0)
-    return _truncate_to_tokens(result.content.strip(), budget, estimate)
+    summary = await summarize(messages)
+    return _truncate_to_tokens(summary.strip(), budget, estimate)
 
 
 async def assemble_history(
-    llm: LLMClient,
+    summarize: HistorySummarizer,
     history: list[ChatMessage],
     *,
     recent_turns: int,
@@ -141,7 +144,7 @@ async def assemble_history(
     summary_budget = history_budget - recent_tokens
     if summary_budget <= 0:
         return recent
-    summary = await summarize_history(llm, older, budget=summary_budget, estimate=estimate)
+    summary = await summarize_history(summarize, older, budget=summary_budget, estimate=estimate)
     if not summary:
         return recent
     return [ChatMessage("user", f"{SUMMARY_PREFIX}\n{summary}"), *recent]

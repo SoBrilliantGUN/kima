@@ -2,8 +2,8 @@
 
 import uuid
 
-from app.integrations.embedding import EmbeddingClient
-from app.integrations.rerank import RerankerClient
+from app.agent.gateway import LLMGateway
+from app.integrations.rerank import RerankResult
 from app.rag.hybrid import RRF_K, rrf_fuse
 from app.rag.repository import RetrievalRepository
 from app.rag.rerank import rerank_chunks
@@ -16,14 +16,17 @@ RERANK_MIN_SCORE = 0.3
 
 
 class RagRetriever:
-    """混合检索编排：可替换组件（embedding/rerank/repository）注入，纯编排逻辑。"""
+    """混合检索编排：纯编排逻辑，嵌入/精排只经网关（统一门禁/记账/快照，决策 D1）。
+
+    ``gateway`` 必填——没有「裸 embedder/reranker」的说法，所有 embed/rerank 都必须走网关
+    记账/快照。调用方须已进入 ``run_budget``。
+    """
 
     def __init__(
         self,
         *,
         repository: RetrievalRepository,
-        embedder: EmbeddingClient,
-        reranker: RerankerClient,
+        gateway: LLMGateway,
         dense_top_k: int = DENSE_TOP_K,
         lexical_top_k: int = LEXICAL_TOP_K,
         rerank_top_n: int = RERANK_TOP_N,
@@ -31,8 +34,7 @@ class RagRetriever:
         rrf_k: int = RRF_K,
     ) -> None:
         self._repository = repository
-        self._embedder = embedder
-        self._reranker = reranker
+        self._gateway = gateway
         self._dense_top_k = dense_top_k
         self._lexical_top_k = lexical_top_k
         self._rerank_top_n = rerank_top_n
@@ -41,13 +43,17 @@ class RagRetriever:
 
     async def retrieve(self, query: str, kb_ids: list[uuid.UUID]) -> list[RetrievedChunk]:
         """检索指定知识库集合：混合检索 + RRF + rerank + 回 parent。"""
-        query_vec = await self._embedder.embed_query(query)
+        query_vec = await self._gateway.embed_query("rag.embed_query", query)
         dense_hits = await self._repository.search_dense(kb_ids, query_vec, self._dense_top_k)
         lexical_hits = await self._repository.search_lexical(kb_ids, query, self._lexical_top_k)
 
         fused = rrf_fuse([dense_hits, lexical_hits], self._rrf_k)
+
+        async def rerank(q: str, docs: list[str]) -> list[RerankResult]:
+            return await self._gateway.rerank("rag.rerank", q, docs)
+
         ranked = await rerank_chunks(
-            query, fused, self._reranker, self._rerank_top_n, self._rerank_min_score
+            query, fused, rerank, self._rerank_top_n, self._rerank_min_score
         )
         await self._resolve_parents(ranked)
         return ranked

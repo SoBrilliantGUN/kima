@@ -1,6 +1,7 @@
 """查询改写：把含指代的问题改写成独立检索 query（喂最近 1~2 轮历史）。"""
 
-from app.integrations.llm import ChatMessage, LLMClient
+from app.agent.gateway import LLMGateway
+from app.integrations.llm import ChatMessage
 
 _REWRITE_SYSTEM = (
     "你是查询改写助手。把用户问题改写成不依赖对话上下文的独立检索查询，"
@@ -9,8 +10,11 @@ _REWRITE_SYSTEM = (
 )
 
 
-async def rewrite_query(llm: LLMClient, query: str, history: list[ChatMessage]) -> str:
-    """改写查询；`history` 为最近的若干轮对话（用于消解指代）。"""
+async def rewrite_query(gateway: LLMGateway, query: str, history: list[ChatMessage]) -> str:
+    """改写查询；`history` 为最近的若干轮对话（用于消解指代）。
+
+    经网关（调用方须已进入 ``run_budget``）。
+    """
     messages = [ChatMessage("system", _REWRITE_SYSTEM), *history, ChatMessage("user", query)]
-    result = await llm.chat(messages, temperature=0)
+    result = await gateway.complete("rewrite_query", messages, temperature=0)
     return result.content.strip()
