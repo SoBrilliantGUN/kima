@@ -51,6 +51,15 @@ pending ──worker 拾起──▶ processing ──成功──▶ done
 - **重试退避**：`next_retry_at = now + base_delay * 2^(retry_count-1)`；超过 `MAX_RETRIES` → `error`（终态，靠手动 `POST /retry` 唤醒）。
 - **恢复性**：状态全程落库；`processing` 中「卡死」的行（超时兜底）会被重新判为可重试，进程重启后 `pending` 行可被重新拾起。
 
+### 2.1a 大文档警告（`needs_approval`，2026-09-25）
+
+解析 + 分块后、向量化**之前**，估算 child 嵌入 token 总量；超过 `copilot_document_warn_tokens`（默认 100_000）且未获用户确认 → 置 **`needs_approval`**，本轮不嵌入、不落 chunk，`error_message` 记「文档约 N token，需确认后再嵌入」。
+
+- 用户在 `POST /api/documents/{id}/approve` 传 `{approve: bool}`：
+  - `approve=true` → `embedding_approved=true` + 回 `pending`（触发 worker 重跑，跳过阈值检查正常嵌入）；
+  - `approve=false` → `error`（不嵌入）。
+- 动机：token/cost 是「事后才知道」，硬限只能滞后一批地卡、救不了当前调用；对大文档改成**事前估算 + 用户确认**，而非硬拒绝——只要用户确认、账户有钱就继续处理。非循环 worker 不设 per-run token/cost 硬限，时间由网关 per-call 超时兜底（见 module-6 §4.11）。
+
 ### 2.2 worker 实现（`app/workers/document_worker.py`）
 
 - `main.py` lifespan 里 `asyncio.create_task(run_worker())`，循环：
@@ -76,11 +85,12 @@ pending ──worker 拾起──▶ processing ──成功──▶ done
 | `source_type` | `Enum(DocumentType)` `native_enum=False` 存 VARCHAR(16) | 非空，`pdf`/`word`/`url` |
 | `source_url` | `Text` | 可空（仅 url 类型，点击打开原网页） |
 | `file_path` | `Text` | 可空（仅 pdf/word，本地相对路径） |
-| `status` | `Enum(DocumentStatus)` `native_enum=False` 存 VARCHAR(16) | 非空，`pending`/`processing`/`done`/`error`，默认 `pending` |
+| `status` | `Enum(DocumentStatus)` `native_enum=False` 存 VARCHAR(16) | 非空，`pending`/`processing`/`done`/`error`/`needs_approval`，默认 `pending` |
 | `content_markdown` | `Text` | 可空（解析产物，供 RAG 分块向量化 + word/url 文档阅读，经 `/content` 端点下发） |
 | `metadata` | `JSONB` | 可空（`file_name`/`mime_type`/`page_count` 等解析器回传） |
 | `retry_count` | `Integer` | 非空，默认 `0`（重试上限为常量 `MAX_RETRIES=3`，非列） |
-| `error_message` | `Text` | 可空（失败原因，前端展示） |
+| `error_message` | `Text` | 可空（失败原因 / 大文档待确认提示，前端展示） |
+| `embedding_approved` | `Boolean` | 非空，默认 `false`（大文档经用户确认后置 `true`，跳过阈值检查） |
 | `next_retry_at` | `DateTime(timezone)` | 可空（排期重试） |
 | `created_at` / `updated_at` | `DateTime(timezone)` | 继承 `TimestampMixin` |
 

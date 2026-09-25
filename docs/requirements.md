@@ -110,7 +110,7 @@ kima/
 | 3 | **笔记/编辑器** | 笔记 CRUD + TipTap Markdown 编辑器（空白笔记 + 添加到知识库 + 知识库内容列表） | ✅ 完成 |
 | 4 | **文档解析与归档** | 上传 PDF/URL/Word → 解析 → 内容感知父子分块 → 向量化入库（详见 `docs/module-4-documents.md`） | ✅ 完成 |
 | 5 | **AI 智能问答** | Advanced RAG（查询改写 + 混合检索 + RRF + rerank + 生成引用），预留 Agent 接口 | ✅ 完成 |
-| 6 | **Copilot（知识 Agent）** | 全局浮窗 Agent：LangGraph 工具调用（检索/读/写/联网/记忆）+ 三型记忆（情节/语义/程序）+ checkpoint/事件日志 + LangFuse 可观测（详见 `docs/module-6-copilot.md`） | 🚧 待实现 |
+| 6 | **Copilot（知识 Agent）** | 双形态 Agent（首页「我的Copilot」普通对话 + 跨 Tab 小窗）：LangGraph 工具调用（检索/读/写/联网/记忆）+ 四型记忆（约束/程序/语义/情节）+ checkpoint/事件日志 + LangFuse 可观测 + LLM 网关（统一门禁/记账/调用级快照/json_repair，详见 `docs/module-6-copilot.md`） | ✅ 已实现 |
 
 ### 模块 5 RAG 细节（Advanced RAG）
 
@@ -141,17 +141,21 @@ kima/
 | `note_knowledge_bases` | note_id(fk→notes)、knowledge_base_id(fk→knowledge_bases)、created_at；唯一(note_id, knowledge_base_id) |
 | `chat_conversations` | id、kb_id、kind(qa/copilot)、标题、created_at |
 | `chat_messages` | id、conversation_id、role、content、citations(jsonb)、steps(jsonb)、created_at |
-| `copilot_memories` | id、kind(情节/语义/程序)、content、entity_id、embedding(vector)、ttl_days、importance、access_count、last_access、superseded、version、created_at/updated_at |
+| `copilot_memories` | id、kind(约束/程序/语义/情节)、content、entity_id、embedding(vector)、ttl_days、trigger_conditions(jsonb)、importance、access_count、last_access、superseded、superseded_at/by、version、created_at/updated_at |
 | `copilot_events` | id、seq、run_id、type、payload(jsonb)、created_at（append-only 事件日志） |
+| `copilot_daily_budget` | day(PK)、cost_usd、tokens（跨 run 全局日预算，重启续读） |
+| `copilot_llm_snapshots` | run_id+call_key(PK)、kind、output(jsonb)、usage(jsonb)、created_at（LLM 调用级快照，宕机恢复不重跑） |
 
 > **迁移说明（第一版）**：项目为 v1 第一版、无历史数据，全部数据库迁移已合并为单一基线 `alembic/versions/0001_initial.py`（含 vector + pg_jieba 扩展、8 张表、父子切割自引用 FK、HNSW 部分索引 + tsv GIN）。各模块文档（module-2/3/4/5）中出现的 `0002_knowledge_bases` / `0003_notes` / `0004_documents` / `0006_rag` 等编号均为历史增量，现统一并入 `0001_initial`。
+>
+> **模块 6 增量迁移（v2，2026-09-20 起）**：`0001_initial` 之后新增 `0002_copilot`（记忆 + 事件日志 + chat 回改）、`0003_daily_budget`、`0004_constraint_lexical`、`0005_memory_forgetting`、`0006_llm_snapshot`，详见 `docs/module-6-copilot.md` §3。
 
 ---
 
 ## 7. 关键决策记录（含理由）
 
 1. **前端视觉**：界面尽量复刻 ima（窄图标侧栏 + 知识库页「左列表 + 右问答」+ 简洁白蓝视觉），仅删减单用户不适用的功能（共享知识库/知识库广场/微信生态导入/成员权限/多端同步等），不做自己的设计语言。
-2. **AI 助手形态**：复刻 ima，无独立「AI」按钮。AI 由两处承载——① `kima` 首页 tab（全局 AI 问答主页，模块 5 实现）；② 知识库页右侧常驻问答面板（针对当前知识库/文档提问）。全局「浮窗 copilot」（上下文感知的 Agent 形态）由模块 6 实现（`docs/module-6-copilot.md`）。理由：ima 的 AI 入口是「ima 首页 tab + 知识库右问答 + 浮窗 copilot」，并不存在顶栏「AI」按钮；原「全局可呼出侧栏」是与 ima 不符的过度设计。
+2. **AI 助手形态**：复刻 ima，无独立「AI」按钮。AI 由两处承载——① `kima` 首页 tab（全局 AI 问答主页，模块 5 实现）；② 知识库页右侧常驻问答面板（针对当前知识库/文档提问）。「Copilot」（知识 Agent，双形态：首页「我的Copilot」普通对话 + 跨 Tab 小窗）由模块 6 实现（`docs/module-6-copilot.md`）。理由：ima 的 AI 入口是「ima 首页 tab + 知识库右问答 + 首页 Copilot」，并不存在顶栏「AI」按钮；原「全局可呼出侧栏」是与 ima 不符的过度设计。
 3. **RAG 路线**：v1 直接做 Advanced RAG（查询改写 + 向量/词法混合检索 + RRF + rerank + 生成引用），Agentic 用 LangGraph（模块 6 落地），不用 LlamaIndex。理由：数据管道自定义，LlamaIndex 价值有限；LangGraph 是 Agentic 正统编排，模块 6 只在编排层替换即可。
 4. **MinerU 接入**：走托管 API，避免本地重模型。后端抽象为可配置解析客户端。
 5. **编辑器**：Markdown 编辑器（TipTap），不做类 Notion 块级编辑器（工作量大，后续可迭代）。
@@ -182,4 +186,4 @@ kima/
 - 模块 3（笔记/编辑器）✅ 已实现 — 详见 `docs/module-3-notes.md`
 - 模块 4（文档解析与归档）✅ 已实现 — 详见 `docs/module-4-documents.md`：上传 PDF/URL/Word → 解析 → 内容感知父子分块 → 向量化入库；前端交互（浮动阅读窗口 + 上传入口拆分 + 去笔记入口，见决策 #20）已落地
 - 模块 5（AI 智能问答）✅ 已实现 — 详见 `docs/module-5-ai-qa.md`
-- 模块 6（Copilot 知识 Agent）🚧 设计定稿待实现 — 详见 `docs/module-6-copilot.md`：LangGraph Agentic 工具调用 + 三型记忆 + checkpoint/事件日志 + LangFuse 可观测 + worker 偷懒改造
+- 模块 6（Copilot 知识 Agent）✅ 已实现 — 详见 `docs/module-6-copilot.md`：LangGraph Agentic 工具调用 + 三型记忆 + checkpoint/事件日志 + LangFuse 可观测 + worker 偷懒改造

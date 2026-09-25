@@ -1,7 +1,7 @@
 # 实时价格计费 + 人民币统一 + 成本审计方案
 
 > 状态：**已实现**（2026-09-23，含「qa.generate 补 run 身份」）
-> 关联：`docs/requirements.md`、`docs/module-6-copilot.md`、`docs/llm-gateway.md`
+> 关联：`docs/requirements.md`、`docs/module-6-copilot.md`（§4.11 LLM 网关）
 > 目标读者：后续维护者（读本文件了解设计意图与已落地实现）
 
 ---
@@ -237,7 +237,7 @@ class PricingService:
 - `DailyBudget.record(usage, *, cost_cny)`：删掉 `self._pricing`，累加 `_cost_cny += cost_cny` + `billable_tokens`。
 - `gateway._invoke`（已 async）：拿到 `usage` 后 → 按 `kind` 定 `(vendor, model)`（chat/agent→llm、embedding/embed_query→embedding、rerank→rerank）→ `quote = await pricing.resolve(...)` → `cost_cny = pricing.compute_cost(...)` → `_record(usage, cost_cny, quote)` → 写 `copilot_llm_cost`。
 - `qa.generate`（`qa_mode.py`）：**补 run 身份**——原旁路 `_bounded_call`（无 run_id、不写成本明细），现改走 `run_budget + gateway.invoke_model("qa.generate", ...)`，与 synthesize/review 同路径。
-- `_bounded_call`（`helpers.py`）：退化为只包**非 LLM 的 awaitable**（工具调用/检索，`Usage()=0`）与 gateway=None 降级兜底，`record` 成本记 0（不计价）。
+- `_bounded_call`（`helpers.py`）：退化为只包**非 LLM 的 awaitable**（工具调用/检索，`Usage()=0`），`record` 成本记 0（不计价）。
 - `budget.py::compute_cost` / `TokenPricing` 删除；`daily_budget.py` 不再 import 它们。
 
 **币种全量重命名**（`usd`→`cny`）：`budget.py`（`max_cost_cny`/`_cost_cny`/`RunAccounting.cost_cny`/`to_dict["cost_cny"]`）、`daily_budget.py`（`_cost_cny`/`_unflushed_cost_cny`/`cost_cny`）、`repositories/daily_budget.py`、`models/copilot.py::CopilotDailyBudget.cost_cny`、`config.py`（`copilot_budget_max_cost_cny`/`copilot_daily_max_cost_cny`）、报错文案 `$`→`¥`。

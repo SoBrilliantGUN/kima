@@ -1,7 +1,7 @@
 # 模块 6：Copilot（知识 Agent）— 详细设计
 
 > 日期：2026-09-20（v1 实现完成 2026-09-21；v2 生产级运行时 2026-09-21 起）
-> 状态：v1 已实现；**v2（生产级运行时重构）已实现**（见 §4，含 Loop 五宪法加固 §4.9）；**六大契约工具层加固已实现**（见 §5.1）；**分路召回架构已实现**（见 §2.5：约束硬召回 + 混合召回 + 写入分类器，2026-09-22）；**遗忘三动作已实现**（见 §2.4：召回写回 + 跨型冲突 + 软删除复活，2026-09-22）；**LLM 网关已实现**（见 §4.11：统一门禁/记账/调用级快照/json_repair，2026-09-23）；**遗忘收尾已实现**（见 §2.4：duplicate 去重不写 + 窗口过期硬清理 + 复活加激活门槛 + 删死字段 importance，2026-09-23）；**契约交互已实现**（见 §4.13：约束显式携带 + 上行 OutputContract + planner 输出自检，2026-09-23）；**Agent 权限系统四道防线已实现**（见 §4.14：参数契约 + 工具调用量第五轴 + 出站 DLP 脱敏 + 安全熔断，2026-09-23）；**Agent 容错收尾已实现**（见 §4.16：幂等键稳定序号 + 熔断持久化/级联 + last_error 崩溃现场 + reactive 崩溃恢复端点，2026-09-23）
+> 状态：v1 已实现；**v2（生产级运行时重构）已实现**（见 §4，含 Loop 五宪法加固 §4.9）；**六大契约工具层加固已实现**（见 §5.1）；**分路召回架构已实现**（见 §2.5：约束硬召回 + 混合召回 + 写入分类器，2026-09-22）；**遗忘三动作已实现**（见 §2.4：召回写回 + 跨型冲突 + 软删除复活，2026-09-22）；**LLM 网关已实现**（见 §4.11：统一门禁/记账/调用级快照/json_repair，2026-09-23）；**遗忘收尾已实现**（见 §2.4：duplicate 去重不写 + 窗口过期硬清理 + 复活加激活门槛 + 删死字段 importance，2026-09-23）；**契约交互已实现**（见 §4.13：约束显式携带 + 上行 OutputContract + planner 输出自检，2026-09-23）；**Agent 权限系统四道防线已实现**（见 §4.14：参数契约 + 工具调用量第五轴 + 出站 DLP 脱敏 + 安全熔断，2026-09-23）；**Agent 容错收尾已实现**（见 §4.16：幂等键稳定序号 + 熔断持久化/级联 + last_error 崩溃现场 + reactive 崩溃恢复端点，2026-09-23）；**LLM 网关「全量无裸调用」加固已实现**（见 §4.11：run_budget tracker+run_id 双必填 / current() fail-fast / 历史摘要·记忆 embedding·模块5 检索·worker 全经网关、删除裸 embedder 回退，2026-09-25）
 > 上游基线：`docs/requirements.md`（决策 #2/#3）· `docs/module-5-ai-qa.md`（RagService / 检索层 / SSE）· `docs/module-4-documents.md`（文档/笔记向量化 + worker）
 
 本模块交付「**Copilot 知识 Agent**」：把模块 5 的单次被动问答（`RagService.answer()`：改写 → 检索 → 生成）升级为 **LLM 自主调用工具的多步 Agentic 循环**，配**四型记忆**（约束/程序/语义/情节）与**全局浮窗**形态。核心区别于问答：Copilot 能「办事」（检索/读/写/联网），而不只是「回答」。并在工程上做到四件事：**工具描述工程 + 副作用分层 + 幂等写**、**纯函数式状态落盘（含思维链，宕机可从状态恢复）**、**四型记忆的分路召回（约束硬召回 + 混合召回）/ 激活衰减遗忘 / LLM 冲突判定**、**可观测性（LangFuse trace）**。
@@ -195,12 +195,12 @@
 app/agent/
   runtime/                  # 执行运行时
     config.py               # RuntimeConfig：打包四轴预算/防循环/注入闸/HITL 安全旋钮
-    state.py                # AgentState（可序列化：messages + idempotency_seq 幂等序号 + last_error 崩溃现场 + trust + compression_level）
+    state.py                # AgentState（可序列化：messages + last_error 崩溃现场 + trust + compression_level）
     budget.py               # 四轴预算 turns/seconds/tokens/cost + 第五轴 max_tool_calls，真算 cost + asyncio.wait_for 硬熔断
     daily_budget.py         # 跨 run 全局日预算（成本/token 硬上限，DailyBudgetStore 外置 DB、按自然日重置）
     loop_guard.py           # 死循环指纹 + 幽灵循环上下文 hash
     reactive.py             # reactive 循环：agent ⇄ tools（含写工具 HITL interrupt）图构建
-    reactive_helpers.py     # reactive 模块级纯函数（幂等键注入 / 工具结果零信任 / 错误格式化）
+    reactive_helpers.py     # reactive 模块级纯函数（业务意图幂等键注入 / 工具结果零信任 / 错误格式化）
     planner.py              # LLMPlanner：DAG 生成 + replan（真实实现）
     plan_model.py           # Plan-as-Data 数据模型（PlanStep/Plan 版本化状态机 + parse/validate）
     executor.py             # DAG 执行器：拓扑执行 + 增量重规划（局部作废 + merge）
@@ -220,7 +220,7 @@ app/agent/
     circuit_breaker.py      # 工具熔断（CLOSED/OPEN/HALF_OPEN + 级联 resource + store 持久化跨崩溃）+ available() 候选集剔除
     security_breaker.py     # 安全熔断（防线④：安全行为信号驱动，手动恢复，无自动 HALF_OPEN）
     spill.py                # 大工具结果落盘 + read_tool_result
-  toolmeta.py               # ToolMeta 元数据注册（SideEffectLevel / ToolRegistry / IdempotencyRegistry / OutputContract / ParamContract + apply_output_contract + validate_param_contract）
+  toolmeta.py               # ToolMeta 元数据注册（SideEffectLevel / ToolRegistry / idempotency_key_for+request_hash_for / OutputContract / ParamContract + apply_output_contract + validate_param_contract）
   gateway.py                # LLM 网关主体（LLMGateway：门禁/快照/重试超时熔断/记账/80% 软提示）
   gateway_context.py        # 网关 run 期上下文注入（ContextVar：当前 tracker + run_id）
   gateway_codec.py          # 网关序列化/指纹/出站 DLP 脱敏纯函数
@@ -319,7 +319,7 @@ golden 数据集 + LLM-judge + 轨迹断言（调了哪些工具/顺序/次数/�
 
 ### 4.11 LLM 网关（统一出口，2026-09-23）
 
-> 完整设计见 `docs/llm-gateway.md`。核心命题：**任何一次 LLM/embedding/rerank 调用都是真金白银，漏一处门禁/记账就是经济损失**。解法 = 所有调用收进一个 `LLMGateway` 统一出口，调用点不再手写「预算预检 / 超时 / 重试 / 记账 / 解析兜底」。
+> 核心命题：**任何一次 LLM/embedding/rerank 调用都是真金白银，漏一处门禁/记账就是经济损失**。解法 = 所有调用收进一个 `LLMGateway` 统一出口，调用点不再手写「预算预检 / 超时 / 重试 / 记账 / 解析兜底」。
 
 **动机**：模块 6 运行时里 LLM 调用散落在 8 处（agent 主循环 / review / planner / classifier / judge / 上下文摘要 / embedding / rerank），门禁行为严重不一致——只有 agent 主循环有完整四轴预算预检，其余要么「只事后记账不预检」、要么「完全不记账」（上下文摘要）。这正是经济损失的来源。
 
@@ -334,10 +334,11 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 - **80% 软提示 / 100% 硬停（D2）**：任一轴（turns/seconds/tokens/cost）占用 ≥ 0.80 → 尾三明治注入「预算已用 80%、立即收尾」；100% → `BudgetExceeded` 硬停。软提示是 volatile 的、不参与快照指纹。
 - **调用级快照（D3/D4/D8）**：以「node + 规范化输入」的 sha256 为键（`call_key`），成功后落 `output` 到 `copilot_llm_snapshots`（Postgres，迁移 `0006`）；恢复时命中缓存直接复用、不重跑（纯函数记忆化）。重放语义 **at-least-once**（崩溃窗口内「已成功未落快照」会重放，可接受）。与 LangGraph checkpoint 互补：checkpoint 决定「从哪个节点续跑」，快照决定「节点内已成功的调用是否真发」。`resume_after_crash(run_id)` 提供崩溃续跑入口。
 - **重试/超时/熔断统一（D7）**：瞬时异常退避重试 + 秒轴 `asyncio.wait_for` 硬熔断 + LLM 服务级熔断（复用 `CircuitBreaker` key=`"llm"`），调用点不再手写。
-- **记账统一（D1）**：所有出口回写 run 四轴 `BudgetTracker`（`count_turn` 区分 agent 轮次 vs 辅助调用）+ 跨 run `DailyBudget`。per-run 的 tracker 经 `ContextVar`（`run_budget(tracker, run_id)`）注入——网关是 app 级单例，tracker 是 per-run 闭包。
+- **记账统一（D1）**：所有出口回写 run 四轴 `BudgetTracker`（`count_turn` 区分 agent 轮次 vs 辅助调用）+ 跨 run `DailyBudget`。per-run 的 tracker 经 `ContextVar`（`run_budget(tracker, run_id)`）注入——网关是 app 级单例，tracker 是 per-run 闭包。**2026-09-25 起 `tracker` 与 `run_id` 都是 `run_budget` 必填参数**，`current()` 无 context 直接 `raise RuntimeError`（fail-fast）——网关只能在 run 上下文里跑，没有「非 run 回退」。
+- **预算模型（2026-09-25 定稿）**：`BudgetTracker.budget` 改为可选 `HardBudget | None`——**循环调用（agent）必带 `RuntimeConfig.budget`**（全轴硬限：turns/seconds/tokens/cost，`RuntimeConfig.budget` 改为 concrete 默认、不可为 None）；**非循环调用（worker/模块 5 检索）传 `None`**（无 per-run 预算，只记账 + 日预算 sink，时间由网关 per-call 超时 `asyncio.wait_for` 兜底——超时 `GatewayConfig.timeout` 默认 60s、恒生效、不允许 None 关掉）。**删 `HardBudget.unlimited()`**（无上限预算 = 变相无限，不允许存在）。
 - **`BudgetExceeded` 语义**：review **上抛**（硬停 run）；classifier/judge/planner/embed **fail-closed**（跑在工具内/独立模式/后台，`handle_tool_errors` 会吞异常、优雅降级更安全）。
 
-**迁移范围**：7 条路径全收进网关——agent 主循环（`gateway.invoke_model`）、review、记忆分类、冲突判定、planner（generate/replan/synthesize）、上下文压缩（ContextManager）、embed/rerank（RagRetriever + ingest/note worker）。`gateway=None` 时各调用点退回原路径（向后兼容，测试零改动）。
+**迁移范围（全量，无裸 LLM/embed/rerank）**：所有 LLM/embed/rerank 调用全收进网关——agent 主循环、review、记忆分类、冲突判定、planner、上下文压缩、**历史摘要 `assemble_history`**、**记忆写/召回 embedding**（`memory.write`/`memory.recall`/`memory.search`）、embed/rerank（`RagRetriever` + `ingest`/`note_vectorize` worker，模块 5 检索也经网关）。**2026-09-25 起彻底删除「`gateway=None → 退裸 embedder/reranker/LLMClient`」的回退**——`CopilotMemoryService`/`RagRetriever`/`IngestService`/`NoteVectorizeService` 构造只收必填 `gateway`；`get_llm_gateway`/`get_daily_budget` 上移到 `deps_core` 供模块 5/6 共用。**铁律：任何组件要调 LLM/embed/rerank 只能收 `gateway` 并先 `run_budget`，没有裸 embedder 的说法。**
 
 ### 4.12 Plan-as-Data 三道防线（计划数据化 + 增量重规划 + 事件溯源/检查点，2026-09-23）
 
@@ -429,6 +430,22 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 
 ---
 
+### 4.17 写工具幂等性升级：业务意图键 + 持久化幂等表（2026-09-24）
+
+> 对照《Agent Tools 的幂等性》一文。核心命题：**幂等键标识「一次业务意图」，不是「一次 HTTP 请求」，更不是「第几次调用」的位置序号**。§4.16 把位置序号从「消息内下标」修正为「checkpoint 单调序号」，但仍未脱离「位置」语义——review 回环让模型重发同一写指令、或崩溃续跑，拿到新序号 → 新键 → 快路径去重失效，只能靠模糊的业务兜底（`write_memory` 冲突判定）兜住。本节把键升级为「业务意图」内容派生键，并把去重从内存 `IdempotencyRegistry` 升级为 Stripe 式持久化幂等表。
+
+**改的三件事**
+
+1. **幂等键 = 业务意图（内容派生）**。`ToolMeta` 加 `idempotency_key_fields`（`create_note`→`("content",)` 对齐 content_hash 唯一索引；`write_memory`→`("kind","content","entity_id")`），键 = `{run_id}:{tool_name}:sha256(规范化 key_fields)`。同一业务意图跨重试/崩溃/回环重发拿到同一键；删掉 `idempotency_seq`（位置序号成死代码）。
+2. **持久化幂等表 `copilot_idempotency`**（迁移 `0013`）。主键 `(tool_name, idem_key)` 原子抢占：`INSERT ON CONFLICT DO NOTHING` 插 `processing` → 成功后转 `succeeded` 落结果缓存、永久失败转 `failed_final` 落错误。`request_hash`（完整参数指纹）做同键不同参数冲突检测（§5.4 拒绝而非静默返回旧结果）；`expires_at` 做 processing 残留 TTL 回收（崩溃在 claim 后 succeed 前留下的孤儿）。§4.16 的「幂等 registry 仍内存态」在此升级。
+3. **三态简化**。文章四态里的 `failed_retryable` 由工具层 `with_retry` 在内存兜底（瞬态错误不落表），幂等表只记 `processing/succeeded/failed_final`。
+
+**代码位置**：`repositories/idempotency.py`（`IdempotencyStore` Protocol + `SqlAlchemyIdempotencyStore` + `InMemoryIdempotencyStore` + `IdempotencyClaim`）、`models/copilot.py`（`CopilotIdempotency`/`IdempotencyStatus`）、`toolmeta.py`（`idempotency_key_fields` + `idempotency_key_for`/`request_hash_for`，删 `IdempotencyRegistry`）、`tools.py`（`build_tools` 注入 `idempotency_store` + 两写工具 claim/succeed/fail 三步法）、`reactive_helpers.py`/`plan_mode.py`（内容派生键注入，删 `idempotency_seq`）、`deps_copilot.py`（`get_idempotency_store`）。配置 `copilot_idempotency_ttl_seconds`（默认 86400）。测试 `tests/test_copilot_idempotency.py`（+7）。
+
+**明确不做**：`failed_retryable` 独立状态、TTL 后台 sweep（惰性回收，对齐 approval 惰性失效）、tenant_id（单用户，键含 run_id 划界）、Outbox/Saga、乐观锁版本号（当前无删改/转账类工具，`update_profile` 覆盖写天然幂等）。
+
+---
+
 ## 5. 工具集（11 个，六要素描述 + 副作用分层 + 幂等 + 元数据）
 
 | 工具 | 复用 / 行为 | 副作用 |
@@ -441,7 +458,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 | `search_web(query)` | `WebSearchClient.search`（博查） | 只读 |
 | `search_memory(query, kind?)` | 语义检索记忆，回写 access_count | 只读 |
 | `read_tool_result(path, grep_pattern?)` | 读落盘的工具结果全文（spill 后按需查） | 只读 |
-| `create_note(title, content, kb_id?, idempotency_key?)` | `NoteService.create_with_content`；**幂等**：content hash 去重 + 位置幂等键 | 写（MEDIUM） |
+| `create_note(title, content, kb_id?, idempotency_key?)` | `NoteService.create_with_content`；**幂等**：content hash 去重 + 业务意图幂等键（§4.17） | 写（MEDIUM） |
 | `write_memory(kind, content, entity_id?, idempotency_key?)` | 写记忆条目（写入分类器兜底 + 冲突判定去重 + 容量淘汰）；kind ∈ constraint/procedural/semantic/episodic | 写（MEDIUM） |
 | `update_profile(kind, content)` | 覆盖写 `soul.md` / `user.md`；kind ∈ soul/user | 写（MEDIUM） |
 
@@ -517,7 +534,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 - **调用级快照（LLM 调用不重跑，2026-09-23）**：checkpoint 是**节点级**——宕机在节点内时，该节点会整体重跑（重发那次 LLM 调用 = 重付一次钱）。网关的 `copilot_llm_snapshots`（§4.11/§3 迁移 `0006`）把每次 LLM 调用当纯函数：以「node + 规范化输入」内容哈希为键，成功后落 output，恢复时命中缓存直接复用、**不重跑已完成的 LLM 调用**。与 checkpoint 互补：checkpoint 决定「从哪个节点续跑」，快照决定「节点内的调用是否真发」。`resume_after_crash(run_id)` 提供崩溃续跑入口（重放语义 at-least-once）。
 - **计划检查点（planner 路径崩溃恢复，2026-09-23）**：planner 路径跑在 graph 外、无 LangGraph checkpointer，靠 `copilot_plans`（§4.12/§3 迁移 `0008`）在每次步骤状态迁移后落「版本化 DAG + 运行时状态」快照；`resume_plan(run_id)` 加载续跑、跳过已完成步骤（`POST /api/copilot/plan/resume`）。与上面两层互补：plan 快照决定「planner 路径从哪个步骤续」。
 - **事件日志（思维链可观测）**：append-only `copilot_events` 表 `{seq, run_id, type, payload, created_at}`，`type ∈ {tool_call, tool_result, llm_delta, done, error}`，单调 `seq` 可重放。这是不可变的完整思维链，喂前端工具链 UI 与调试/审计。
-- **幂等写**：Loop 给写工具注入**持久化稳定序号幂等键** `idempotency_key = "{run_id}:{seq}"`（`seq` 来自 checkpoint 里的 `idempotency_seq` 单调递增、崩溃续跑不重算——不是运行时变量，见 §4.16），命中 `IdempotencyRegistry` 直接返回缓存不重放副作用；`create_note` 另以 content hash 持久化去重兜底、`write_memory` 走冲突判定去重。崩溃重放不重复产生副作用。
+- **幂等写**：Loop 给写工具注入**业务意图幂等键** `idempotency_key = "{run_id}:{tool_name}:sha256(key_fields)"`（内容派生，见 §4.17），工具执行层走持久化幂等表 `copilot_idempotency` 去重（原子抢占 processing→succeeded，命中缓存不重放副作用，同键不同参数拒绝）；`create_note` 另以 content hash 唯一索引兜底、`write_memory` 走冲突判定去重。崩溃重放不重复产生副作用。
 - **`chat_messages`**：存 user/assistant 最终消息（会话历史）+ `steps`（工具轨迹，事件日志的轻量投影，供前端快读）；完整思维链以事件日志 + checkpoint 为准。
 
 ---
@@ -619,7 +636,7 @@ Fakes 增补：`FakeCopilotMemoryRepository`、脚本化 agent 模型、fake 计
 6. **写入非追加**：LLM 冲突判定（duplicate 同型去重不写 / contradiction 新的赢 / 同主题都留）+ `superseded` 留痕；semantic 同 entity 覆盖 version++；Soul/User 覆盖写文件。
 7. **遗忘**：激活衰减（episodic TTL + 频率 + recency）+ 召回 floor + 软删除窗口复活（含激活门槛）+ 容量硬淘汰 + 窗口过期硬清理（lifespan 周期任务）。
 8. **按需读记忆**：`search_memory` 工具，命中回写 access_count/last_access。
-9. **工具工程**：副作用分层（8 只读 / 3 写）、六要素描述、结果截断、写工具幂等（位置幂等键 + content hash）。
+9. **工具工程**：副作用分层（8 只读 / 3 写）、六要素描述、结果截断、写工具幂等（业务意图幂等键 + 持久化幂等表 + content hash）。
 10. **状态落盘**：LangGraph checkpoint（`AsyncPostgresSaver`）+ `copilot_events` 事件日志，配幂等写；「Agent 是纯函数，给定状态即可恢复」。
 11. **Skill**：不做用户自定义 Skill；Skill = 内置工具，面板只展示。
 12. **报告/汇总**：= Agent 最终结构化长文回答，不单列工具。
@@ -660,7 +677,7 @@ Fakes 增补：`FakeCopilotMemoryRepository`、脚本化 agent 模型、fake 计
 
 36. **遗忘三动作补全**（对照《Agent 记忆的精神错乱》一讲）：①**召回写回**——`recall()` 命中条目回写 `access_count`/`last_access`（`repository.touch`），ACT-R 频率/近期增益不再只靠 `search_memory`；②**跨型冲突**——写入冲突候选从「同 kind」改为「跨 kind」（constraint 红线孤岛、语义/偏好/情节互为参照，semantic 同 `entity_id` 覆写后清理矛盾的偏好/情节）；③**软删除窗口**——`superseded` 加 `superseded_at`/`superseded_by`，召回时 `search_recoverable` 窗口期内强命中复活（守卫：`superseded_by` 还活着不复活，防真冲突误复活）。
 
-**v2 决策（LLM 网关，2026-09-23，全文 `docs/llm-gateway.md`）**
+**v2 决策（LLM 网关，2026-09-23，全文见 §4.11）**
 
 37. **统一 LLM 网关（D1/D6/D7）**：所有 LLM/embedding/rerank 出口收进 `LLMGateway` 唯一必经之路，调用点不再手写「预算预检 / 超时 / 重试 / 记账 / 解析兜底」。两套调用形态统一抽象（`complete` 一次性结构化 + `invoke_model` 流式工具调用 + `embed`/`rerank`），重试/超时/熔断全收。范围含模块 5 的 embedding/rerank（`RagRetriever` + ingest/note worker）。
 38. **80% 软提示 / 100% 硬停（D2）**：任一轴占用 ≥ 0.80 → 尾三明治注入「预算已用 80%、立即收尾」；100% → `BudgetExceeded` 硬停。软提示 volatile、不参与快照指纹。
@@ -702,3 +719,9 @@ Fakes 增补：`FakeCopilotMemoryRepository`、脚本化 agent 模型、fake 计
 
 54. **度量层补「单位任务成本 + 多维度归因」最小形态（§4.6/§8）**：`BudgetTracker.summary()` 导出 `RunAccounting`，done 事件落 `intent`/`model`/`accounting`——把「只能看 `DailyBudget` 聚合总账」补成「每个任务一张能拆到 token/cache/轮数的明细」。归因只落 `intent`（任务类型）+ `model` 两维（单用户无鉴权，用户维度恒一），不落 per-step 归因（reactive 工具轨迹已在 `steps` 投影里，planner 有 `step_*` 事件，交叉可查）。**明确不做**：难度评估/模型路由、预算驱动自动降级（模型/工具降级）、动态预算（里程碑换预算）——都依赖「多模型档 + 损失模型」，单模型 `deepseek-chat`、单用户体量下是过度设计（对齐决策 #28/#52「本期后置」）。单位成本异常检测（成本飙到历史均值 N 倍 → 死循环/提示注入信号）也后置，等 done 账本有真实数据量再上。
 55. **防御层补「缓存命中率监控」（§4.6）**：`cache_hit_rate = cache_read / input` 随 done 落库，输入量 ≥2000 token 且命中率低于 `copilot_cache_hit_rate_warn`（默认 0.3）时 `logger.warning` 告警——命中率骤降是前缀缓存被破坏的信号（往 L0 塞动态时间戳一类）。命中率数据源自网关已有的 `extract_usage`（cache_read 明细），纯观察层补丁，无新增调用成本。
+
+**v2 决策（网关协作者必填 + 快照/记账不可关，2026-09-25）**
+
+56. **网关协作者全必填、快照/记账不可关（修订决策 #37/#39）**：`LLMGateway.__init__` 的 9 个协作者（`llm`/`daily_budget`/`breaker`/`retry`/`snapshots`/`embedder`/`reranker`/`pricing`/`cost_store`）从 `Optional` 全改为**必填无默认**——构造期即自洽，下游删掉全部 `is not None` 判断（原「缺哪个功能才运行时炸」收敛为「构造即 fail-fast」）。同时删两个 off 开关：`copilot_llm_snapshot_enabled`（快照恒落，`SqlAlchemySnapshotStore` 恒构造 + 清理 task 恒启动）与「全 fake 无真实提供方 → `pricing`/`cost_store` 为 `None`」分支（记账/审计恒启用）。fake/空厂商在网关内按 ¥0 记账、不落成本明细（`vendor not in ("", "fake")` 门控定价解析与 `copilot_llm_cost` 写入），真实厂商才走定价。`LLMUnavailableError`（原「未配置 XX 客户端」语义已随 Optional 删除而废弃）改名 `LLMCircuitOpenError`，语义只剩「熔断 OPEN」。唯一保留的运行期 `None` 是 `current().tracker`（worker/RAG 非 run 上下文），属运行期状态而非构造协作者。**2026-09-25 续：连这个运行期 `None` 也删除**——`run_budget(tracker, run_id)` 两参必填、`current()` 无 context 直接 `raise RuntimeError`（fail-fast），网关只能在 run 上下文里跑（worker/RAG 检索、历史摘要、记忆 embedding 都先 `run_budget`）。测试统一经 `tests/fakes.make_gateway()` 工厂装配全 fake 默认（`FakePricingService` 恒 ¥0）。
+
+57. **预算模型定稿：无上限预算不允许存在（2026-09-25）**——`HardBudget.unlimited()`（大数 + `inf` 假无限）删除。预算分两类：**循环调用（agent）** 必带 `RuntimeConfig.budget`（`HardBudget` concrete 默认、不可 None，全轴 turns/seconds/tokens/cost 硬限，防失控 loop）；**非循环调用（worker/模块 5 检索）** 的 `BudgetTracker.budget` 传 `None`（无 per-run 预算，只记账 + 日预算 sink；token/cost 是「事后才知道」、且文档大小由大文档警告兜底，故不设 per-unit 硬限，时间由网关 per-call 超时 `asyncio.wait_for` 兜底）。`GatewayConfig.timeout` 从 `float | None` 改为 `float = 60.0`（秒轴硬熔断恒生效，不允许 None 关掉）。**How to apply**：安全类配置旋钮（熔断/超时/预算/快照/记账）必须给 concrete 默认值，`None` 不能当「关闭」语义用；「关闭」只能是显式开关。
