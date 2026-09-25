@@ -60,7 +60,7 @@ export interface NoteAddToKnowledgeBase {
 
 export type DocumentType = 'pdf' | 'word' | 'url'
 
-export type DocumentStatus = 'pending' | 'processing' | 'done' | 'error'
+export type DocumentStatus = 'pending' | 'processing' | 'done' | 'error' | 'needs_approval'
 
 export interface Document {
   id: string
@@ -69,6 +69,7 @@ export interface Document {
   source_type: DocumentType
   source_url: string | null
   status: DocumentStatus
+  embedding_approved: boolean
   error_message: string | null
   metadata: Record<string, unknown> | null
   created_at: string

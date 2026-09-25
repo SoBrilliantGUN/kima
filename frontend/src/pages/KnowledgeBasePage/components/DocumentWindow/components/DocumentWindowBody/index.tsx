@@ -31,6 +31,10 @@ export function DocumentWindowBody({ document, isLoading }: DocumentWindowBodyPr
             <p className={styles.errorText}>{document.error_message}</p>
           ) : null}
         </div>
+      ) : document.status === 'needs_approval' ? (
+        <div className={styles.placeholder}>
+          <p>文档较大，嵌入成本较高，请确认是否继续。</p>
+        </div>
       ) : document.source_type === 'pdf' ? (
         <iframe
           className={styles.frame}

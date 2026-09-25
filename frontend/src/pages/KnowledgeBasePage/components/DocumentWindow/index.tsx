@@ -2,7 +2,12 @@ import { documentFileUrl } from '@/api/documents'
 import type { DocumentStatus } from '@/api/types'
 import { CloseIcon } from '@/components/icons'
 import { ResizeHandles } from '@/components/ResizeHandles'
-import { useDeleteDocument, useDocument, useRetryDocument } from '@/hooks/useDocuments'
+import {
+  useApproveDocument,
+  useDeleteDocument,
+  useDocument,
+  useRetryDocument,
+} from '@/hooks/useDocuments'
 import { useWindowRect } from '@/hooks/useWindowRect'
 import { DocumentWindowBody } from './components/DocumentWindowBody'
 import styles from './index.module.scss'
@@ -12,6 +17,7 @@ const STATUS_LABEL: Record<DocumentStatus, string> = {
   processing: '解析中',
   done: '已完成',
   error: '失败',
+  needs_approval: '待确认',
 }
 
 interface DocumentWindowProps {
@@ -32,6 +38,7 @@ export function DocumentWindow({
   const { data: document, isLoading } = useDocument(documentId)
   const retry = useRetryDocument()
   const deleteDocument = useDeleteDocument()
+  const approve = useApproveDocument()
   const { style, headerHandlers, resizeHandlers } = useWindowRect(offset)
 
   async function handleDelete() {
@@ -63,6 +70,22 @@ export function DocumentWindow({
             <button type="button" onClick={() => void retry.mutateAsync(documentId)}>
               重试
             </button>
+          ) : null}
+          {document?.status === 'needs_approval' ? (
+            <>
+              <button
+                type="button"
+                onClick={() => void approve.mutateAsync({ id: documentId, approve: true })}
+              >
+                确认
+              </button>
+              <button
+                type="button"
+                onClick={() => void approve.mutateAsync({ id: documentId, approve: false })}
+              >
+                拒绝
+              </button>
+            </>
           ) : null}
           {document?.status === 'done' && document.source_type === 'url' ? (
             <a href={document.source_url ?? '#'} target="_blank" rel="noreferrer">

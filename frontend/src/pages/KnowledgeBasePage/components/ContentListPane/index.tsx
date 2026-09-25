@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 
 import type { Document, DocumentStatus } from '@/api/types'
 import { FilePlusIcon, MessageCircleIcon, SearchIcon } from '@/components/icons'
-import { useDeleteDocument, useRetryDocument } from '@/hooks/useDocuments'
+import { useApproveDocument, useDeleteDocument, useRetryDocument } from '@/hooks/useDocuments'
 import { useKnowledgeBase, useKbContents } from '@/hooks/useKnowledgeBases'
 import { AddContentMenu } from './components/AddContentMenu'
 import { DocumentDropzone } from './components/DocumentDropzone'
@@ -15,6 +15,7 @@ const STATUS_LABEL: Record<DocumentStatus, string> = {
   processing: '解析中',
   done: '已完成',
   error: '失败',
+  needs_approval: '待确认',
 }
 
 interface ContentListPaneProps {
@@ -36,6 +37,7 @@ export function ContentListPane({
   const { data: contents } = useKbContents(kbId)
   const deleteDocument = useDeleteDocument()
   const retryDocument = useRetryDocument()
+  const approveDocument = useApproveDocument()
   const navigate = useNavigate()
 
   const [menuOpen, setMenuOpen] = useState(false)
@@ -150,6 +152,25 @@ export function ContentListPane({
                       </button>
                       <button type="button" onClick={() => void handleDeleteDocument(document)}>
                         删除
+                      </button>
+                    </div>
+                  ) : document.status === 'needs_approval' ? (
+                    <div className={styles.itemActions}>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void approveDocument.mutateAsync({ id: document.id, approve: true })
+                        }
+                      >
+                        确认
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void approveDocument.mutateAsync({ id: document.id, approve: false })
+                        }
+                      >
+                        拒绝
                       </button>
                     </div>
                   ) : null}

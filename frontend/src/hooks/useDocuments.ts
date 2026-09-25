@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
+  approveDocument,
   createDocumentFromUrl,
   deleteDocument,
   getDocument,
@@ -57,6 +58,19 @@ export function useCreateDocumentFromUrl() {
     mutationFn: (payload: DocumentCreateFromUrl) => createDocumentFromUrl(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [KNOWLEDGE_BASES] })
+    },
+  })
+}
+
+/** 大文档确认：确认继续嵌入 / 拒绝置失败。 */
+export function useApproveDocument() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, approve }: { id: string; approve: boolean }) =>
+      approveDocument(id, approve),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [KNOWLEDGE_BASES] })
+      queryClient.invalidateQueries({ queryKey: [DOCUMENTS] })
     },
   })
 }

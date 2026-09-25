@@ -75,6 +75,11 @@
   color: var(--color-primary);
 }
 
+.badge.needs_approval {
+  background: #fff4e5;
+  color: #b45309;
+}
+
 .actions {
   display: flex;
   align-items: center;

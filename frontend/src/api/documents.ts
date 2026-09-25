@@ -29,6 +29,11 @@ export function retryDocument(id: string): Promise<Document> {
   return api.post<Document>(`/api/documents/${id}/retry`, {})
 }
 
+// 大文档确认：approve=true 继续嵌入，false 拒绝（置 error）
+export function approveDocument(id: string, approve: boolean): Promise<Document> {
+  return api.post<Document>(`/api/documents/${id}/approve`, { approve })
+}
+
 // 删除文档
 export function deleteDocument(id: string): Promise<void> {
   return api.delete<void>(`/api/documents/${id}`)
