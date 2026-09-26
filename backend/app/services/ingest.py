@@ -7,9 +7,11 @@ import random
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from app.agent.gateway import LLMGateway, run_budget
+from app.agent.guardrail.document_guard import PoisonedDocumentError, guard_document_text
+from app.agent.runtime.budget import BudgetTracker, DailyBudget
 from app.chunking import ParentChunk, chunk_document, estimate_tokens
 from app.core.storage import FileStore
-from app.integrations.embedding import EmbeddingClient
 from app.integrations.parser import DocumentParser, ParsedDocument, ParserError, SourceType
 from app.models.document import MAX_RETRIES, Document, DocumentChunk, DocumentStatus, DocumentType
 from app.repositories.document import DocumentRepository
@@ -26,15 +28,19 @@ class IngestService:
         *,
         repository: DocumentRepository,
         parser: DocumentParser,
-        embedder: EmbeddingClient,
+        gateway: LLMGateway,
         file_store: FileStore,
         base_delay: timedelta = RETRY_BASE_DELAY,
+        daily_budget: DailyBudget | None = None,
+        warn_tokens: int = 100_000,
     ) -> None:
         self._repository = repository
         self._parser = parser
-        self._embedder = embedder
+        self._gateway = gateway
         self._file_store = file_store
         self._base_delay = base_delay
+        self._daily_budget = daily_budget
+        self._warn_tokens = warn_tokens
 
     async def ingest(self, document_id: uuid.UUID) -> None:
         """解析并归档单个文档：解析 → 分块 → 向量化 → 落库 → 置 done；失败排期重试。
@@ -47,9 +53,22 @@ class IngestService:
         try:
             await self._repository.delete_chunks(document_id)
             parsed = await self._parse(document)
+            guard_document_text(parsed.markdown)  # 写库闸：投毒文档在分块/入库前拦截
 
             chunks = self._build_chunks(document, chunk_document(parsed.markdown))
-            await self._embed_children(chunks)
+            # 大文档警告：嵌入成本（child token 预估）超阈值且未获用户确认 → 置 needs_approval，
+            # 本轮不嵌入、不落 chunk；确认后重跑会重新 delete + build + embed，无残留脏数据。
+            child_tokens = sum(c.token_count or 0 for c in chunks if c.parent_id is not None)
+            if child_tokens > self._warn_tokens and not document.embedding_approved:
+                document.status = DocumentStatus.NEEDS_APPROVAL
+                document.error_message = (
+                    f"文档约 {child_tokens} token（嵌入预估），超过阈值 {self._warn_tokens}，"
+                    "需确认后再嵌入"
+                )
+                document.next_retry_at = None
+                await self._repository.update(document)
+                return
+            await self._embed_children(document.id, chunks)
             await self._repository.add_chunks(chunks)
 
             # 文档字段统一在 add_chunks 之后一次性改，交由 update 提交；
@@ -63,6 +82,8 @@ class IngestService:
             document.error_message = None
             document.next_retry_at = None
             await self._repository.update(document)
+        except PoisonedDocumentError as exc:
+            await self._reject(document, exc)
         except Exception as exc:
             await self._fail(document, exc)
 
@@ -121,16 +142,22 @@ class IngestService:
                 )
         return rows
 
-    async def _embed_children(self, chunks: list[DocumentChunk]) -> None:
-        """只向量化 child（parent 不向量化），按 EMBED_BATCH_SIZE 分批回填 embedding。"""
+    async def _embed_children(self, document_id: uuid.UUID, chunks: list[DocumentChunk]) -> None:
+        """只向量化 child（parent 不向量化），按 EMBED_BATCH_SIZE 分批回填 embedding。
+
+        经网关时以 ``ingest:{document_id}`` 为一个 run：每批 embed 都带 run context 记账/快照，
+        崩溃重试重跑同一文档时命中快照、不重复调用（at-least-once）。
+        """
         children = [chunk for chunk in chunks if chunk.parent_id is not None]
         if not children:
             return
         texts = [child.content for child in children]
         vectors: list[list[float]] = []
-        for start in range(0, len(texts), EMBED_BATCH_SIZE):
-            batch = texts[start : start + EMBED_BATCH_SIZE]
-            vectors.extend(await self._embedder.embed_documents(batch))
+        tracker = BudgetTracker(None, sink=self._daily_budget)
+        with run_budget(tracker, run_id=f"ingest:{document_id}"):
+            for start in range(0, len(texts), EMBED_BATCH_SIZE):
+                batch = texts[start : start + EMBED_BATCH_SIZE]
+                vectors.extend(await self._gateway.embed("ingest", batch))
         for child, vector in zip(children, vectors, strict=True):
             child.embedding = vector
 
@@ -147,6 +174,13 @@ class IngestService:
             delay = timedelta(seconds=random.uniform(0, delay.total_seconds()))
             document.next_retry_at = datetime.now(UTC) + delay
         document.error_message = str(exc) or exc.__class__.__name__
+        await self._repository.update(document)
+
+    async def _reject(self, document: Document, exc: PoisonedDocumentError) -> None:
+        """写库闸命中：直接置 error，不重试（毒内容重试也不会变干净）。"""
+        document.status = DocumentStatus.ERROR
+        document.error_message = str(exc)
+        document.next_retry_at = None
         await self._repository.update(document)
 
     async def close(self) -> None:
