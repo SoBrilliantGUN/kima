@@ -35,6 +35,7 @@ from tests.fakes import (
     FakeDocumentRepository,
     FakeFileStore,
     FakeKnowledgeBaseRepository,
+    FakeMemoryClassifier,
     FakeNoteRepository,
     make_gateway,
 )
@@ -115,6 +116,7 @@ def _make_copilot_service(tmp_path: Path) -> tuple[CopilotService, FakeChatRepos
         repository=FakeCopilotMemoryRepository(),
         gateway=gateway,
         judge=FakeConflictJudge(),
+        classifier=FakeMemoryClassifier(),
         capacity=200,
         episodic_ttl_days=30,
         recall_floor=0.05,

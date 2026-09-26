@@ -30,7 +30,7 @@ def make_service(
         repository=repository or FakeCopilotMemoryRepository(),
         gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=8)),
         judge=FakeConflictJudge(),
-        classifier=classifier,
+        classifier=classifier or FakeMemoryClassifier(),
         capacity=200,
         episodic_ttl_days=30,
         recall_floor=0.05,

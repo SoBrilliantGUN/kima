@@ -8,6 +8,7 @@ from app.services.copilot import CopilotMemoryService
 from tests.fakes import (
     FakeConflictJudge,
     FakeCopilotMemoryRepository,
+    FakeMemoryClassifier,
     gateway_run,
     make_gateway,
 )
@@ -22,6 +23,7 @@ def make_service(
         repository=repository or FakeCopilotMemoryRepository(),
         gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=8)),
         judge=judge or FakeConflictJudge(),
+        classifier=FakeMemoryClassifier(),
         capacity=kwargs.get("capacity", 200),
         episodic_ttl_days=kwargs.get("episodic_ttl_days", 30),
         recall_floor=kwargs.get("recall_floor", 0.05),
