@@ -54,6 +54,7 @@ class DocumentService:
             file_path=file_path,
             status=DocumentStatus.PENDING,
             retry_count=0,
+            embedding_approved=False,
         )
         return await self._repository.add(document)
 
@@ -66,6 +67,7 @@ class DocumentService:
             source_url=payload.url,
             status=DocumentStatus.PENDING,
             retry_count=0,
+            embedding_approved=False,
         )
         return await self._repository.add(document)
 
@@ -106,6 +108,25 @@ class DocumentService:
         document.retry_count = 0
         document.next_retry_at = None
         document.error_message = None
+        return await self._repository.update(document)
+
+    async def approve(self, document_id: uuid.UUID, approve: bool) -> Document:
+        """大文档确认：needs_approval 状态的文档，用户确认后置 embedding_approved + 回 PENDING；
+        拒绝则置 ERROR（不嵌入）。"""
+        document = await self.get(document_id)
+        if document.status != DocumentStatus.NEEDS_APPROVAL:
+            raise ConflictError("仅待确认状态的文档可审批")
+        if approve:
+            document.embedding_approved = True
+            document.status = DocumentStatus.PENDING
+            document.retry_count = 0
+            document.next_retry_at = None
+            document.error_message = None
+        else:
+            document.embedding_approved = False
+            document.status = DocumentStatus.ERROR
+            document.next_retry_at = None
+            document.error_message = "用户拒绝处理大文档"
         return await self._repository.update(document)
 
     async def list_by_kb(self, kb_id: uuid.UUID) -> Sequence[Document]:

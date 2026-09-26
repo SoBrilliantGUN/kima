@@ -5,6 +5,7 @@ import uuid
 from fastapi import APIRouter, Response, status
 
 from app.api.deps import NoteServiceDep
+from app.core.wake_events import note_wake_event
 from app.schemas.note import (
     NoteAddToKnowledgeBase,
     NoteCreate,
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/notes", tags=["notes"])
 @router.post("", response_model=NoteRead, status_code=status.HTTP_201_CREATED)
 async def create_note(payload: NoteCreate, service: NoteServiceDep) -> NoteRead:
     note = await service.create_blank(payload)
+    note_wake_event.set()
     return NoteRead.model_validate(note)
 
 
@@ -46,6 +48,7 @@ async def update_note(
     service: NoteServiceDep,
 ) -> NoteRead:
     note = await service.update(note_id, payload)
+    note_wake_event.set()
     return NoteRead.model_validate(note)
 
 

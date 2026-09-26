@@ -4,7 +4,7 @@ from enum import StrEnum
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Computed, DateTime, Enum, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import Boolean, Computed, DateTime, Enum, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,6 +36,8 @@ class DocumentStatus(StrEnum):
     PROCESSING = "processing"
     DONE = "done"
     ERROR = "error"
+    # 嵌入成本预估超过阈值，需用户确认后再嵌入（大文档警告）
+    NEEDS_APPROVAL = "needs_approval"
 
 
 class Document(Base, TimestampMixin):
@@ -64,6 +66,8 @@ class Document(Base, TimestampMixin):
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 大文档已获用户确认嵌入（确认后跳过阈值检查）
+    embedding_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     @property
     def filename(self) -> str:

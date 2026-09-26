@@ -7,8 +7,14 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, Form, Response, UploadFile, status
 
 from app.api.deps import DocumentServiceDep
-from app.models.document import DocumentType
-from app.schemas.document import DocumentContentRead, DocumentCreateFromUrl, DocumentRead
+from app.core.wake_events import document_wake_event
+from app.models.document import DocumentStatus, DocumentType
+from app.schemas.document import (
+    DocumentApproveRequest,
+    DocumentContentRead,
+    DocumentCreateFromUrl,
+    DocumentRead,
+)
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -22,6 +28,7 @@ async def create_document_from_url(
     service: DocumentServiceDep,
 ) -> DocumentRead:
     document = await service.create_from_url(payload)
+    document_wake_event.set()
     return DocumentRead.model_validate(document)
 
 
@@ -33,6 +40,7 @@ async def create_document(
 ) -> DocumentRead:
     content = await file.read()
     document = await service.create_file(kb_id, content=content, filename=file.filename or "")
+    document_wake_event.set()
     return DocumentRead.model_validate(document)
 
 
@@ -71,6 +79,19 @@ async def get_document_content(
 @router.post("/{document_id}/retry", response_model=DocumentRead)
 async def retry_document(document_id: uuid.UUID, service: DocumentServiceDep) -> DocumentRead:
     document = await service.retry(document_id)
+    return DocumentRead.model_validate(document)
+
+
+@router.post("/{document_id}/approve", response_model=DocumentRead)
+async def approve_document(
+    document_id: uuid.UUID,
+    payload: DocumentApproveRequest,
+    service: DocumentServiceDep,
+) -> DocumentRead:
+    """大文档确认：approve=True 继续嵌入（回 PENDING 触发 worker），False 拒绝（置 error）。"""
+    document = await service.approve(document_id, payload.approve)
+    if document.status == DocumentStatus.PENDING:
+        document_wake_event.set()
     return DocumentRead.model_validate(document)
 
 

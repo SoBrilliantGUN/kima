@@ -36,6 +36,7 @@ class DocumentRead(BaseModel):
     source_url: str | None
     status: DocumentStatus
     error_message: str | None
+    embedding_approved: bool
     metadata: dict[str, Any] | None = Field(validation_alias="doc_metadata")
     created_at: datetime
     updated_at: datetime
@@ -46,3 +47,9 @@ class DocumentContentRead(BaseModel):
     """解析后的 markdown 正文（word/url 文档阅读用）。"""
 
     markdown: str
+
+
+class DocumentApproveRequest(BaseModel):
+    """大文档确认请求：approve=True 继续嵌入，False 拒绝（置 error）。"""
+
+    approve: bool
