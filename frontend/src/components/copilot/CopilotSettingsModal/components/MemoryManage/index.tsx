@@ -7,13 +7,12 @@ import { CopilotAvatar } from '@/components/copilot/CopilotAvatar'
 
 import styles from './index.module.scss'
 
-type Tab = 'soul' | 'user' | 'longterm' | 'procedural'
+type Tab = 'soul' | 'user' | 'longterm'
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'soul', label: 'copilot设定' },
   { key: 'user', label: '用户档案' },
   { key: 'longterm', label: '长期记忆' },
-  { key: 'procedural', label: '经验技巧' },
 ]
 
 function MemoryText({ text }: { text: string }) {
@@ -77,17 +76,18 @@ export function MemoryManage() {
               <MemoryList memories={memories.filter((m) => m.kind === 'constraint')} />
             </div>
             <div className={styles.group}>
-              <div className={styles.groupTitle}>语义记忆</div>
-              <MemoryList memories={memories.filter((m) => m.kind === 'semantic')} />
+              <div className={styles.groupTitle}>事实</div>
+              <MemoryList memories={memories.filter((m) => m.kind === 'fact')} />
             </div>
             <div className={styles.group}>
-              <div className={styles.groupTitle}>情节记忆</div>
+              <div className={styles.groupTitle}>偏好</div>
+              <MemoryList memories={memories.filter((m) => m.kind === 'preference')} />
+            </div>
+            <div className={styles.group}>
+              <div className={styles.groupTitle}>历史</div>
               <MemoryList memories={memories.filter((m) => m.kind === 'episodic')} />
             </div>
           </div>
-        ) : null}
-        {tab === 'procedural' ? (
-          <MemoryList memories={memories.filter((m) => m.kind === 'procedural')} />
         ) : null}
       </div>
     </div>

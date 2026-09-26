@@ -13,6 +13,26 @@
   color: var(--color-text);
 }
 
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sectionTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.empty {
+  padding: var(--space-4);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+}
+
 .grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

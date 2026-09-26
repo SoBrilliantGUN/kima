@@ -2,6 +2,7 @@ import { api } from '@/api/client'
 import type {
   ConversationDetail,
   CopilotApprovalList,
+  CopilotCustomSkillsList,
   CopilotMemoryList,
   CopilotRequest,
   CopilotSkillsList,
@@ -141,6 +142,11 @@ export function getPendingApprovals(): Promise<CopilotApprovalList> {
 /** 内置技能清单。 */
 export function getCopilotSkills(): Promise<CopilotSkillsList> {
   return api.get<CopilotSkillsList>('/api/copilot/skills')
+}
+
+/** 自定义 Skill 清单（L2 技能层，一个 MD 一个 skill，只读）。 */
+export function getCopilotCustomSkills(): Promise<CopilotCustomSkillsList> {
+  return api.get<CopilotCustomSkillsList>('/api/copilot/custom-skills')
 }
 
 /** Copilot 会话详情（含历史消息，含 steps 工具轨迹）。 */

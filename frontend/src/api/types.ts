@@ -153,7 +153,7 @@ export interface ChatRequest {
 
 // --- Copilot（知识 Agent） ---
 
-export type CopilotMemoryKind = 'constraint' | 'procedural' | 'semantic' | 'episodic'
+export type CopilotMemoryKind = 'constraint' | 'fact' | 'preference' | 'episodic'
 
 export interface CopilotStep {
   tool_name: string
@@ -191,6 +191,16 @@ export interface CopilotSkill {
 
 export interface CopilotSkillsList {
   items: CopilotSkill[]
+}
+
+export interface CopilotCustomSkill {
+  name: string
+  description: string
+  content: string
+}
+
+export interface CopilotCustomSkillsList {
+  items: CopilotCustomSkill[]
 }
 
 export interface CopilotApproval {
