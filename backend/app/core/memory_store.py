@@ -2,7 +2,7 @@
 
 - Soul（人设/说话风格）与 User（档案/背景/偏好）是稳定短文本，每轮全文注入，
   以 `data/memory/soul.md` / `user.md` 两个文件承载，覆盖写、幂等初始化。
-- 积累型记忆（情节/语义/程序）走向量表 `copilot_memories`，不进本模块。
+- L1 积累层（情节/事实/偏好）走向量表 `copilot_memories`，不进本模块。
 """
 
 import os

@@ -51,6 +51,7 @@ from app.agent.tools_helpers import (
 )
 from app.core.exceptions import DomainError
 from app.core.memory_store import MemoryFileStore
+from app.core.skill_store import SkillFileStore
 from app.integrations.search import WebSearchClient
 from app.rag.retriever import RagRetriever
 from app.repositories.idempotency import (
@@ -77,6 +78,7 @@ def build_tools(
     web_search: WebSearchClient,
     memory_service: CopilotMemoryService,
     memory_store: MemoryFileStore,
+    skill_store: SkillFileStore,
     max_result_chars: int,
     lock: asyncio.Lock | None = None,
     spill_store: SpillStore | None = None,
@@ -346,10 +348,10 @@ def build_tools(
         """检索长期记忆。
         【用途】需要回忆之前记下的用户约束/偏好/事实/事件时使用。
         【区别】搜个人长期记忆；搜知识库用 search_knowledge_base，搜公网用 search_web。
-        【参数】query 为检索问题；kind 可选 constraint/procedural/semantic/episodic，
-        不传则语义+情节都查。
+        【参数】query 为检索问题；kind 可选 constraint/fact/preference/episodic，
+        不传则事实+情节都查。
         【约束】只读无副作用；kind 非法会永久失败。
-        【示例】search_memory("用户喜欢什么", "semantic") → 命中记忆条目。"""
+        【示例】search_memory("用户喜欢什么", "fact") → 命中记忆条目。"""
         k = parse_kind(kind)
         hits = await memory_service.search_memory(query, k)
         if not hits:
@@ -438,10 +440,10 @@ def build_tools(
         【用途】当对话出现值得长期记住的用户约束/偏好/事实/事件时使用。
         【区别】写积累型记忆（走冲突判定去重）；产出一篇成文笔记用 create_note，
         写人设/档案用 update_profile。
-        【参数】kind 为 constraint（硬规则/红线）/procedural（偏好）/semantic（事实）/
-        episodic（事件）；content 为记忆内容；entity_id 可选（semantic 的稳定实体键，
+        【参数】kind 为 constraint（硬规则/红线）/fact（事实）/preference（偏好）/
+        episodic（事件）；content 为记忆内容；entity_id 可选（fact 的稳定实体键，
         同实体覆盖）。服务端写入前会确定性分类兜底，kind 可能被纠正。
-        【约束】写操作（会真的写入记忆库）；semantic 同 entity_id 覆盖、其余走冲突判定。
+        【约束】写操作（会真的写入记忆库）；fact 同 entity_id 覆盖、其余走冲突判定。
         【示例】write_memory("constraint", "禁止泄露用户隐私数据") → 已写入记忆。"""
         if idempotency_key:
             cached = await _dedup(
@@ -476,6 +478,83 @@ def build_tools(
         【示例】update_profile("user", "用户是后端工程师") → 已更新 user 档案。"""
         await memory_store.write(kind, content)
         return f"已更新 {kind} 档案。"
+
+    @copilot_tool(
+        side_effect_level=SideEffectLevel.LOW,
+        source="tool_result",
+        latency_ms=100,
+        param_contract=LIST_PARAM_CONTRACT,
+        resource="file",
+    )
+    async def list_skills(limit: int = LIST_LIMIT_DEFAULT, offset: int = 0) -> str:
+        """列出已安装的自定义 skill（经验技巧）。
+        【用途】需要查看有哪些可复用的经验/技巧时使用。
+        【区别】列出自定义 skill（沉淀的「怎么做」经验）；官方内置工具由系统注入、无需列出。
+        【参数】limit 每页条数（默认 50，上限 100）；offset 偏移量。
+        【约束】只读无副作用；条数超过一页会提示继续列。
+        【示例】list_skills() → 每行「name：description」。"""
+        skills, total = await skill_store.list_skills(limit, offset)
+        if not skills:
+            return "（无自定义 skill）"
+        lines = [f"- {s.name}：{s.description or '（无描述）'}" for s in skills]
+        return _finalize(with_has_more(lines, offset, total, "skill"), "list_skills")
+
+    @copilot_tool(
+        side_effect_level=SideEffectLevel.LOW,
+        source="tool_result",
+        latency_ms=100,
+        resource="file",
+    )
+    async def read_skill(name: str) -> str:
+        """读取某个自定义 skill 的完整内容（markdown）。
+        【用途】需要应用某个经验/技巧时，先读它的正文。
+        【区别】读的是自定义 skill 的指令/经验；读笔记用 read_note。
+        【参数】name 为 skill 名（先用 list_skills 拿名字）。
+        【约束】只读无副作用；名字不存在会失败（不要重试同一名字）。
+        【示例】read_skill("写周报") → skill 的正文。"""
+        skill = await skill_store.read_skill(name)
+        if skill is None:
+            raise _deny(
+                f"skill「{name}」不存在", "请先用 list_skills 拿到存在的名字。", "not_found"
+            )
+        header = f"# {skill.name}" + (f"\n{skill.description}" if skill.description else "")
+        return _finalize(f"{header}\n\n{skill.content}", "read_skill")
+
+    @copilot_tool(
+        side_effect_level=SideEffectLevel.MEDIUM,
+        source="tool_result",
+        latency_ms=100,
+        resource="file",
+    )
+    async def write_skill(name: str, description: str, content: str) -> str:
+        """创建或覆盖一个自定义 skill（经验技巧）。
+        【用途】对话中出现值得沉淀的「怎么做」经验/技巧时，把它写成一个 skill。
+        【区别】写 skill 是「怎么做」的可复用经验；写偏好/事实/事件用 write_memory。
+        【参数】name 为 skill 名；description 一句话说明；content 为正文（markdown）。
+        【约束】写操作（会覆盖同名 skill）；覆盖写天然幂等。
+        【示例】write_skill("写周报", "写周报用这个模板", "1. 本周完成 ...") → 已写入 skill。"""
+        await skill_store.write_skill(name, description, content)
+        return f"已写入 skill「{name}」。"
+
+    @copilot_tool(
+        side_effect_level=SideEffectLevel.HIGH,
+        source="tool_result",
+        latency_ms=100,
+        resource="file",
+    )
+    async def delete_skill(name: str) -> str:
+        """删除一个自定义 skill（只能删用户安装的 skill，不可逆，需用户确认）。
+        【用途】用户明确要求删除某个经验/技巧时使用。
+        【区别】只能删自定义 skill；官方内置工具不可删。
+        【参数】name 为 skill 名（先用 list_skills 拿名字）。
+        【约束】高危写操作（删了不可恢复，会触发审批确认）；名字不存在会失败。
+        【示例】delete_skill("写周报") → 已删除 skill。"""
+        deleted = await skill_store.delete_skill(name)
+        if not deleted:
+            raise _deny(
+                f"skill「{name}」不存在", "请先用 list_skills 拿到存在的名字。", "not_found"
+            )
+        return f"已删除 skill「{name}」。"
 
     tools = [t for t, _ in collected]
     registry: ToolRegistry = {t.name: meta for t, meta in collected}

@@ -18,7 +18,7 @@ LIST_LIMIT_DEFAULT = 50
 _UUID_PATTERN = (
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
-_MEMORY_KINDS = frozenset({"constraint", "procedural", "semantic", "episodic"})
+_MEMORY_KINDS = frozenset({"constraint", "fact", "preference", "episodic"})
 LIST_PARAM_CONTRACT = ParamContract(
     min={"limit": 1, "offset": 0}, max={"limit": LIST_LIMIT_MAX}
 )

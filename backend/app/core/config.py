@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # 笔记向量化（idle 触发）
     note_revectorize_idle_seconds: int = 120
 
-    # Copilot 记忆（四型：约束/程序/语义/情节）
+    # Copilot 记忆（四型：约束/事实/偏好/情节）
     memory_capacity: int = 200            # 各 kind 容量上限（硬淘汰阈值）
     memory_episodic_ttl_days: int = 30   # 情节记忆 TTL（激活衰减用）
     memory_recall_floor: float = 0.05    # 召回 floor：activation 低于此值召回不到
@@ -69,7 +69,6 @@ class Settings(BaseSettings):
     memory_conflict_top_k: int = 10      # 写记忆冲突判定的 cosine 预筛候选数
     memory_superseded_window_days: int = 7  # 软删除窗口：被 superseded 后 N 天内可召回复活
     memory_revival_similarity: float = 0.5  # 复活阈值：superseded 记忆与 query 余弦相似度 ≥ 此值
-    memory_classifier_enabled: bool = True  # 写入时 LLM 分类器（防线一兜底，覆盖 Agent 自报 kind）
     memory_block_max_tokens: int = 2000  # 记忆注入块 token 预算（约束子预算 ≤40%）
 
     # Copilot 工具
