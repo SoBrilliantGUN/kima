@@ -12,6 +12,7 @@ from app.agent.guardrail.review import ReviewIssue, ReviewResult, ReviewVerdict
 from app.agent.service import CopilotService
 from app.agent.tuning import CopilotTuning
 from app.core.memory_store import FileMemoryStore
+from app.core.skill_store import FileSkillStore
 from app.integrations.embedding import FakeEmbeddingClient
 from app.integrations.rerank import FakeRerankerClient
 from app.integrations.search import FakeWebSearchClient
@@ -142,6 +143,7 @@ def make_service(
         web_search=FakeWebSearchClient(),
         memory_service=memory_service,
         memory_store=FileMemoryStore(tmp_path),
+        skill_store=FileSkillStore(tmp_path / "skills"),
         chat_repository=chat_repo,
         event_repository=event_repo,
         tuning=CopilotTuning(max_result_chars=4000, review_max_attempts=review_max_attempts),

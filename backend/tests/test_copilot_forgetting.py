@@ -78,15 +78,28 @@ async def test_capacity_eviction_keeps_latest() -> None:
     assert active == 2  # 硬淘汰到容量
 
 
-async def test_capacity_eviction_skips_preference() -> None:
+async def test_capacity_eviction_skips_constraint() -> None:
+    """constraint 是红线，容量硬淘汰不作用于它（可超容量）。"""
+    repository = FakeCopilotMemoryRepository()
+    service = make_service(repository, capacity=2)
+    async with gateway_run():
+        await service.write_memory(MemoryKind.CONSTRAINT, "规则 1")
+        await service.write_memory(MemoryKind.CONSTRAINT, "规则 2")
+        await service.write_memory(MemoryKind.CONSTRAINT, "规则 3")  # constraint 不淘汰
+
+    assert await repository.count_active(MemoryKind.CONSTRAINT) == 3
+
+
+async def test_capacity_eviction_evicts_preference() -> None:
+    """preference 仅受容量淘汰：超容量时按 activation 淘汰最低分。"""
     repository = FakeCopilotMemoryRepository()
     service = make_service(repository, capacity=2)
     async with gateway_run():
         await service.write_memory(MemoryKind.PREFERENCE, "规则 1")
         await service.write_memory(MemoryKind.PREFERENCE, "规则 2")
-        await service.write_memory(MemoryKind.PREFERENCE, "规则 3")  # preference 不淘汰
+        await service.write_memory(MemoryKind.PREFERENCE, "规则 3")  # 触发淘汰
 
-    assert await repository.count_active(MemoryKind.PREFERENCE) == 3
+    assert await repository.count_active(MemoryKind.PREFERENCE) == 2
 
 
 async def test_search_memory_touches_access_count() -> None:

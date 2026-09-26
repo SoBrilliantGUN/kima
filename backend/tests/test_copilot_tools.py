@@ -9,6 +9,7 @@ from langchain_core.tools import BaseTool
 from app.agent.resilience.result import ToolFailure
 from app.agent.tools import build_tools
 from app.core.memory_store import FileMemoryStore
+from app.core.skill_store import FileSkillStore
 from app.integrations.embedding import FakeEmbeddingClient
 from app.integrations.rerank import FakeRerankerClient
 from app.integrations.search import FakeWebSearchClient
@@ -77,6 +78,7 @@ def make_tools(tmp_path: Path) -> tuple[list[BaseTool], FakeNoteRepository]:
         web_search=FakeWebSearchClient(),
         memory_service=memory_service,
         memory_store=FileMemoryStore(tmp_path),
+        skill_store=FileSkillStore(tmp_path / "skills"),
         max_result_chars=100,
     )
     return tools, note_repo

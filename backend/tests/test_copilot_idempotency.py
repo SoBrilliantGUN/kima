@@ -13,6 +13,7 @@ from langchain_core.tools import BaseTool
 from app.agent.toolmeta import idempotency_key_for, request_hash_for
 from app.agent.tools import build_tools
 from app.core.memory_store import FileMemoryStore
+from app.core.skill_store import FileSkillStore
 from app.integrations.embedding import FakeEmbeddingClient
 from app.integrations.rerank import FakeRerankerClient
 from app.integrations.search import FakeWebSearchClient
@@ -170,6 +171,7 @@ def _make_tools(
         web_search=FakeWebSearchClient(),
         memory_service=memory_service,
         memory_store=FileMemoryStore(tmp_path),
+        skill_store=FileSkillStore(tmp_path / "skills"),
         max_result_chars=100,
         idempotency_store=store,
     )

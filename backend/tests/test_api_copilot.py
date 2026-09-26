@@ -16,6 +16,7 @@ from app.agent.tuning import CopilotTuning
 from app.api.deps_copilot import get_copilot_service
 from app.api.deps_core import get_chat_service
 from app.core.memory_store import FileMemoryStore
+from app.core.skill_store import FileSkillStore
 from app.integrations.embedding import FakeEmbeddingClient
 from app.integrations.rerank import FakeRerankerClient
 from app.integrations.search import FakeWebSearchClient
@@ -135,6 +136,7 @@ def _make_copilot_service(tmp_path: Path) -> tuple[CopilotService, FakeChatRepos
         web_search=FakeWebSearchClient(),
         memory_service=memory_service,
         memory_store=FileMemoryStore(tmp_path),
+        skill_store=FileSkillStore(tmp_path / "skills"),
         chat_repository=chat_repo,
         event_repository=FakeCopilotEventRepository(),
         tuning=CopilotTuning(max_result_chars=4000),
@@ -187,9 +189,15 @@ async def test_copilot_skills_endpoint(api_client: AsyncClient) -> None:
     response = await api_client.get("/api/copilot/skills")
     assert response.status_code == 200
     items = response.json()["items"]
-    assert len(items) == 11
+    assert len(items) == 15
     write_names = {item["name"] for item in items if item["has_side_effect"]}
-    assert write_names == {"create_note", "write_memory", "update_profile"}
+    assert write_names == {
+        "create_note",
+        "write_memory",
+        "update_profile",
+        "write_skill",
+        "delete_skill",
+    }
 
 
 async def test_conversations_kind_filter(api_client: AsyncClient) -> None:
