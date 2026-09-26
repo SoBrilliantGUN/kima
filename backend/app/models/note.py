@@ -33,3 +33,6 @@ class Note(Base, TimestampMixin):
     content_markdown: Mapped[str] = mapped_column(Text, nullable=False, default="")
     # 上次向量化时间戳（NULL=从未向量化）；笔记向量化 worker 用它做 idle 检测
     vectorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 正文内容哈希（Copilot create_note 幂等去重用，sha256 十六进制 64 位）。
+    # 唯一约束：并发同正文的两次 create_note 只落一条（NULL=空白/手工编辑，不去重）。
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)

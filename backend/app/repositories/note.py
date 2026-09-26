@@ -18,6 +18,8 @@ class NoteRepository(Protocol):
     async def delete(self, note: Note) -> None: ...
     async def associate(self, note_id: uuid.UUID, kb_id: uuid.UUID) -> bool: ...
     async def list_by_kb(self, kb_id: uuid.UUID) -> Sequence[Note]: ...
+    async def get_by_content_hash(self, content_hash: str) -> Note | None: ...
+    async def create_unique(self, note: Note) -> Note | None: ...
 
 
 class SqlAlchemyNoteRepository:
@@ -46,7 +48,7 @@ class SqlAlchemyNoteRepository:
         return note
 
     async def update(self, note: Note) -> Note:
-        if inspect(note).session is not self._session.sync_session:  # type: ignore[comparison-overlap]
+        if inspect(note).session is not self._session.sync_session:
             raise InvalidRequestError(
                 "update() 只接受本 session 已加载的持久对象（detached/transient 请先 get）"
             )
@@ -76,3 +78,31 @@ class SqlAlchemyNoteRepository:
             .order_by(note_knowledge_bases.c.created_at.desc())
         )
         return list(rows)
+
+    async def get_by_content_hash(self, content_hash: str) -> Note | None:
+        rows = await self._session.scalars(
+            select(Note).where(Note.content_hash == content_hash).limit(1)
+        )
+        return rows.first()
+
+    async def create_unique(self, note: Note) -> Note | None:
+        """原子插入：`ON CONFLICT (content_hash) DO NOTHING`，冲突（并发同正文）返回 None。
+
+        唯一索引是并发去重的兜底——「先查后插」的缝隙由 DB 唯一约束填上，不会重复建笔记。
+        """
+        note.id = note.id or uuid.uuid4()
+        stmt = (
+            pg_insert(Note)
+            .values(
+                id=note.id,
+                title=note.title,
+                content_markdown=note.content_markdown,
+                content_hash=note.content_hash,
+            )
+            .on_conflict_do_nothing(index_elements=["content_hash"])
+        )
+        result = cast(CursorResult[Any], await self._session.execute(stmt))
+        await self._session.commit()
+        if result.rowcount == 0:
+            return None
+        return await self.get(note.id)

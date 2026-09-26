@@ -2,9 +2,9 @@
 
 import uuid
 from datetime import datetime, timedelta
-from typing import Protocol
+from typing import Any, Protocol, cast
 
-from sqlalchemy import delete, exists, or_, select, update
+from sqlalchemy import CursorResult, delete, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.note import Note, note_knowledge_bases
@@ -16,7 +16,9 @@ class NoteChunkRepository(Protocol):
     async def get_note(self, note_id: uuid.UUID) -> Note | None: ...
     async def delete_chunks(self, note_id: uuid.UUID) -> None: ...
     async def add_chunks(self, chunks: list[NoteChunk]) -> None: ...
-    async def mark_vectorized(self, note_id: uuid.UUID, timestamp: datetime) -> None: ...
+    async def mark_vectorized(
+        self, note_id: uuid.UUID, timestamp: datetime, expected_updated_at: datetime | None
+    ) -> bool: ...
     async def close(self) -> None: ...
 
 
@@ -58,12 +60,30 @@ class SqlAlchemyNoteChunkRepository:
         self._session.add_all(chunks)
         await self._session.commit()
 
-    async def mark_vectorized(self, note_id: uuid.UUID, timestamp: datetime) -> None:
-        """回写 vectorized_at；用 Core update 避免触发 onupdate 把 updated_at 顶到 now。"""
-        await self._session.execute(
-            update(Note).where(Note.id == note_id).values(vectorized_at=timestamp)
+    async def mark_vectorized(
+        self, note_id: uuid.UUID, timestamp: datetime, expected_updated_at: datetime | None
+    ) -> bool:
+        """回写 vectorized_at（CAS 守卫），且不碰 updated_at。
+
+        ``WHERE updated_at = 期望值``：若向量化期间笔记被再次编辑（updated_at 已变），
+        则不标记——否则会把旧内容误标成「已向量化」，下一轮 `claim_due`（`updated_at >
+        vectorized_at`）不再拾起，陈旧 chunk 永远留在库里。
+
+        ``updated_at=Note.updated_at`` 是「显式置自身」：`updated_at` 列有 `onupdate=now()`，
+        Core update 会把它顶到 now（`claim_due` 依赖 updated_at 反映「编辑时刻」而非
+        「向量化时刻」，顶掉会导致时钟偏移下的重复拾取 / 时间戳失真）。显式置自身可抑制
+        onupdate。返回是否写入。
+        """
+        result = cast(
+            CursorResult[Any],
+            await self._session.execute(
+                update(Note)
+                .where(Note.id == note_id, Note.updated_at == expected_updated_at)
+                .values(vectorized_at=timestamp, updated_at=Note.updated_at)
+            ),
         )
         await self._session.commit()
+        return result.rowcount == 1
 
     async def close(self) -> None:
         await self._session.close()
