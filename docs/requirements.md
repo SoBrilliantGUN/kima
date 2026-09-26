@@ -110,7 +110,7 @@ kima/
 | 3 | **笔记/编辑器** | 笔记 CRUD + TipTap Markdown 编辑器（空白笔记 + 添加到知识库 + 知识库内容列表） | ✅ 完成 |
 | 4 | **文档解析与归档** | 上传 PDF/URL/Word → 解析 → 内容感知父子分块 → 向量化入库（详见 `docs/module-4-documents.md`） | ✅ 完成 |
 | 5 | **AI 智能问答** | Advanced RAG（查询改写 + 混合检索 + RRF + rerank + 生成引用），预留 Agent 接口 | ✅ 完成 |
-| 6 | **Copilot（知识 Agent）** | 双形态 Agent（首页「我的Copilot」普通对话 + 跨 Tab 小窗）：LangGraph 工具调用（检索/读/写/联网/记忆）+ 四型记忆（约束/程序/语义/情节）+ checkpoint/事件日志 + LangFuse 可观测 + LLM 网关（统一门禁/记账/调用级快照/json_repair，详见 `docs/module-6-copilot.md`） | ✅ 已实现 |
+| 6 | **Copilot（知识 Agent）** | 双形态 Agent（首页「我的Copilot」普通对话 + 跨 Tab 小窗）：LangGraph 工具调用（检索/读/写/联网/记忆）+ 四型记忆（约束/事实/偏好/情节）+ checkpoint/事件日志 + LangFuse 可观测 + LLM 网关（统一门禁/记账/调用级快照/json_repair，详见 `docs/module-6-copilot.md`） | ✅ 已实现 |
 
 ### 模块 5 RAG 细节（Advanced RAG）
 
@@ -141,7 +141,7 @@ kima/
 | `note_knowledge_bases` | note_id(fk→notes)、knowledge_base_id(fk→knowledge_bases)、created_at；唯一(note_id, knowledge_base_id) |
 | `chat_conversations` | id、kb_id、kind(qa/copilot)、标题、created_at |
 | `chat_messages` | id、conversation_id、role、content、citations(jsonb)、steps(jsonb)、created_at |
-| `copilot_memories` | id、kind(约束/程序/语义/情节)、content、entity_id、embedding(vector)、ttl_days、trigger_conditions(jsonb)、importance、access_count、last_access、superseded、superseded_at/by、version、created_at/updated_at |
+| `copilot_memories` | id、kind(约束/事实/偏好/情节)、content、entity_id、embedding(vector)、ttl_days、trigger_conditions(jsonb)、importance、access_count、last_access、superseded、superseded_at/by、version、created_at/updated_at |
 | `copilot_events` | id、seq、run_id、type、payload(jsonb)、created_at（append-only 事件日志） |
 | `copilot_daily_budget` | day(PK)、cost_usd、tokens（跨 run 全局日预算，重启续读） |
 | `copilot_llm_snapshots` | run_id+call_key(PK)、kind、output(jsonb)、usage(jsonb)、created_at（LLM 调用级快照，宕机恢复不重跑） |
