@@ -386,8 +386,8 @@ async def test_side_effect_verifier_memory_missing() -> None:
 
     missing = await verifier.verify(
         "write_memory",
-        {"kind": "semantic", "content": "x"},
-        f"已写入 semantic 记忆 {uuid.uuid4()}。",
+        {"kind": "fact", "content": "x"},
+        f"已写入 fact 记忆 {uuid.uuid4()}。",
     )
     assert missing is not None
 

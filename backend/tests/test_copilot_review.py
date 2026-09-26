@@ -166,7 +166,7 @@ async def test_review_repairs_missing_write(tmp_path: Path) -> None:
                     {
                         "name": "write_memory",
                         "args": {
-                            "kind": "semantic",
+                            "kind": "fact",
                             "content": "喜欢编程",
                             "entity_id": "user:interests",
                         },
@@ -198,7 +198,7 @@ async def test_review_repairs_missing_write(tmp_path: Path) -> None:
     assert review_verdicts == ["mismatch", "repaired"]
 
     # 修复轮真的调用了 write_memory 并写入记忆
-    assert await memory_repo.count_active(MemoryKind.SEMANTIC) == 1
+    assert await memory_repo.count_active(MemoryKind.FACT) == 1
     tool_calls = [e.payload.get("tool_name") for e in event_repo.events if e.type == "tool_call"]
     assert "write_memory" in tool_calls
 
@@ -260,4 +260,4 @@ async def test_review_corrects_when_repair_fails(tmp_path: Path) -> None:
     assistant = await _assistant_message(chat_repo)
     assert "自检更正" in assistant.content
     # 没真的写入（修复也失败）
-    assert await memory_repo.count_active(MemoryKind.SEMANTIC) == 0
+    assert await memory_repo.count_active(MemoryKind.FACT) == 0

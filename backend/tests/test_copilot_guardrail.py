@@ -148,7 +148,7 @@ def test_behavior_tracker_write_freq_and_read_back() -> None:
     assert tracker.score() == 75.0
 
     tracker2 = BehaviorTracker(write_tool_names=write_tool_names)
-    tracker2.record("write_memory", {"kind": "semantic", "content": "x"})
+    tracker2.record("write_memory", {"kind": "fact", "content": "x"})
     tracker2.record("search_memory", {"query": "x"})  # 写后紧跟读 → 扣 20
     assert tracker2.score() == 80.0
 

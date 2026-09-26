@@ -28,8 +28,8 @@ def _mem(kind: MemoryKind, content: str) -> CopilotMemory:
 def _recalled(**kwargs: list[CopilotMemory]) -> RecalledMemories:
     return RecalledMemories(
         constraint=kwargs.get("constraint", []),
-        procedural=kwargs.get("procedural", []),
-        semantic=kwargs.get("semantic", []),
+        preference=kwargs.get("preference", []),
+        fact=kwargs.get("fact", []),
         episodic=kwargs.get("episodic", []),
     )
 
@@ -51,8 +51,8 @@ def test_format_memory_block_empty() -> None:
 def test_format_memory_block_wraps_with_memory_prefix() -> None:
     block = format_memory_block(
         _recalled(
-            procedural=[_mem(MemoryKind.PROCEDURAL, "回答要简洁")],
-            semantic=[_mem(MemoryKind.SEMANTIC, "用户是产品经理")],
+            preference=[_mem(MemoryKind.PREFERENCE, "回答要简洁")],
+            fact=[_mem(MemoryKind.FACT, "用户是产品经理")],
             episodic=[_mem(MemoryKind.EPISODIC, "昨天讨论了架构")],
         )
     )

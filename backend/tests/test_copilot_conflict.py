@@ -1,4 +1,4 @@
-"""记忆冲突判定：LLM 判定（duplicate/contradiction/none）+ semantic 同 entity 覆盖。"""
+"""记忆冲突判定：LLM 判定（duplicate/contradiction/none）+ fact 同 entity 覆盖。"""
 
 import pytest
 
@@ -47,7 +47,7 @@ async def test_cross_kind_duplicate_does_not_dedup() -> None:
     judge = FakeConflictJudge(["duplicate"])
     service = make_service(judge)
     async with gateway_run():
-        fact = await service.write_memory(MemoryKind.SEMANTIC, "用户是副总经理")
+        fact = await service.write_memory(MemoryKind.FACT, "用户是副总经理")
         episode = await service.write_memory(MemoryKind.EPISODIC, "用户是副总经理")
 
     assert episode.id != fact.id  # 不同型不去重，照写新行
@@ -76,14 +76,14 @@ async def test_none_keeps_both() -> None:
     assert second.superseded is False
 
 
-async def test_semantic_entity_override_increments_version() -> None:
+async def test_fact_entity_override_increments_version() -> None:
     service = make_service(FakeConflictJudge())
     async with gateway_run():
-        first = await service.write_memory(MemoryKind.SEMANTIC, "用户是经理", entity_id="user:role")
+        first = await service.write_memory(MemoryKind.FACT, "用户是经理", entity_id="user:role")
         assert first.version == 1
 
         second = await service.write_memory(
-            MemoryKind.SEMANTIC, "用户是副总经理", entity_id="user:role"
+            MemoryKind.FACT, "用户是副总经理", entity_id="user:role"
         )
     assert second.id == first.id  # 直接覆盖同一行，不新建
     assert second.version == 2
@@ -95,7 +95,7 @@ async def test_cross_kind_conflict_supersedes_preference() -> None:
     judge = FakeConflictJudge(["contradiction"])
     service = make_service(judge)
     async with gateway_run():
-        preference = await service.write_memory(MemoryKind.PROCEDURAL, "喜欢 VIP 免费洗车权益")
+        preference = await service.write_memory(MemoryKind.PREFERENCE, "喜欢 VIP 免费洗车权益")
         episodic = await service.write_memory(MemoryKind.EPISODIC, "因成本控制降级为基础版")
 
     assert preference.superseded is True  # 情节压过偏好（跨型）

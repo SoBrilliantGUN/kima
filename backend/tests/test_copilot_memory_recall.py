@@ -1,8 +1,8 @@
-"""分路召回：约束硬召回（不过阈值）+ 写入分类器覆盖 + 语义/情节混合召回 + 记忆块预算合并。
+"""分路召回：约束硬召回（不过阈值）+ 写入分类器覆盖 + 事实/情节混合召回 + 记忆块预算合并。
 
 对齐《分路召回架构》：约束是「确定域」，只要任务沾边就无条件在场，不靠余弦相似度碰运气；
 事实/偏好/情节是「概率域」，走混合召回（向量 + 词法）。写入时加确定性分类兜底，防止
-Agent 把「禁止 ORM」当语义事实写进去、从而走向量 top-k 漏召回。
+Agent 把「禁止 ORM」当事实写进去、从而走向量 top-k 漏召回。
 """
 
 from datetime import UTC, datetime
@@ -71,7 +71,7 @@ async def test_recall_constraint_not_filtered_by_floor() -> None:
 
 
 async def test_classifier_overrides_agent_kind_to_constraint() -> None:
-    """防线一兜底：Agent 报 semantic，分类器判 constraint → 落库为 constraint（硬召回）。"""
+    """防线一兜底：Agent 报 fact，分类器判 constraint → 落库为 constraint（硬召回）。"""
     classifier = FakeMemoryClassifier(
         [
             MemoryClassification(
@@ -82,13 +82,13 @@ async def test_classifier_overrides_agent_kind_to_constraint() -> None:
     )
     service = make_service(classifier=classifier)
     async with gateway_run():
-        memory = await service.write_memory(MemoryKind.SEMANTIC, "禁止使用 ORM")
+        memory = await service.write_memory(MemoryKind.FACT, "禁止使用 ORM")
         assert memory.kind == MemoryKind.CONSTRAINT
         assert memory.trigger_conditions == {"type": "domain", "value": "database"}
-        # 之后走 constraint 硬召回，不再走 semantic 向量
+        # 之后走 constraint 硬召回，不再走 fact 向量
         recalled = await service.recall("任意")
     assert any(m.content == "禁止使用 ORM" for m in recalled.constraint)
-    assert all(m.content != "禁止使用 ORM" for m in recalled.semantic)
+    assert all(m.content != "禁止使用 ORM" for m in recalled.fact)
 
 
 async def test_classifier_none_falls_back_to_agent_kind() -> None:
@@ -97,20 +97,20 @@ async def test_classifier_none_falls_back_to_agent_kind() -> None:
     service = make_service(classifier=classifier)
     async with gateway_run():
         memory = await service.write_memory(
-            MemoryKind.SEMANTIC, "用户是产品经理", entity_id="user:role"
+            MemoryKind.FACT, "用户是产品经理", entity_id="user:role"
         )
-    assert memory.kind == MemoryKind.SEMANTIC
+    assert memory.kind == MemoryKind.FACT
 
 
-async def test_recall_semantic_hybrid_returns_exact_term() -> None:
-    """语义召回走 dense + lexical 混合：精确词命中（词法通道）也能进场（烟测不报错）。"""
+async def test_recall_fact_hybrid_returns_exact_term() -> None:
+    """事实召回走 dense + lexical 混合：精确词命中（词法通道）也能进场（烟测不报错）。"""
     service = make_service()
     async with gateway_run():
         await service.write_memory(
-            MemoryKind.SEMANTIC, "生产库连接串 postgres://prod", entity_id="e1"
+            MemoryKind.FACT, "生产库连接串 postgres://prod", entity_id="e1"
         )
         recalled = await service.recall("postgres")
-    assert any("postgres" in m.content for m in recalled.semantic)
+    assert any("postgres" in m.content for m in recalled.fact)
 
 
 async def test_llm_classifier_maps_constraint() -> None:
@@ -131,7 +131,7 @@ async def test_llm_classifier_maps_fact_with_entity() -> None:
     async with gateway_run():
         result = await classifier.classify("用户是产品经理")
     assert result is not None
-    assert result.kind == MemoryKind.SEMANTIC
+    assert result.kind == MemoryKind.FACT
     assert result.entity_id == "user:role"
 
 
@@ -148,8 +148,8 @@ def test_format_memory_block_constraint_first_and_budget_caps_low_priority() -> 
     """约束排最前；超预算的低优先级记忆（偏好）被跳过，约束仍在场。"""
     recalled = RecalledMemories(
         constraint=[_mem(MemoryKind.CONSTRAINT, "禁止使用 ORM")],
-        procedural=[_mem(MemoryKind.PROCEDURAL, "规则" + "长" * 100)],
-        semantic=[_mem(MemoryKind.SEMANTIC, "用户是产品经理")],
+        preference=[_mem(MemoryKind.PREFERENCE, "规则" + "长" * 100)],
+        fact=[_mem(MemoryKind.FACT, "用户是产品经理")],
         episodic=[],
     )
     block = format_memory_block(recalled, max_tokens=50)
@@ -162,8 +162,8 @@ def test_format_memory_block_no_budget_full_injection() -> None:
     """max_tokens 缺省：四型全量注入（向后兼容），且约束在最前。"""
     recalled = RecalledMemories(
         constraint=[_mem(MemoryKind.CONSTRAINT, "禁止使用 ORM")],
-        procedural=[_mem(MemoryKind.PROCEDURAL, "回答要简洁")],
-        semantic=[_mem(MemoryKind.SEMANTIC, "用户是产品经理")],
+        preference=[_mem(MemoryKind.PREFERENCE, "回答要简洁")],
+        fact=[_mem(MemoryKind.FACT, "用户是产品经理")],
         episodic=[_mem(MemoryKind.EPISODIC, "昨天讨论了架构")],
     )
     block = format_memory_block(recalled)

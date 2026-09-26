@@ -37,10 +37,10 @@ def _memory(kind: MemoryKind, *, ttl_days: int | None = None) -> CopilotMemory:
     return memory
 
 
-async def test_activation_procedural_constant() -> None:
+async def test_activation_preference_constant() -> None:
     service = make_service()
     now = datetime.now(UTC)
-    memory = _memory(MemoryKind.PROCEDURAL)
+    memory = _memory(MemoryKind.PREFERENCE)
     memory.created_at = now - timedelta(days=1000)
     assert service.compute_activation(memory, now) == pytest.approx(1.0)
 
@@ -76,23 +76,23 @@ async def test_capacity_eviction_keeps_latest() -> None:
     assert active == 2  # 硬淘汰到容量
 
 
-async def test_capacity_eviction_skips_procedural() -> None:
+async def test_capacity_eviction_skips_preference() -> None:
     repository = FakeCopilotMemoryRepository()
     service = make_service(repository, capacity=2)
     async with gateway_run():
-        await service.write_memory(MemoryKind.PROCEDURAL, "规则 1")
-        await service.write_memory(MemoryKind.PROCEDURAL, "规则 2")
-        await service.write_memory(MemoryKind.PROCEDURAL, "规则 3")  # procedural 不淘汰
+        await service.write_memory(MemoryKind.PREFERENCE, "规则 1")
+        await service.write_memory(MemoryKind.PREFERENCE, "规则 2")
+        await service.write_memory(MemoryKind.PREFERENCE, "规则 3")  # preference 不淘汰
 
-    assert await repository.count_active(MemoryKind.PROCEDURAL) == 3
+    assert await repository.count_active(MemoryKind.PREFERENCE) == 3
 
 
 async def test_search_memory_touches_access_count() -> None:
     repository = FakeCopilotMemoryRepository()
     service = make_service(repository)
     async with gateway_run():
-        await service.write_memory(MemoryKind.SEMANTIC, "用户是副总经理", entity_id="user:role")
-        hits = await service.search_memory("用户是副总经理", MemoryKind.SEMANTIC)
+        await service.write_memory(MemoryKind.FACT, "用户是副总经理", entity_id="user:role")
+        hits = await service.search_memory("用户是副总经理", MemoryKind.FACT)
     assert len(hits) == 1
     assert hits[0].access_count == 1
     assert hits[0].last_access is not None
@@ -103,11 +103,11 @@ async def test_recall_touches_recalled_memories() -> None:
     repository = FakeCopilotMemoryRepository()
     service = make_service(repository)
     async with gateway_run():
-        await service.write_memory(MemoryKind.SEMANTIC, "用户是副总经理", entity_id="user:role")
+        await service.write_memory(MemoryKind.FACT, "用户是副总经理", entity_id="user:role")
         recalled = await service.recall("用户是副总经理")
-    assert len(recalled.semantic) == 1
-    assert recalled.semantic[0].access_count >= 1
-    assert recalled.semantic[0].last_access is not None
+    assert len(recalled.fact) == 1
+    assert recalled.fact[0].access_count >= 1
+    assert recalled.fact[0].last_access is not None
 
 
 async def test_recall_revives_superseded_within_window() -> None:
@@ -115,7 +115,7 @@ async def test_recall_revives_superseded_within_window() -> None:
     repository = FakeCopilotMemoryRepository()
     embedder = FakeEmbeddingClient(dimension=8)
     memory = CopilotMemory(
-        kind=MemoryKind.SEMANTIC,
+        kind=MemoryKind.FACT,
         content="用户是副总经理",
         embedding=await embedder.embed_query("用户是副总经理"),
         superseded=True,
@@ -126,9 +126,9 @@ async def test_recall_revives_superseded_within_window() -> None:
 
     async with gateway_run():
         recalled = await service.recall("用户是副总经理")
-    assert len(recalled.semantic) == 1
-    assert recalled.semantic[0].superseded is False  # 已复活
-    assert recalled.semantic[0].superseded_at is None
+    assert len(recalled.fact) == 1
+    assert recalled.fact[0].superseded is False  # 已复活
+    assert recalled.fact[0].superseded_at is None
 
 
 async def test_recall_does_not_revive_when_superseder_alive() -> None:
@@ -136,14 +136,14 @@ async def test_recall_does_not_revive_when_superseder_alive() -> None:
     repository = FakeCopilotMemoryRepository()
     embedder = FakeEmbeddingClient(dimension=8)
     winner = CopilotMemory(
-        kind=MemoryKind.SEMANTIC,
+        kind=MemoryKind.FACT,
         content="用户改用 React",
         embedding=await embedder.embed_query("用户改用 React"),
         superseded=False,
     )
     await repository.add(winner)
     loser = CopilotMemory(
-        kind=MemoryKind.SEMANTIC,
+        kind=MemoryKind.FACT,
         content="用户用 Vue",
         embedding=await embedder.embed_query("用户用 Vue"),
         superseded=True,
@@ -155,7 +155,7 @@ async def test_recall_does_not_revive_when_superseder_alive() -> None:
 
     async with gateway_run():
         recalled = await service.recall("用户用 Vue")
-    assert all(m.content != "用户用 Vue" for m in recalled.semantic)
+    assert all(m.content != "用户用 Vue" for m in recalled.fact)
     assert loser.superseded is True  # 未被复活
 
 
@@ -164,14 +164,14 @@ async def test_recall_revives_when_superseder_gone() -> None:
     repository = FakeCopilotMemoryRepository()
     embedder = FakeEmbeddingClient(dimension=8)
     winner = CopilotMemory(
-        kind=MemoryKind.SEMANTIC,
+        kind=MemoryKind.FACT,
         content="用户改用 React",
         embedding=await embedder.embed_query("用户改用 React"),
         superseded=True,
     )
     await repository.add(winner)
     loser = CopilotMemory(
-        kind=MemoryKind.SEMANTIC,
+        kind=MemoryKind.FACT,
         content="用户用 Vue",
         embedding=await embedder.embed_query("用户用 Vue"),
         superseded=True,
@@ -183,7 +183,7 @@ async def test_recall_revives_when_superseder_gone() -> None:
 
     async with gateway_run():
         recalled = await service.recall("用户用 Vue")
-    assert any(m.content == "用户用 Vue" for m in recalled.semantic)
+    assert any(m.content == "用户用 Vue" for m in recalled.fact)
 
 
 async def test_recall_does_not_revive_outside_window() -> None:
@@ -191,7 +191,7 @@ async def test_recall_does_not_revive_outside_window() -> None:
     repository = FakeCopilotMemoryRepository()
     embedder = FakeEmbeddingClient(dimension=8)
     memory = CopilotMemory(
-        kind=MemoryKind.SEMANTIC,
+        kind=MemoryKind.FACT,
         content="用户是副总经理",
         embedding=await embedder.embed_query("用户是副总经理"),
         superseded=True,
@@ -202,7 +202,7 @@ async def test_recall_does_not_revive_outside_window() -> None:
 
     async with gateway_run():
         recalled = await service.recall("用户是副总经理")
-    assert len(recalled.semantic) == 0
+    assert len(recalled.fact) == 0
 
 
 async def test_recall_does_not_revive_below_floor() -> None:
@@ -231,13 +231,13 @@ async def test_delete_superseded_older_than_removes_expired() -> None:
     repository = FakeCopilotMemoryRepository()
     now = datetime.now(UTC)
     expired = CopilotMemory(
-        kind=MemoryKind.SEMANTIC,
+        kind=MemoryKind.FACT,
         content="过期记忆",
         superseded=True,
         superseded_at=now - timedelta(days=8),
     )
     in_window = CopilotMemory(
-        kind=MemoryKind.SEMANTIC,
+        kind=MemoryKind.FACT,
         content="窗口内记忆",
         superseded=True,
         superseded_at=now - timedelta(days=1),

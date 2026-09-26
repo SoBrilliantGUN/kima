@@ -30,18 +30,18 @@ def make_service(
     )
 
 
-async def test_recall_procedural_full_and_others_topk() -> None:
+async def test_recall_preference_full_and_others_topk() -> None:
     service = make_service()
     async with gateway_run():
         for i in range(3):
-            await service.write_memory(MemoryKind.PROCEDURAL, f"规则 {i}")
+            await service.write_memory(MemoryKind.PREFERENCE, f"规则 {i}")
         for i in range(3):
-            await service.write_memory(MemoryKind.SEMANTIC, f"事实 {i}", entity_id=f"e{i}")
+            await service.write_memory(MemoryKind.FACT, f"事实 {i}", entity_id=f"e{i}")
         await service.write_memory(MemoryKind.EPISODIC, "某次事件")
 
         recalled = await service.recall("任意查询")
-    assert len(recalled.procedural) == 3  # 全量注入
-    assert len(recalled.semantic) == 3  # top-k=5 覆盖 3 条
+    assert len(recalled.preference) == 3  # 全量注入
+    assert len(recalled.fact) == 3  # top-k=5 覆盖 3 条
     assert len(recalled.episodic) == 1
 
 
@@ -49,7 +49,7 @@ async def test_recall_skips_superseded() -> None:
     repository = FakeCopilotMemoryRepository()
     embedder = FakeEmbeddingClient(dimension=8)
     superseded = CopilotMemory(
-        kind=MemoryKind.SEMANTIC,
+        kind=MemoryKind.FACT,
         content="旧事实",
         embedding=await embedder.embed_query("旧事实"),
         superseded=True,
@@ -59,7 +59,7 @@ async def test_recall_skips_superseded() -> None:
 
     async with gateway_run():
         recalled = await service.recall("查询")
-    assert len(recalled.semantic) == 0  # superseded 被跳过
+    assert len(recalled.fact) == 0  # superseded 被跳过
 
 
 async def test_recall_filters_below_floor_episodic() -> None:
