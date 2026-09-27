@@ -22,12 +22,8 @@ class CopilotWriteMixin:
     _judge: ConflictJudge
     _conflict_top_k: int
     _episodic_ttl_days: int
-    _capacity: int
 
     # 由 CopilotMemoryService 实现（mixin 依赖其存在，声明签名以通过类型检查）。
-    def compute_activation(self, memory: CopilotMemory, now: datetime) -> float:
-        raise NotImplementedError
-
     async def _embed(self, node: str, text: str) -> list[float]:
         raise NotImplementedError
 
@@ -87,7 +83,6 @@ class CopilotWriteMixin:
                 await self._repository.touch([candidate.id], now)
                 return candidate
 
-        evicted = await self._evict_if_needed(kind)
         memory = CopilotMemory(
             kind=kind,
             content=content,
@@ -102,7 +97,7 @@ class CopilotWriteMixin:
         memory = await self._repository.add(memory)
         # 新记忆落盘后再让矛盾的旧记忆退场（superseded_by 指向新记忆 id，供复活守卫用）
         await self._supersede_losers(
-            candidates, verdicts, memory.id, now, include_duplicate=False, exclude_ids=evicted
+            candidates, verdicts, memory.id, now, include_duplicate=False
         )
         return memory
 
@@ -114,7 +109,6 @@ class CopilotWriteMixin:
         now: datetime,
         *,
         include_duplicate: bool,
-        exclude_ids: set[uuid.UUID] | None = None,
     ) -> None:
         """把败者候选标记 superseded 留痕（软删除窗口起点 + 压它的赢家 id）。
 
@@ -122,7 +116,7 @@ class CopilotWriteMixin:
         （旧偏好/情节与新高阶事实冗余也算冗余）传 True；普通写路径已在落盘前把同型
         DUPLICATE 走「去重不写」返回，此处只处理 CONTRADICTION 传 False。
         """
-        skip = {winner_id, *(exclude_ids or set())}
+        skip = {winner_id}
         for candidate, verdict in zip(candidates, verdicts, strict=False):
             if candidate.id in skip:
                 continue
@@ -141,8 +135,6 @@ class CopilotWriteMixin:
         embedding: list[float],
         candidate_kinds: list[MemoryKind],
         winner_id: uuid.UUID,
-        *,
-        exclude_ids: set[uuid.UUID] | None = None,
     ) -> None:
         """事实覆写路径的增量整合（机制二）：检索 Top-K 相似候选 → LLM 裁决 → 输家退场。
 
@@ -155,7 +147,7 @@ class CopilotWriteMixin:
         candidates = await self._repository.search_cross_kind(
             candidate_kinds, embedding, self._conflict_top_k
         )
-        skip = {winner_id, *(exclude_ids or set())}
+        skip = {winner_id}
         candidates = [c for c in candidates if c.id not in skip]
         if not candidates:
             return
@@ -167,23 +159,3 @@ class CopilotWriteMixin:
             datetime.now(UTC),
             include_duplicate=True,
         )
-
-    async def _evict_if_needed(self, kind: MemoryKind) -> set[uuid.UUID]:
-        """写前容量硬淘汰：count>=capacity 时按 activation 升序淘汰最低分腾出 1 位。
-
-        constraint 是红线不参与淘汰（可超容量）；fact 同 activation 时优先淘汰低版本。
-        返回被淘汰的 id 集合，供调用方在冲突整合时跳过已删候选。
-        """
-        if kind == MemoryKind.CONSTRAINT:
-            return set()
-        active = await self._repository.list_active(kind)
-        if len(active) < self._capacity:
-            return set()
-        now = datetime.now(UTC)
-        active.sort(key=lambda m: (self.compute_activation(m, now), m.version))
-        # 淘汰到 capacity-1，让新写入的 1 条刚好落在 capacity 内
-        evicted: set[uuid.UUID] = set()
-        for memory in active[: len(active) - self._capacity + 1]:
-            evicted.add(memory.id)
-            await self._repository.delete(memory)
-        return evicted
