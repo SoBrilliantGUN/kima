@@ -62,9 +62,7 @@ class Settings(BaseSettings):
     note_revectorize_idle_seconds: int = 120
 
     # Copilot 记忆（四型：约束/事实/偏好/情节）
-    memory_capacity: int = 200            # 各 kind 容量上限（硬淘汰阈值）
     memory_episodic_ttl_days: int = 30   # 情节记忆 TTL（激活衰减用）
-    memory_recall_floor: float = 0.05    # 召回 floor：activation 低于此值召回不到
     memory_recency_window_days: int = 7  # recency 窗：last_access 在此窗口内 +0.3
     memory_conflict_top_k: int = 10      # 写记忆冲突判定的 cosine 预筛候选数
     memory_superseded_window_days: int = 7  # 软删除窗口：被 superseded 后 N 天内可召回复活
