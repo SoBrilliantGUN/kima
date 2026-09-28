@@ -12,6 +12,6 @@ api_router.include_router(chat.chat_router)
 api_router.include_router(copilot.router)
 
 # 健康检查 router，裸挂（供探针），不加 /api 前缀
-health_router = health.router
+health_router: APIRouter = health.router
 
 __all__ = ["api_router", "health_router"]
