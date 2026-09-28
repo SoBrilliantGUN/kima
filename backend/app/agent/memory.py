@@ -12,7 +12,6 @@
 打爆 Prompt Cache 前缀命中。
 """
 
-
 from app.agent.toolmeta import SideEffectLevel, ToolMeta, ToolRegistry
 from app.chunking.base import estimate_tokens
 from app.core.config import BACKEND_DIR
@@ -50,12 +49,8 @@ def render_tool_hint(registry: ToolRegistry) -> str:
         return f"{m.name}（{m.hint}）"
 
     read = [m for m in registry.values() if m.is_readonly]
-    write = [
-        m for m in registry.values() if m.side_effect_level is SideEffectLevel.MEDIUM
-    ]
-    danger = [
-        m for m in registry.values() if m.side_effect_level is SideEffectLevel.HIGH
-    ]
+    write = [m for m in registry.values() if m.side_effect_level is SideEffectLevel.MEDIUM]
+    danger = [m for m in registry.values() if m.side_effect_level is SideEffectLevel.HIGH]
     parts = ["工具使用："]
     if read:
         parts.append("只读：" + "、".join(line(m) for m in read) + "；")
@@ -104,7 +99,10 @@ def _format_memories_budgeted(
 
 
 def assemble_system_prompt(
-    *, soul: str, user: str, skills: list[str] | None = None,
+    *,
+    soul: str,
+    user: str,
+    skills: list[str] | None = None,
     registry: ToolRegistry | None = None,
 ) -> str:
     """L0 system prompt：宪法 + soul/user + skills 列表 + 操作引导 + 工具提示。
@@ -157,3 +155,17 @@ def format_memory_block(recalled: RecalledMemories, max_tokens: int) -> str:
     if not blocks:
         return ""
     return "[MEMORY]\n" + "\n\n".join(blocks)
+
+
+def format_subagent_constraints(recalled: RecalledMemories) -> str:
+    """子 Agent 精简约束块（父显式下传）：宪法铁律（红线）+ constraint 型硬约束。
+
+    不传 preference/fact/episodic（检索子任务只需底线）；也不传主 Agent 的 soul/user 人设
+    与工具清单——子 Agent 用自己的「检索子 Agent」角色 + 这份精简底线，对齐 Claude 子
+    Agent 的强隔离（唯一通道是派发时显式拼入）。
+    """
+    parts = [f"[约束]\n{load_constitution()}"]
+    if recalled.constraint:
+        lines = ["- " + m.content for m in recalled.constraint]
+        parts.append("硬约束（必须遵守）：\n" + "\n".join(lines))
+    return "\n\n".join(parts)
