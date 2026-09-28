@@ -44,7 +44,7 @@
 
 ## 2. 记忆系统（核心）
 
-> 设计原则：记忆会越来越长，不可能每轮全量注入，且不同类型的记忆「存活」方式不同。据此把积累型记忆分成四型，各配不同的召回、遗忘、冲突策略——约束是「确定域」硬召回、其余是「概率域」混合召回。Soul/User 仍为稳定短文本（文件），全文注入。**三层模型**：L0 身份层（Soul/User）+ L1 积累层（四型向量）+ L2 技能层（自定义 Skill，见 §2.6）。
+> 设计原则：记忆会越来越长，不可能每轮全量注入，且不同类型的记忆「存活」方式不同。据此把积累型记忆分成四型，各配不同的召回、遗忘、冲突策略——约束是「确定域」硬召回、其余是「概率域」混合召回。Soul/User 仍为稳定短文本（文件），全文注入。记忆分三类：**身份**（Soul/User 文件）+ **积累**（四型向量）+ **技能**（自定义 Skill，见 §2.6）。
 
 ### 2.1 存储与四型分类
 
@@ -53,7 +53,7 @@
 | Soul（人设/说话风格） | 一个 MD 文件 `soul.md` | `data/memory/` | 每轮全文注入 |
 | User（档案/背景/偏好） | 一个 MD 文件 `user.md` | `data/memory/` | 每轮全文注入 |
 | **约束 constraint** | 向量条目 | `copilot_memories` | **硬召回全量**（不过相似度阈值，红线无条件在场） |
-| **偏好 preference** | 向量条目 | `copilot_memories` | **硬召回全量**（偏好/软规则，数量少） |
+| **偏好 preference** | 向量条目 | `copilot_memories` | **混合召回**（dense 向量 + lexical 词法 RRF）top-k |
 | **事实 fact** | 向量条目 | `copilot_memories` | **混合召回**（dense 向量 + lexical 词法 RRF）top-k |
 | **情节记忆 episodic** | 向量条目 | `copilot_memories` | **混合召回**（dense 向量 + lexical 词法 RRF）top-k |
 
@@ -62,13 +62,13 @@
 | kind | 是什么 | 召回 | 遗忘 | 冲突 |
 |---|---|---|---|---|
 | `constraint` 约束 | 硬规则/红线/禁令（「禁止联网搜索敏感话题」「严禁 DROP TABLE」），**确定域**——只要任务沾边就无条件在场 | **硬召回全量**（list_active，不过相似度阈值） | **不衰减**（activation 恒 1.0） | 语义去重；contradiction 新覆盖旧 |
-| `preference` 偏好 | 偏好/软规则/风格默认（「用户喜欢简洁回答」「回答要 JSON」），稳定、长期有效 | **硬召回全量** | **不衰减**（activation 恒 1.0），仅受容量淘汰 | 语义去重；contradiction 新覆盖旧 |
+| `preference` 偏好 | 偏好/软规则/风格默认（「用户喜欢简洁回答」「回答要 JSON」），稳定、长期有效 | **混合召回**（dense + lexical RRF）top-k | **不衰减**（activation 恒 1.0） | 语义去重；contradiction 新覆盖旧 |
 | `fact` 事实 | 稳定事实/状态（「用户是副总经理」「项目 X 用技术栈 Y」），entity 锚定 | **混合召回**（dense + lexical RRF）top-k | **不衰减**；同 entity 覆盖（version++） | 同 `entity_id` 覆盖 |
 | `episodic` 情节记忆 | 具体事件、带时间锚点（「2026-07 PR #4412 移除了 buffer-pool 导致 OOM」） | **混合召回**（dense + lexical RRF）top-k | **TTL 衰减** `exp(-age/ttl)` | LLM 去重 |
 
 ### 2.2 注入与按需读
 
-- `CopilotService._assemble_context()` 开始时：读 Soul/User 文件全文 + 召回记忆（constraint/preference 硬召回全量 + fact/episodic 混合 top-N）→ `assemble_system_prompt`（L0 宪法层）+ `format_memory_block`（L2 记忆块，按 token 预算串行合并、约束子预算 ≤40%）。**2026-09-23 起此组装上移到意图路由之后、三种执行模式之前**——planner/qa/reactive 共用同一份，`system_prompt` + `memory_block` 随任务显式携带到 planner/synthesizer/qa（见 §4.13①）。
+- `orchestrate.assemble_context()` 开始时：读 Soul/User 文件全文 + 召回记忆（constraint 硬召回全量 + preference/fact/episodic 混合 top-N）→ `assemble_system_prompt`（L0 system prompt，含宪法 + soul/user + skills 列表，见 §4.18）+ `format_memory_block`（L2 记忆块，按 token 预算串行合并、约束子预算 ≤40%）。**2026-09-23 起此组装上移到意图路由之后、三种执行模式之前**——planner/qa/reactive 共用同一份，`system_prompt` + `memory_block` 随任务显式携带到 planner/synthesizer/qa（见 §4.13①）。
 - **召回审计**：召回后落一条 `recall` 事件（各通道命中条数），事后能查清某条约束当时为什么没被召回。
 - **按需读**：`search_memory(query, kind?)` 工具，语义检索命中条目并回写 `access_count`/`last_access`。
 
@@ -81,20 +81,20 @@
   2. **LLM 批量判定**（非纯 cosine 阈值）：`duplicate`（语义等价、去重不写）/ `contradiction`（新的赢）/ 同主题不同事实（都留）/ `none`。
   3. **去重 vs 覆写两条路**：`duplicate`（同型语义等价）→ **去重不写**、touch 旧记忆续命（机制二「旧胜新丢」）；`contradiction` → 写新 + 输家打 `superseded=True` + `superseded_at`/`superseded_by`（软删除窗口留痕，供召回复活守卫）。fact 同 `entity_id` 直接覆盖（`version++`），并清理矛盾的旧偏好/情节。
 
-### 2.4 遗忘（激活衰减 + 召回写回 + 软删除窗口 + 容量硬淘汰）
+### 2.4 遗忘（激活衰减 + 召回写回 + 软删除窗口）
 
-- **激活值**：
+- **激活值**（对齐 prodagent `forgetting.activation`，返回 [0,1]）：
   ```
-  activation(mem) = base + log(1 + access_count)·0.2 + recency
-  base   = 1.0                                    # constraint / preference / fact（不衰减）
-           exp(-age_days / ttl_days)             # episodic（默认 ttl 30 天）
-  recency= 0.3 若 last_access 在 7 天内，否则 0
+  activation(mem) = 1.0                                          # 非情节（constraint/fact/preference）恒 1.0 上场
+                    min(1.0, base + frequency + recency)         # episodic 三因子，clamp 回 [0,1]
+  base      = exp(-age_days / ttl_days)  # age_days = max((now-created).days, 0)（整数天、非负）
+  frequency = log(1 + access_count)·0.2
+  recency   = 0.3 若 last_access 在 7 天内（严格 < 7 天），否则 0
   ```
 - **软遗忘（召回时）**：activation < `RECALL_FLOOR`（0.05）的记忆召回不到。
-- **召回写回（检索强化）**：`recall()` 命中条目（fact/episodic 上场者）回写 `access_count+1`/`last_access`（`repository.touch`，单条 Core UPDATE 不阻塞召回）——ACT-R 频率/近期增益的活水，不再只靠 `search_memory` 工具。
+- **召回写回（检索强化）**：`recall()` 命中条目（preference/fact/episodic 上场者）回写 `access_count+1`/`last_access`（`repository.touch`，单条 Core UPDATE 不阻塞召回）——ACT-R 频率/近期增益的活水，不再只靠 `search_memory` 工具。
 - **软删除窗口（冲突误判的退路）**：输家 `superseded=True` + `superseded_at`（时间戳）+ `superseded_by`（压它的那条 id）。召回时 `search_recoverable` 找窗口期内（默认 7 天）强命中（余弦 ≥ `memory_revival_similarity`，默认 0.5）的 superseded 软记忆，过两道门槛——**复活守卫**：`superseded_by` 还活着（真冲突仍成立）则不复活，已废弃/删除则放行；**激活门槛**：`activation < RECALL_FLOOR` 的不复活（复活了也上不了场、徒留僵尸 active 行）。守卫查压它的赢家用 `get_many` 批量查（避免逐条 N+1）。放行则翻回 `superseded=False` 并回写 touch。过窗不复活，交给窗口过期硬清理彻底退场。
-- **硬淘汰（写入前）**：`count(kind) >= MEMORY_CAPACITY`（默认各 200）时，按 activation 升序淘汰最低分腾空间再写（constraint 不参与淘汰，fact 优先保留高版本）。
-- **窗口过期硬清理（后台周期任务）**：软删除窗口（7 天）过期的 superseded 记忆由 lifespan 的 `_run_superseded_cleanup` 周期任务硬删除（`repository.delete_superseded_older_than`），真删、找不回——「遗忘」的收尾闭环、防表无限膨胀。其余（淘汰/复活/召回写回）仍在 `write_memory`/`recall` 内同步完成。
+- **窗口过期硬清理（后台周期任务）**：软删除窗口（7 天）过期的 superseded 记忆由 lifespan 的 `_run_superseded_cleanup` 周期任务硬删除（`repository.delete_superseded_older_than`），真删、找不回——「遗忘」的收尾闭环、防表无限膨胀。其余（复活/召回写回）仍在 `write_memory`/`recall` 内同步完成。
 
 ### 2.5 分路召回架构（约束硬召回 + 混合召回，2026-09-22）
 
@@ -107,23 +107,23 @@
 | 阶段 | 召回方式 | 目标 | 适用记忆 |
 |---|---|---|---|
 | 1 规则硬召回 | `list_active(CONSTRAINT)` 全量，不过相似度阈值 | 红线无条件在场 | constraint |
-| 2 规则硬召回 | `list_active(PREFERENCE)` 全量 | 偏好/软规则长期在场 | preference |
+| 2 混合召回 | dense 向量 + lexical 词法 RRF 融合 | 偏好/软规则按需在场 | preference |
 | 3 混合召回 | dense 向量 + lexical 词法（`tsv` + pg_jieba BM25）RRF 融合 | 语义 + 精确串（表名/错误码）都命中 | fact |
 | 4 混合召回 | 同上 | 同上 | episodic |
 
 - **查询并行、合并串行**：四通道同时查，合并时按 约束→偏好→事实→情节 逐条扣 token 预算（`memory_block_max_tokens` 默认 2000），**约束子预算 ≤40%**——红线优先在场、但不独占全部预算。
 - **词法通道**：`copilot_memories.tsv`（`to_tsvector('jiebacfg', content)` 生成列）+ GIN 索引，`search_lexical` 补 dense 漏掉的精确串；与 dense RRF 融合（`_fuse_memories`，键=memory.id）。
-- **软遗忘只作用于概率域**：constraint/preference 走全量硬召回、不经 activation floor；fact/episodic 混合召回后才过 `_above_floor`。
+- **软遗忘只作用于概率域**：constraint 走全量硬召回、不经 activation floor；preference/fact/episodic 混合召回后才过 `_above_floor`（偏好 activation 恒 1.0，实际不受 floor 影响）。
 - **事后审计**：`recall` 事件落库记录各通道命中条数（`copilot_events`，type=`recall`）。
 
-### 2.6 自定义 Skill（L2 技能层，2026-09-26）
+### 2.6 自定义 Skill（技能层，2026-09-26）
 
-> 补齐三层模型的 L2：程序性知识（「怎么做」的经验技巧）不再混进 L1 四型——抽离成**自定义 Skill**，一个 skill = 一个 MD 文件。对应 ima 的 AGENT.md「经验技巧」，但拆成多文件（每个可复用技巧一个）。
+> 补齐记忆第三类（技能）：程序性知识（「怎么做」的经验技巧）不再混进四型——抽离成**自定义 Skill**，一个 skill = 一个 MD 文件。对应 ima 的 AGENT.md「经验技巧」，但拆成多文件（每个可复用技巧一个）。
 
 - **存储**：`data/skills/*.md`（文件、不入库，与 Soul/User 同构）。**无 DB 表**——skill 就是 Markdown 文本资产。
 - **格式**：frontmatter `name`（唯一标识）+ `description`（一句话，供召回匹配）+ 正文（skill 的指令/经验）。**暂不做**模板/程序/沙箱——skill 是「一份 Markdown 说明书」，无可执行体。
 - **注入**：按需召回（语义匹配 description/正文）而非全文常驻——skill 数量会增长，不能像 Soul/User 每轮全量注入。
-- **增删改查（Agent 工具）**：`list_skills`/`read_skill`（只读）+ `write_skill`（MEDIUM，upsert 覆盖同名）+ `delete_skill`（HIGH，走 HITL 审批；**只能删自定义 skill、官方内置工具不可删**）。文件系统直放仍可用，`write_skill` 按 frontmatter `name` 覆盖既有文件、兼容手工直放。
+- **增删改查（Agent 工具）**：`list_skills`/`get_skill`（只读，`get_skill` 加载全文进 L3 跨轮次持久，见 §4.18）+ `write_skill`（MEDIUM，upsert 覆盖同名）+ `delete_skill`（HIGH，走 HITL 审批；**只能删自定义 skill、官方内置工具不可删**）。文件系统直放仍可用，`write_skill` 按 frontmatter `name` 覆盖既有文件、兼容手工直放。
 - **与内置工具的区别**：现有 `GET /api/copilot/skills` 返回**内置工具清单**（name/description/has_side_effect，即「Agent 能调的能力」）；自定义 skill 是「用户沉淀的可复用经验」（知识资产），二者不同、勿混。
 
 ---
@@ -236,25 +236,27 @@ app/agent/
   gateway_codec.py          # 网关序列化/指纹/出站 DLP 脱敏纯函数
   snapshot.py               # 调用级快照协议 + 内存实现（Postgres 实现见 repositories/llm_snapshot.py）
   graph.py                  # 总图装配
-  tools.py                  # 15 工具闭包（组装 + 六要素描述 + 四层守卫）
+  tools.py                  # 17 工具闭包（组装 + 六要素描述 + 四层守卫）
   tools_helpers.py          # 工具集模块级 helper + 参数契约
   tools_registry.py         # ToolMeta 注册表（build_registry：工具名 → 元数据单一真源）
-  memory.py                 # system prompt 拼装（L0/L2 分层 + 记忆块 token 预算合并）
+  memory.py                 # system prompt 拼装（宪法加载 + L2 记忆块，见 §4.18 上下文窗口分层）
   memory_classifier.py      # 写入分类器（temperature=0 四型分类，覆盖 Agent 自报 kind）
   events.py                 # Copilot 流式事件类型（SSE 推给前端的结构化事件联合类型）
   side_effect.py            # DbSideEffectVerifier（写工具副作用确定性对账，回查 note/memory）
   helpers.py                # 共享小工具（_bounded_call 预算包裹 / _clip / 历史截断 / _tool_source）
-  plan_mode.py              # planner 执行模式（DAG 规划 → 拓扑执行，mixin 挂载）
-  plan_answer.py            # planner「合成 + 输出自检」mixin（PlanSynthesisMixin）
-  qa_mode.py                # qa 执行模式（RAG 直答，不进工具循环，mixin 挂载）
-  service.py                # CopilotService（主流程 + reactive 执行路径，SSE 编排）
-  service_resume.py         # HITL 恢复/审批单 mixin（resume/resume_after_crash/_record_approval）
+  compose.py                # CopilotRuntime 聚合依赖 + build_runtime 装配收敛（工具/图装配成品，入口只收成品）
+  orchestrate.py            # 共用编排纯函数（stream_graph / commit_assistant / assemble_context / finalize_answer / log / reject_run）
+  run.py                    # 对话运行时主入口 run()（意图路由 → 上下文组装 → plan/reactive 分支）
+  resume.py                 # HITL 恢复 / 崩溃恢复入口 resume() / resume_after_crash() + list_pending_approvals
+  plan_runner.py            # planner 执行模式（PlanRunner 组合类：DAG 规划 → 拓扑执行 → 合成 + 输出自检）
 
 backend/eval/agent/         # 评测闭环
   dataset.py / trajectory.py / runner.py
 ```
 
-「内容 vs 框架」边界：四型记忆（`services/copilot.py`，召回/写入拆为 `copilot_recall.py`/`copilot_write.py` mixin、共享常量/融合在 `copilot_common.py`；分类器 `memory_classifier.py`）、15 工具、review 的对账逻辑、事件日志、checkpoint 是**内容**，原样组装；新写的是 runtime/guardrail/resilience/evaluation 四层骨架 + 装配。
+「内容 vs 框架」边界：四型记忆（`services/copilot.py`，召回/写入拆为 `copilot_recall.py`/`copilot_write.py` mixin、共享常量/融合在 `copilot_common.py`；分类器 `memory_classifier.py`）、17 工具、review 的对账逻辑、事件日志、checkpoint 是**内容**，原样组装；新写的是 runtime/guardrail/resilience/evaluation 四层骨架 + 装配。
+
+> **2026-09-29 重构：去 God 类 + 去 mixin（组合化）**。原 `CopilotService`（`service.py`，24 参构造函数）+ 三个 mixin（`plan_mode.py` / `plan_answer.py` / `service_resume.py`）拆解为纯函数 + 组合，消除 mixin 靠 `NotImplementedError` 反向声明依赖的耦合：`compose.py`（`CopilotRuntime` 聚合依赖 + `build_runtime` 装配收敛，工具/图装配成品只出现一次）、`orchestrate.py`（共用编排纯函数）、`run.py` / `resume.py`（三条入口函数 `run`/`resume`/`resume_after_crash`）、`plan_runner.py`（`PlanRunner` 组合类，合并原 plan 执行 + 合成 + 自检）。`qa_mode.py` 已并入 reactive 主循环（限只读工具集 `QA_TOOL_NAMES`）。下文历史决策（v1/v2）中提到的 `service.py` / `plan_mode.py` / `plan_answer.py` / `service_resume.py` / `CopilotService` 均为拆分前的历史文件名，对应关系：`service.py` → `run.py` + `orchestrate.py` + `compose.py`；`service_resume.py` → `resume.py`；`plan_mode.py` + `plan_answer.py` → `plan_runner.py`。只读查询（技能清单 / 记忆快照）从对话运行时搬出，`routes/copilot.py` 直接依赖底层 store/service。
 
 ### 4.3 三个执行模式
 
@@ -288,7 +290,7 @@ backend/eval/agent/         # 评测闭环
 - **LLM 用量记账（2026-09-23 起由网关统一）**：所有 LLM/embedding/rerank 调用经网关 `LLMGateway`（§4.11）统一预检 + 记账，不再散落各调用点——早先的「planner `last_usage` / reviewer `sink` / classifier `sink`」手写记账全部收敛到网关。`BudgetExceeded` 在 review 上抛（硬停 run），在 classifier/judge/planner/embed 上 fail-closed（跑在工具内/独立模式/后台，优雅降级更安全）。
 - **单位任务账本 + 缓存命中率监控（2026-09-23）**：done 事件随 run 结束落「单位任务成本」——`BudgetTracker.summary()` 导出 `RunAccounting`（cost/tokens/input/output/cache_read/turn/tool_call），service `_done_payload` 拼进 `copilot_events` 的 `done` payload，附带归因维度 `intent`（task/qa/plan/…）+ `model`。归因是「多维度归因」的最小形态（单用户无鉴权，用户维度恒一），把「事后只能看 `DailyBudget` 聚合总账」变成「每个任务一张能拆到 token/cache 的明细」。`cache_hit_rate = cache_read / input` 随 done 落库，输入量足够大（≥2000 token）且命中率低于 `copilot_cache_hit_rate_warn`（默认 0.3）时 `logger.warning` 告警——命中率骤降是前缀缓存被破坏的信号（如往 L0 塞动态时间戳）。**局限**：账本在内存，崩溃续跑（resume/resume_after_crash）只计恢复后用量、不跨崩溃累计（对齐「tracker 不进 checkpoint」的既有取舍）。
 - **防循环**：dead loop（工具+参数指纹，去 volatile 键）+ ghost loop（上下文 hash）。窗口存 state → checkpoint 续跑不丢循环记忆。
-- **上下文防挤压**：注入会话历史按 token 预算驱动（`assemble_history` 超预算对早期历史 LLM 摘要、保留近期 N 轮 verbatim；无摘要器则 `_truncate_history_tokens` 硬截断），系统区（soul/user/记忆）每轮重注入、不参与压缩。
+- **上下文防挤压**：上下文六层分层（L0–L5，见 §4.18），压缩只打 L5 history（五级渐进压缩：`ratio = 所有层之和 / window`、`history_budget = window − 其余五层 − margin`），系统区（L0–L4）每轮重注入、永不压缩。
 
 ### 4.7 可靠性
 
@@ -307,8 +309,8 @@ golden 数据集 + LLM-judge + 轨迹断言（调了哪些工具/顺序/次数/�
 | 宪法 | 落地（kima） | 代码位置 |
 |---|---|---|
 | ① 硬边界熔断 + 独立裁决 | 四轴 `HardBudget`（turns/seconds/tokens/cost）+ `asyncio.wait_for` 硬熔断；跨 run 全局日预算 `DailyBudget`（`DailyBudgetStore` 外置 DB 持久化）；死循环指纹 + 幽灵上下文 hash（`loop_guard.py`）；「防幻觉终止」= review 节点独立裁决（Maker/Checker 分离） | `runtime/budget.py` / `runtime/loop_guard.py` / `guardrail/review.py` |
-| ② 提议-裁决分离 + 权限门禁 | 模型只 `bind_tools` 出候选，执行前 Loop 裁决：写工具 HITL `interrupt()` 审批、注入闸 `scan_tool_calls` 拦工具参数、plan 模式 `_tool_map` 未知工具抛错；「写代码的」与「查代码的」分离（agent 产出 / review 节点复核） | `runtime/reactive.py` / `runtime/config.py` / `service.py` |
-| ③ 显式状态机 + 上下文防挤压 | 手写 `StateGraph` + 可序列化 `AgentState`（无隐式 `while True`）；上下文按 token 预算分层防挤压（`assemble_history` 摘要早期历史、系统区永不压缩） | `runtime/state.py` / `runtime/reactive.py` / `rag/context.py` / `service.py` |
+| ② 提议-裁决分离 + 权限门禁 | 模型只 `bind_tools` 出候选，执行前 Loop 裁决：写工具 HITL `interrupt()` 审批、注入闸 `scan_tool_calls` 拦工具参数、plan 模式 `_tool_map` 未知工具抛错；「写代码的」与「查代码的」分离（agent 产出 / review 节点复核） | `runtime/reactive.py` / `runtime/config.py` / `plan_runner.py` |
+| ③ 显式状态机 + 上下文防挤压 | 手写 `StateGraph` + 可序列化 `AgentState`（无隐式 `while True`）；上下文六层分层（L0–L5，见 §4.18），压缩只打 L5 history、系统区（L0–L4）永不压缩 | `runtime/state.py` / `runtime/reactive.py` / `runtime/context.py` / `run.py` |
 | ④ 持久化可恢复 | 细粒度 checkpoint `AsyncPostgresSaver`（Windows dev 降级 `InMemorySaver`）+ append-only 事件日志 `copilot_events`（思维链可重放） | `graph.py` / `main.py` / `repositories/copilot.py` |
 | ⑤ 同步与隔离 | 写操作串行化：`_serialize` 锁串行化共享 AsyncSession 的工具访问（单用户、单进程，无多 Loop 并发踩踏） | `tools.py` |
 
@@ -370,7 +372,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 
 **② 上行契约（文档 failure #2「8000 token 执行史」）**——工具结果流向 synthesizer（父 Agent）前过一道契约关。`toolmeta.OutputContract(max_chars / required / optional)` + `apply_output_contract()`：只验形状不看内容（`required` 字段缺失/类型不符 → 拒收占位符；`optional` 之外未声明字段 → 白名单剥离；`max_chars` → 结构裁剪）。`ToolMeta` 加 `output_contract` 字段；检索类工具（`search_knowledge_base`/`read_document`/`read_note`/`search_web`/`search_memory`）声明 `max_chars=SYNTHESIS_RESULT_CHARS(2000)`，结果截到结论级、长正文走 spill/`read_tool_result`（「大体积数据只传引用」）。`required`/`optional` 结构化分支已实现并单测，当前无工具声明（工具都返回字符串）、生产走 `max_chars` 分支，是未来结构化工具的接缝。
 
-**③ planner 输出自检（补 `agent-output-review` 铁律在 planner 旁路的缺口）**——`plan_answer._review_plan_answer`：先跑**确定性副作用对账**（写工具步骤回查 DB、`SideEffectVerifier`，防「伪造证据骗校验器」，与 reactive 的 verifier 同源），再跑 `reviewer` 的 LLM 判定（合成回答 vs 计划执行轨迹，每步 action + 状态 + 结果），mismatch 追加诚实更正、unverified fail-closed（复用 `self._reviewer`/`self._verifier`/`_review_enabled`，与 reactive review 同语义）。此前 planner 合成后直接 `_finalize_answer`、无对账，合成 LLM 可能「声称完成某步但该步实际失败/没执行」。
+**③ planner 输出自检（补 `agent-output-review` 铁律在 planner 旁路的缺口）**——`plan_answer._review_plan_answer`：先跑**确定性副作用对账**（写工具步骤回查 DB、`SideEffectVerifier`，防「伪造证据骗校验器」，与 reactive 的 verifier 同源），再跑 `reviewer` 的 LLM 判定（合成回答 vs 计划执行轨迹，每步 action + 状态 + 结果），mismatch 追加诚实更正、unverified fail-closed（复用 `self._reviewer`/`self._verifier`，与 reactive review 同语义）。此前 planner 合成后直接 `_finalize_answer`、无对账，合成 LLM 可能「声称完成某步但该步实际失败/没执行」。
 
 ### 4.14 Agent 权限系统（四道防线，2026-09-23）
 
@@ -456,7 +458,33 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 
 ---
 
-## 5. 工具集（15 个，六要素描述 + 副作用分层 + 幂等 + 元数据）
+### 4.18 上下文窗口六层分层（L0–L5，2026-09-28）
+
+> 对照成熟生产 Agent 的上下文装配思路：窗口是**所有人的共用池**，但只有 history 一个「软柿子」——所以用「全窗口拥挤度」当信号、刀只落在 history。完整计划见 `docs/context-window-layering.md`（唯一真相源）。
+
+上下文窗口从「L0 system + L2 记忆 + 历史」整改为六块分层，每层独立预算：
+
+| 层 | 内容 | 角色 | 预算 | 超限处置 |
+|---|---|---|---|---|
+| **L0** | system prompt = 常规指令 + 宪法 + soul/user + skills 列表 | system（独立于 messages） | 8% | 仅告警 |
+| **L1** | `[STATE]` 状态快照（Turn/State/Failures/Last action） | user | 15% | 仅告警 |
+| **L2** | `[MEMORY]` 记忆（含 constraint）+ SubAgent RAG 结论 | user | 35% | 裁剪 |
+| **L3** | `[INVOKED SKILLS]` 已加载 skills 全文 | user | 独立 25k | 截断 |
+| **L4** | `[REMINDER]` 宪法尾部重放（首尾三明治） | user | 无 | — |
+| **L5** | 历史对话 + 工具日志 | user/assistant/tool | window − 其余 − margin | 五级压缩 |
+
+关键机制：
+
+- **宪法文件化**：`data/constitution.md` 只装「红线 + 身份 + 行为铁律」，同一份内容拼 L0 头部 + L4 尾部重放；`_MEMORY_GUIDANCE`/`render_tool_hint` 派生的工具提示操作引导留 L0 常规、不进宪法。
+- **压缩只打 L5**：`ratio = (L0+L1+L2+L3+L4+L5 实际占用) / window`，`history_budget = window − 其余五层 − safety_margin`。五级 `<0.25 NONE / 0.25–0.70 TOOL_COMPRESS / 0.70–0.85 HISTORY_SUMMARY(6) / 0.85–0.92 TOPIC_SUMMARY(4) / ≥0.92 EMERGENCY(2)` 只作用于 `run.messages`（L5）。
+- **带内标记**：`[MEMORY]`/`[STATE]`/`[INVOKED SKILLS]`/`[REMINDER]`/`[HISTORY SUMMARY]`/`[TOPIC SUMMARY]`/`<spilled>`，全 user 角色，双作用（给 LLM 分界 + 给代码当 `startswith` 锚点）。
+- **SubAgent RAG**：`spawn_rag` 工具派 LangGraph 子图（独立窗口 + 只读检索工具集 + 独立 budget）自主多步检索，结果过契约白名单截断，只回结论进 L2，保护主 Agent 前缀。
+- **skills 渐进加载**：L0 注入 name+description 列表；`get_skill(name)` 工具命中后全文进 `_invoked` 缓存 → L3 `[INVOKED SKILLS]` 块跨轮次持久。官方 skills = Tools（走 `bind_tools` schema，不进 L3）。
+- **window = 1048576（1M）**：对齐 DeepSeek V4 `deepseek-flash` 官方上下文窗口，配置 `copilot_context_max_tokens` 由 32000 提到 1048576；各层 ratio 8%/15%/35%、L3 固定 25k、margin 500。
+
+---
+
+## 5. 工具集（16 个，六要素描述 + 副作用分层 + 幂等 + 元数据）
 
 | 工具 | 复用 / 行为 | 副作用 |
 |---|---|---|
@@ -469,12 +497,13 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 | `search_memory(query, kind?)` | 语义检索记忆，回写 access_count | 只读 |
 | `read_tool_result(path, grep_pattern?)` | 读落盘的工具结果全文（spill 后按需查） | 只读 |
 | `create_note(title, content, kb_id?, idempotency_key?)` | `NoteService.create_with_content`；**幂等**：content hash 去重 + 业务意图幂等键（§4.17） | 写（MEDIUM） |
-| `write_memory(kind, content, entity_id?, idempotency_key?)` | 写记忆条目（写入分类器兜底 + 冲突判定去重 + 容量淘汰）；kind ∈ constraint/fact/preference/episodic | 写（MEDIUM） |
-| `update_profile(kind, content)` | 覆盖写 `soul.md` / `user.md`；kind ∈ soul/user | 写（MEDIUM） |
+| `write_memory(kind, content, entity_id?, idempotency_key?)` | 写记忆条目（写入分类器兜底 + 冲突判定去重）；kind ∈ constraint/fact/preference/episodic | 写（MEDIUM） |
+| `update_profile(kind, content)` | 覆盖写 `soul.md` / `user.md`；kind ∈ soul/user | 写（HIGH） |
 | `list_skills()` | 列出已安装的自定义 skill（`data/skills/*.md`） | 只读 |
-| `read_skill(name)` | 读某个自定义 skill 的正文（markdown） | 只读 |
+| `get_skill(name)` | 加载某个自定义 skill 全文到 L3（跨轮次持久，见 §4.18） | 只读 |
 | `write_skill(name, description, content)` | 创建/覆盖一个自定义 skill（upsert，覆盖同名） | 写（MEDIUM） |
 | `delete_skill(name)` | 删除一个自定义 skill（只能删自定义、官方内置不可删） | 写（HIGH） |
+| `spawn_rag(task)` | 派 RAG 子 Agent 检索知识库，只回结论（护主 Agent 前缀，见 §4.18） | 只读 |
 
 **六要素描述**：每个工具 docstring 即 description，含**用途 / 区别（为何选它不选另一个）/ 参数语义 / 约束（副作用与边界）/ 示例**；入参用 pydantic 类型注解自动生成 schema；写工具在描述里声明副作用（「会真的建笔记」）。
 
@@ -487,13 +516,13 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 | 契约 | 落地 | 代码位置 |
 |---|---|---|
 | ① 设计契约（原子化） | 拒绝瑞士军刀：`write_memory` 拆成 `update_profile`（写 soul/user 文件）+ `write_memory`（写四型记忆 DB），副作用通道在工具名层面就固定，不由模型传参决定写哪 | `tools.py` |
-| ② 决策契约（描述工程） | 15 个工具 docstring 全六要素（用途/区别/参数/约束/示例），补上三个检索工具（search_knowledge_base/search_memory/search_web）的「区别」防选错 | `tools.py` |
+| ② 决策契约（描述工程） | 16 个工具 docstring 全六要素（用途/区别/参数/约束/示例），补上三个检索工具（search_knowledge_base/search_memory/search_web）的「区别」防选错 | `tools.py` |
 | ③ 拦截契约（元数据） | `ToolMeta`（`side_effect_level` LOW/MEDIUM/HIGH + `source` + `estimated_latency_ms` + `enforced_idempotent`）→ `ToolRegistry` 单一真源；删掉 `WRITE_TOOL_NAMES`/`_RETRIEVAL_SOURCE`/`_TOOL_SOURCE` 散落字典，`_is_write`/`_tool_source`/`BehaviorTracker`/`build_review_node` 全由 registry 派生 | `toolmeta.py` |
-| ④ 执行契约（无状态 + 幂等） | 工具闭包捕获请求作用域服务（无进程内会话状态）；Loop 给 `enforced_idempotent` 写工具注入**持久化稳定序号幂等键** `{run_id}:{seq}`（reactive 用 `AgentState.idempotency_seq` 单调递增、planner 用 `Plan.idempotency_seq` 随检查点落库，见 §4.16），命中 `IdempotencyRegistry` 直接返回缓存不重放副作用；`create_note` 另以 content hash 持久化去重兜底 | `toolmeta.py` / `runtime/reactive.py` / `service.py` |
+| ④ 执行契约（无状态 + 幂等） | 工具闭包捕获请求作用域服务（无进程内会话状态）；Loop 给 `enforced_idempotent` 写工具注入**持久化稳定序号幂等键** `{run_id}:{seq}`（reactive 用 `AgentState.idempotency_seq` 单调递增、planner 用 `Plan.idempotency_seq` 随检查点落库，见 §4.16），命中 `IdempotencyRegistry` 直接返回缓存不重放副作用；`create_note` 另以 content hash 持久化去重兜底 | `toolmeta.py` / `runtime/reactive.py` / `orchestrate.py` |
 | ⑤ 反馈契约（超时 + 红绿灯） | `ToolFailure`（`ToolOutcome` OK/TRANSIENT/PERMANENT + reason/hint/code）；工具 DomainError **抛 ToolFailure 而非返回错误串**；`with_timeout`（超时 = estimated_latency_ms × 3，超时抛黄灯）；`is_retryable` 只重试黄灯、`circuit_breaker` 只对可重试（基础设施）异常记失败；`ToolNode(handle_tool_errors=...)` 把红/黄灯格式化成给模型的文本 | `resilience/result.py` / `resilience/timeout.py` / `runtime/reactive.py` |
 | ⑥ 资源契约（Token 经济） | 结果 spill（保留全文 + 占位符）不变；`list_knowledge_bases`/`list_notes` 增 `limit`/`offset` + `has_more` 提示行，不再静默截断 | `tools.py` |
 
-> **上行契约（2026-09-23）**：`ToolMeta` 增 `output_contract`（`OutputContract(max_chars/required/optional)`），工具结果流向 synthesizer 前在 `plan_mode.run_tool` 过契约关（结构裁剪/形状校验/白名单剥离）——见 §4.13②。与拦截契约互补：拦截契约管「工具是什么性质」（安全指纹），上行契约管「工具交回什么形状」（交货标准）。
+> **上行契约（2026-09-23）**：`ToolMeta` 增 `output_contract`（`OutputContract(max_chars/required/optional)`），工具结果流向 synthesizer 前在 `plan_runner.py`（`PlanRunner._execute_plan` 的 `run_tool`）过契约关（结构裁剪/形状校验/白名单剥离）——见 §4.13②。与拦截契约互补：拦截契约管「工具是什么性质」（安全指纹），上行契约管「工具交回什么形状」（交货标准）。
 
 > 报告/汇总不单列工具（= Agent 最终结构化长文回答）；「导入文档进知识库」不在 Agent 工具集内。
 
@@ -528,8 +557,8 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/copilot/memory` | `{soul, user, memories:[...]}`（按 kind 分组，面板只读） |
-| GET | `/api/copilot/skills` | 内置工具清单（15 工具 name/description/副作用） |
-| GET | `/api/copilot/custom-skills` | 自定义 Skill 清单 `{items:[{name, description, content}]}`（L2 技能层，见 §2.6） |
+| GET | `/api/copilot/skills` | 内置工具清单（17 工具 name/description/副作用） |
+| GET | `/api/copilot/custom-skills` | 自定义 Skill 清单 `{items:[{name, description, content}]}`（技能层，见 §2.6） |
 | GET | `/api/copilot/approvals/pending` | 待审审批单列表（找回挂起审批；惰性失效已过期单） |
 | POST | `/api/copilot/approve` | HITL 审批回执：`{run_id, decision, conversation_id, assistant_message_id}` 续跑 |
 | POST | `/api/copilot/plan/resume` | planner 崩溃恢复：`{run_id, conversation_id, assistant_message_id}` 从计划检查点续跑未完成步骤 |
@@ -610,9 +639,9 @@ src/pages/Home/components/CopilotPane/   # 主区 Copilot 对话，右上角 [�
 |---|---|---|
 | Agent 循环 | `test_copilot_agent.py` | `FakeMessagesListChatModel` 脚本「先 tool_calls 后答案」，断言工具被调 + 事件顺序 + 事件日志落库 |
 | 工具 | `test_copilot_tools.py` | Fake repos/services：search/read/create_note（幂等去重）/write_memory/search_memory；结果截断 |
-| 记忆召回 | `test_copilot_memory.py` / `test_copilot_memory_recall.py` | 四型分型召回（constraint/preference 硬召回全量、fact/episodic 混合 top-k）、约束不过相似度阈值、分类器覆盖 kind、激活衰减过滤、`superseded` 跳过、记忆块 token 预算合并 |
+| 记忆召回 | `test_copilot_memory.py` / `test_copilot_memory_recall.py` | 四型分型召回（constraint 硬召回全量、preference/fact/episodic 混合 top-k）、约束不过相似度阈值、分类器覆盖 kind、激活衰减过滤、`superseded` 跳过、记忆块 token 预算合并 |
 | 记忆冲突 | `test_copilot_conflict.py` | 候选预筛 + LLM 判定（duplicate 同型去重不写 / contradiction 新的赢 / 同主题都留）、fact 同 entity 覆盖 version++、跨型冲突（情节压偏好、约束孤岛） |
-| 记忆遗忘 | `test_copilot_forgetting.py` | activation 公式、容量硬淘汰、`recall` 回写 access_count、软删除窗口复活（superseded_by 守卫 + 激活门槛）、窗口过期硬清理 |
+| 记忆遗忘 | `test_copilot_forgetting.py` | activation 公式、`recall` 回写 access_count、软删除窗口复活（superseded_by 守卫 + 激活门槛）、窗口过期硬清理 |
 | 文件 | `test_memory_store.py` | Soul/User 文件读写、幂等初始化 |
 | worker 偷懒 | `test_worker.py` 增补 | 事件唤醒、无工作 idle、超时兜底 recover_stuck |
 | API | `test_api_copilot.py` | SSE 冒烟 + `GET /copilot/memory` + `kind` 过滤 |
@@ -647,9 +676,9 @@ Fakes 增补：`FakeCopilotMemoryRepository`、脚本化 agent 模型、fake 计
 2. **编排**：手写 LangGraph `StateGraph`（reactive：agent ⇄ tools ⇄ review 进图）；不用 prebuilt 回环（v1 用，v2 重构）。
 3. **LLM**：`langchain-deepseek` 的 `ChatDeepSeek`；复用 `settings.llm_model`。
 4. **记忆双轨**：Soul/User = MD 文件（全文注入）；积累型记忆 = 向量条目，**四型分类**（约束/事实/偏好/情节）。
-5. **分路召回**：constraint/preference 硬召回全量（不过相似度阈值）；fact/episodic 混合 top-k（dense 向量 + lexical 词法 RRF）。
+5. **分路召回**：constraint 硬召回全量（不过相似度阈值）；preference/fact/episodic 混合 top-k（dense 向量 + lexical 词法 RRF）。
 6. **写入非追加**：LLM 冲突判定（duplicate 同型去重不写 / contradiction 新的赢 / 同主题都留）+ `superseded` 留痕；fact 同 entity 覆盖 version++；Soul/User 覆盖写文件。
-7. **遗忘**：激活衰减（episodic TTL + 频率 + recency）+ 召回 floor + 软删除窗口复活（含激活门槛）+ 容量硬淘汰 + 窗口过期硬清理（lifespan 周期任务）。
+7. **遗忘**：激活衰减（episodic TTL + 频率 + recency）+ 召回 floor + 软删除窗口复活（含激活门槛）+ 窗口过期硬清理（lifespan 周期任务）。
 8. **按需读记忆**：`search_memory` 工具，命中回写 access_count/last_access。
 9. **工具工程**：副作用分层（8 只读 / 3 写）、六要素描述、结果截断、写工具幂等（业务意图幂等键 + 持久化幂等表 + content hash）。
 10. **状态落盘**：LangGraph checkpoint（`AsyncPostgresSaver`）+ `copilot_events` 事件日志，配幂等写；「Agent 是纯函数，给定状态即可恢复」。
@@ -685,7 +714,7 @@ Fakes 增补：`FakeCopilotMemoryRepository`、脚本化 agent 模型、fake 计
 
 32. **约束第 4 型 `CONSTRAINT`**：用 `MemoryKind.CONSTRAINT` 表达硬规则/红线（而非布尔 flag）——kind 本身就是「硬召回」信号，`list_active(CONSTRAINT)` 复用现有全量注入原语；`kind` 列 `String(16)` 无 CHECK 约束，新增枚举值不改表。对齐《分路召回架构》的 CONSTRAINT/FACT/PREFERENCE/EPISODIC 四型。
 33. **写入分类器（防线一）**：`LLMMemoryClassifier`（temperature=0）落库前确定性四型分类，覆盖 Agent 自报 kind/entity_id/trigger_conditions；失败回退 `None`（不覆盖，与现状一致，分类器是额外兜底不是唯一防线）。分类器**恒在场**（不可关闭、无开关）——约束类记忆不能靠 Agent 随手挑 kind。
-34. **混合召回（防线二）**：fact/episodic = dense 向量 + lexical 词法（`tsv` + pg_jieba `plainto_tsquery`）RRF 融合（`_fuse_memories`，键=memory.id）；constraint/preference 硬召回全量（`list_active`，不过阈值、不经 activation floor）。
+34. **混合召回（防线二）**：preference/fact/episodic = dense 向量 + lexical 词法（`tsv` + pg_jieba `plainto_tsquery`）RRF 融合（`_fuse_memories`，键=memory.id）；constraint 硬召回全量（`list_active`，不过阈值、不经 activation floor）。
 35. **记忆块 token 预算合并**：`format_memory_block(recalled, max_tokens)` 按 约束→偏好→事实→情节 串行填充，约束子预算 ≤40%（`memory_block_max_tokens` 默认 2000）；**召回审计**落 `recall` 事件（各通道命中条数）。`trigger_conditions` 仅落库埋点、暂不消费（domain 路由留待真实多领域需求）。
 
 **v2 决策（遗忘第三动作，2026-09-22）**
@@ -705,7 +734,8 @@ Fakes 增补：`FakeCopilotMemoryRepository`、脚本化 agent 模型、fake 计
 42. **duplicate 去重不写（机制二「旧胜新丢」）**：把冲突裁决从「落盘后」提到「落盘前」——`write_memory` 先 `search_cross_kind` + `judge`，`duplicate`（且同型）→ 不落盘、`touch` 旧记忆续命、返回旧条目；只有 `contradiction`/`none` 才写新。跨型「语义等价」不去重（情节/事实角色不同，各留一条）。抽 `_supersede_losers` 助手：事实覆写路径 `include_duplicate=True`（旧偏好/情节与新高阶事实冗余也退场），普通写路径 `False`（只处理 contradiction）。
 43. **窗口过期硬清理（遗忘收尾）**：软删除窗口（7 天）过期的 superseded 记忆由 lifespan 的 `_run_superseded_cleanup` 周期任务硬删除（`repository.delete_superseded_older_than`）——真删、找不回，防表无限膨胀（HNSW/GIN 已部分索引 `WHERE NOT superseded`，但表行数仍需收敛）。
 44. **复活加激活门槛 + 批量守卫**：`_revive_recoverable` 复活前先 `_above_floor`（衰减到地板下的 superseded 情节不复活，防僵尸 active 行）；守卫查压它的赢家改 `get_many` 批量查询（消除逐条 `get(superseded_by)` 的 N+1）。
-45. **删死字段 `importance`**：`CopilotMemory.importance` 写入恒 0.5、全库无消费（未接入 activation），纯占位 → 删（迁移 `0007_drop_importance`）。`compute_activation` 明确为**无界排序键、不是概率**（故意不 clamp 到 [0,1]）——clamp 会让 fact 激活值全塌成 1.0、淘汰退化成只看 version。
+45. **删死字段 `importance`**：`CopilotMemory.importance` 写入恒 0.5、全库无消费（未接入 activation），纯占位 → 删（迁移 `0007_drop_importance`）。
+46. **activation 对齐 prodagent + 移除容量淘汰**：`compute_activation` 对齐 `prodagent/cognition/memory/forgetting.py` 的 `activation()`——非情节（constraint/fact/preference）恒 1.0，episodic 三因子（base+freq+recency）后 `min(1.0, …)` clamp 回 [0,1]，`age_days` 用整数 `.days`、recency 严格 `< 7 天`，`RECALL_FLOOR` 硬编码常量 0.05（`memory_recall_floor` 配置移除）。容量淘汰（`_evict_if_needed` + `MEMORY_CAPACITY` + `repository.delete`）整体移除——activation 不再是淘汰排序键。
 
 **v2 决策（Plan-as-Data，2026-09-23，对照《蒙眼狂奔的 ReAct》）**
 
@@ -732,7 +762,7 @@ Fakes 增补：`FakeCopilotMemoryRepository`、脚本化 agent 模型、fake 计
 
 **v2 决策（成本账本 + 缓存命中率监控，2026-09-23，对照《15｜Agent 的成本总是悄悄飙升》）**
 
-54. **度量层补「单位任务成本 + 多维度归因」最小形态（§4.6/§8）**：`BudgetTracker.summary()` 导出 `RunAccounting`，done 事件落 `intent`/`model`/`accounting`——把「只能看 `DailyBudget` 聚合总账」补成「每个任务一张能拆到 token/cache/轮数的明细」。归因只落 `intent`（任务类型）+ `model` 两维（单用户无鉴权，用户维度恒一），不落 per-step 归因（reactive 工具轨迹已在 `steps` 投影里，planner 有 `step_*` 事件，交叉可查）。**明确不做**：难度评估/模型路由、预算驱动自动降级（模型/工具降级）、动态预算（里程碑换预算）——都依赖「多模型档 + 损失模型」，单模型 `deepseek-chat`、单用户体量下是过度设计（对齐决策 #28/#52「本期后置」）。单位成本异常检测（成本飙到历史均值 N 倍 → 死循环/提示注入信号）也后置，等 done 账本有真实数据量再上。
+54. **度量层补「单位任务成本 + 多维度归因」最小形态（§4.6/§8）**：`BudgetTracker.summary()` 导出 `RunAccounting`，done 事件落 `intent`/`model`/`accounting`——把「只能看 `DailyBudget` 聚合总账」补成「每个任务一张能拆到 token/cache/轮数的明细」。归因只落 `intent`（任务类型）+ `model` 两维（单用户无鉴权，用户维度恒一），不落 per-step 归因（reactive 工具轨迹已在 `steps` 投影里，planner 有 `step_*` 事件，交叉可查）。**明确不做**：难度评估/模型路由、预算驱动自动降级（模型/工具降级）、动态预算（里程碑换预算）——都依赖「多模型档 + 损失模型」，单模型 `deepseek-flash`、单用户体量下是过度设计（对齐决策 #28/#52「本期后置」）。单位成本异常检测（成本飙到历史均值 N 倍 → 死循环/提示注入信号）也后置，等 done 账本有真实数据量再上。
 55. **防御层补「缓存命中率监控」（§4.6）**：`cache_hit_rate = cache_read / input` 随 done 落库，输入量 ≥2000 token 且命中率低于 `copilot_cache_hit_rate_warn`（默认 0.3）时 `logger.warning` 告警——命中率骤降是前缀缓存被破坏的信号（往 L0 塞动态时间戳一类）。命中率数据源自网关已有的 `extract_usage`（cache_read 明细），纯观察层补丁，无新增调用成本。
 
 **v2 决策（网关协作者必填 + 快照/记账不可关，2026-09-25）**
@@ -743,4 +773,4 @@ Fakes 增补：`FakeCopilotMemoryRepository`、脚本化 agent 模型、fake 计
 
 58. **记忆四型改名（2026-09-26）**：`MemoryKind` 枚举 `PROCEDURAL→PREFERENCE`、`SEMANTIC→FACT`，对齐文章原生机制词汇 `constraint/fact/preference/episodic`。原「程序记忆」装「偏好」是术语错位（脑科学 procedural=「怎么做/技能」，不是「偏好」）；「语义记忆」实为「事实/状态」。主轴 = **机制驱动**（按怎么召回/遗忘分），不是脑科学认知词、不是 ima 产品词。`kind` 列存字符串值（`native_enum=False`），改名需 Alembic 数据迁移（`procedural→preference`、`semantic→fact`）。
 
-59. **自定义 Skill（L2 技能层，2026-09-26）**：程序性知识（「怎么做」的经验技巧，对应 ima AGENT.md）独立成**自定义 Skill**，一个 skill = 一个 MD 文件（`data/skills/*.md`，frontmatter `name`/`description` + 正文）。**暂不做**模板/程序/沙箱。与内置工具清单（`/api/copilot/skills`）区分：工具是「能调的能力」、skill 是「沉淀的可复用经验」。记忆分三层：L0 身份（Soul/User）+ L1 积累（四型）+ L2 技能（Skill）。
+59. **自定义 Skill（技能层，2026-09-26）**：程序性知识（「怎么做」的经验技巧，对应 ima AGENT.md）独立成**自定义 Skill**，一个 skill = 一个 MD 文件（`data/skills/*.md`，frontmatter `name`/`description` + 正文）。**暂不做**模板/程序/沙箱。与内置工具清单（`/api/copilot/skills`）区分：工具是「能调的能力」、skill 是「沉淀的可复用经验」。记忆分三类：身份（Soul/User）+ 积累（四型）+ 技能（Skill）。

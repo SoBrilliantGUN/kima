@@ -155,7 +155,7 @@ DATABASE_URL=postgresql+asyncpg://kima:kima@localhost:5432/kima
 LLM_PROVIDER=fake                # fake | deepseek
 LLM_API_KEY=
 LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-chat
+LLM_MODEL=deepseek-flash
 
 # Embedding（SiliconFlow）
 EMBEDDING_PROVIDER=fake          # fake | siliconflow
@@ -235,10 +235,12 @@ from dataclasses import dataclass
 
 Role = Literal["system", "user", "assistant"]
 
+
 @dataclass(frozen=True)
 class ChatMessage:
     role: Role
     content: str
+
 
 @dataclass(frozen=True)
 class ChatResult:
@@ -246,6 +248,7 @@ class ChatResult:
     model: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+
 
 class LLMClient(Protocol):
     async def chat(
@@ -264,6 +267,7 @@ class LLMClient(Protocol):
 
 ```python
 from typing import Protocol
+
 
 class EmbeddingClient(Protocol):
     @property
@@ -284,16 +288,19 @@ from typing import Protocol
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+
 class SourceType(StrEnum):
     PDF = "pdf"
     URL = "url"
     WORD = "word"
+
 
 @dataclass(frozen=True)
 class ParsedDocument:
     markdown: str
     title: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
+
 
 class DocumentParser(Protocol):
     async def parse(

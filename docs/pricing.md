@@ -47,7 +47,7 @@
 | 路径 | 文件 | 说明 |
 |---|---|---|
 | **网关路径**（主） | `agent/gateway.py::_record` | 所有 agent 主循环/review/classifier/embed/rerank 走这里，`tracker.record(usage)` |
-| **`_bounded_call` 路径** | `agent/helpers.py:49` | planner/qa 三种执行模式（`plan_mode.py` / `qa_mode.py` / `plan_answer.py`）跑在 graph 外，`tracker.record(usage_fn(result))` |
+| **`_bounded_call` 路径** | `agent/helpers.py:49` | planner 执行模式（`plan_runner.py`）跑在 graph 外，`tracker.record(usage_fn(result))` |
 
 两条路径最终都进 `BudgetTracker.record` → 内部 `compute_cost(usage, self._pricing)`；`DailyBudget.record` 再各自用 `self._pricing` 算一遍（**成本被算两次**）。
 
@@ -94,7 +94,7 @@
 CREATE TABLE pricing_policy (
   id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   vendor      TEXT        NOT NULL,      -- deepseek | siliconflow | ...
-  model       TEXT        NOT NULL,      -- deepseek-chat | BAAI/bge-m3 | ...
+  model       TEXT        NOT NULL,      -- deepseek-flash | BAAI/bge-m3 | ...
   valid_from  TIMESTAMPTZ NOT NULL,      -- 生效起点（UTC，含）
   valid_to    TIMESTAMPTZ NOT NULL,      -- 生效终点（UTC，不含）
   schedule    JSONB       NOT NULL,      -- 一天内各时段单价（见下）
@@ -179,6 +179,7 @@ CREATE TABLE copilot_llm_cost (
 class PricingStrategy(Protocol):
     def compute_cost(self, usage: Usage, prices: dict[str, Any]) -> float: ...  # 元
 
+
 class DeepSeekStrategy:
     # prices = {"input": 元/百万, "cache_hit": 元/百万, "output": 元/百万}
     def compute_cost(self, usage, prices):
@@ -189,10 +190,12 @@ class DeepSeekStrategy:
             + usage.output_tokens * prices["output"]
         ) / 1_000_000
 
+
 class SiliconFlowStrategy:
     # embedding/rerank 只按 input 计（prices = {"input": 元/百万}）
     def compute_cost(self, usage, prices):
         return usage.input_tokens * prices["input"] / 1_000_000
+
 
 VENDOR_STRATEGIES: dict[str, PricingStrategy] = {
     "deepseek": DeepSeekStrategy(),
@@ -209,20 +212,25 @@ VENDOR_STRATEGIES: dict[str, PricingStrategy] = {
 
 ```python
 # app/agent/pricing/service.py（新）
-class PricingError(DomainError): code = "pricing_error"
+class PricingError(DomainError):
+    code = "pricing_error"
+
 
 @dataclass(frozen=True)
 class PriceQuote:
     policy_id: uuid.UUID | None
-    slot_start: str      # "HH:MM"
+    slot_start: str  # "HH:MM"
     slot_end: str
     prices: dict[str, Any]
+
 
 class PricingService:
     def __init__(self, repo: PricingRepository, *, cache_ttl_seconds: int = 60): ...
     async def resolve(self, vendor: str, model: str, now: datetime) -> PriceQuote: ...
     def compute_cost(self, vendor: str, usage: Usage, quote: PriceQuote) -> float: ...
-    async def validate_startup(self, now: datetime, targets: list[tuple[str, str]]) -> None: ...
+    async def validate_startup(
+        self, now: datetime, targets: list[tuple[str, str]]
+    ) -> None: ...
 ```
 
 - `resolve`：查 `pricing_policy` 中 `valid_from <= now < valid_to` 且 `vendor/model` 命中的行 → 用 UTC 的 `now.time()` 命中时段 → 返回 `PriceQuote`。**找不到生效策略即抛 `PricingError`**（运行时 fail-closed，见 §4.5）。
@@ -262,11 +270,11 @@ class PricingService:
 
 ```python
 # 实时计费（见 docs/pricing.md）
-copilot_pricing_check_enabled: bool = True   # 启动 3 天覆盖校验开关
+copilot_pricing_check_enabled: bool = True  # 启动 3 天覆盖校验开关
 copilot_pricing_cache_ttl_seconds: int = 60  # resolve 内存缓存 TTL
 # 重命名（币种统一人民币）
-copilot_budget_max_cost_cny: float = 1.0     # 原 copilot_budget_max_cost_usd
-copilot_daily_max_cost_cny: float = 10.0     # 原 copilot_daily_max_cost_usd
+copilot_budget_max_cost_cny: float = 1.0  # 原 copilot_budget_max_cost_usd
+copilot_daily_max_cost_cny: float = 10.0  # 原 copilot_daily_max_cost_usd
 ```
 
 ---
@@ -318,8 +326,8 @@ copilot_daily_max_cost_cny: float = 10.0     # 原 copilot_daily_max_cost_usd
 - `app/agent/gateway.py` —— 注入 `PricingService` + 三组 `(vendor, model)`；`_invoke` 算成本、写明细
 - `app/agent/helpers.py` —— `_bounded_call` 只包非 LLM awaitable，`record` 成本记 0
 - `app/agent/qa_mode.py` —— `qa.generate` 改走网关（补 run 身份）
-- `app/agent/plan_answer.py` / `runtime/reactive.py` —— 降级兜底 `record` 成本记 0
-- `app/agent/service.py` —— `RunAccounting`/`flush` 的 `cny` 适配
+- `app/agent/plan_runner.py` / `runtime/reactive.py` —— 降级兜底 `record` 成本记 0
+- `app/agent/orchestrate.py` —— `RunAccounting`/`flush` 的 `cny` 适配
 - `app/repositories/daily_budget.py` —— `cost_usd`→`cost_cny`
 - `app/models/copilot.py` —— `CopilotDailyBudget.cost_cny`
 - `app/models/__init__.py` —— 注册新模型

@@ -173,10 +173,14 @@ class Document(Base, TimestampMixin):
     )
     content_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
     # `metadata` 是 SQLAlchemy 保留名，列名映射为 "metadata"、属性名用 doc_metadata
-    doc_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True)
+    doc_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", JSONB, nullable=True
+    )
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_retry_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class DocumentChunk(Base):
@@ -196,9 +200,13 @@ class DocumentChunk(Base):
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    doc_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True)
+    doc_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", JSONB, nullable=True
+    )
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(EMBEDDING_DIM), nullable=True
+    )
 ```
 
 - 两个 enum 均 `native_enum=False` 存 VARCHAR（对齐模块 3 决策，免原生 PG enum 的迁移增删值成本）。
@@ -354,7 +362,9 @@ class DocumentRepository(Protocol):
     async def get(self, doc_id: uuid.UUID) -> Document | None: ...
     async def update(self, doc: Document) -> Document: ...
     async def delete(self, doc: Document) -> None: ...
-    async def claim_pending(self, limit: int) -> list[Document]: ...  # worker 用，SKIP LOCKED
+    async def claim_pending(
+        self, limit: int
+    ) -> list[Document]: ...  # worker 用，SKIP LOCKED
     async def add_chunks(self, chunks: list[DocumentChunk]) -> None: ...  # 父子批量写入
     async def delete_chunks(self, doc_id: uuid.UUID) -> None: ...  # 重试前清理旧 chunk
 ```
@@ -416,6 +426,7 @@ class DocumentCreateFromUrl(BaseModel):
     url: str
     knowledge_base_id: uuid.UUID
     # field_validator：url strip 后非空；urlparse 校验 scheme ∈ {http, https}
+
 
 class DocumentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)

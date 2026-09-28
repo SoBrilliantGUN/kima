@@ -77,14 +77,18 @@ DEFAULT_NOTE_TITLE = "无标题笔记"
 note_knowledge_bases = Table(
     "note_knowledge_bases",
     Base.metadata,
-    Column("note_id", Uuid, ForeignKey("notes.id", ondelete="CASCADE"), primary_key=True),
+    Column(
+        "note_id", Uuid, ForeignKey("notes.id", ondelete="CASCADE"), primary_key=True
+    ),
     Column(
         "knowledge_base_id",
         Uuid,
         ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
         primary_key=True,
     ),
-    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column(
+        "created_at", DateTime(timezone=True), server_default=func.now(), nullable=False
+    ),
 )
 
 
@@ -130,7 +134,9 @@ class NoteRepository(Protocol):
     async def add(self, note: Note) -> Note: ...
     async def update(self, note: Note) -> Note: ...
     async def delete(self, note: Note) -> None: ...
-    async def associate(self, note_id: uuid.UUID, kb_id: uuid.UUID) -> bool: ...  # True=新建关联，False=已存在
+    async def associate(
+        self, note_id: uuid.UUID, kb_id: uuid.UUID
+    ) -> bool: ...  # True=新建关联，False=已存在
     async def list_by_kb(self, kb_id: uuid.UUID) -> list[Note]: ...
 ```
 
@@ -180,14 +186,16 @@ class NoteRepository(Protocol):
 ### 3.5 Schema（`schemas/note.py` + `schemas/knowledge_base.py`）
 
 ```python
-class NoteCreate(BaseModel):          # 空白笔记
-    title: str | None = None          # None → service 补 DEFAULT_NOTE_TITLE
+class NoteCreate(BaseModel):  # 空白笔记
+    title: str | None = None  # None → service 补 DEFAULT_NOTE_TITLE
     knowledge_base_id: uuid.UUID | None = None
+
 
 class NoteUpdate(BaseModel):
     title: str | None = None
     content_markdown: str | None = None
     # @model_validator(mode="after") 保证至少一个字段非 None
+
 
 class NoteRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -197,9 +205,11 @@ class NoteRead(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+
 class NoteList(BaseModel):
     items: list[NoteRead]
     total: int
+
 
 class NoteAddToKnowledgeBase(BaseModel):
     knowledge_base_id: uuid.UUID
@@ -210,7 +220,8 @@ class NoteAddToKnowledgeBase(BaseModel):
 class ContentItem(BaseModel):
     type: Literal["note", "document"]
     note: NoteRead | None = None
-    document: DocumentRead | None = None   # 模块 4
+    document: DocumentRead | None = None  # 模块 4
+
 
 class ContentList(BaseModel):
     items: list[ContentItem]

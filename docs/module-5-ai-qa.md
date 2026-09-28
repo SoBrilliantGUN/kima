@@ -230,9 +230,13 @@ docker/                         # 自建 pg_jieba 镜像（§9）
 
 ```python
 class ChatRequest(BaseModel):
-    kb_ids: list[uuid.UUID] = []          # 检索范围：空 = 不检索知识库；非空 = 仅检索这些库（可多个）
-    web_search: bool = False              # 联网搜索：True = 走博查全网；False = 不联网（kb_ids 也空则纯 LLM）
-    kb_id: uuid.UUID | None = None        # 会话归属库：首页全局会话 None；右面板挂当前库
+    kb_ids: list[
+        uuid.UUID
+    ] = []  # 检索范围：空 = 不检索知识库；非空 = 仅检索这些库（可多个）
+    web_search: bool = (
+        False  # 联网搜索：True = 走博查全网；False = 不联网（kb_ids 也空则纯 LLM）
+    )
+    kb_id: uuid.UUID | None = None  # 会话归属库：首页全局会话 None；右面板挂当前库
     conversation_id: uuid.UUID | None = None  # 空则新建会话
     question: str
 ```
@@ -341,5 +345,5 @@ src/components/chat/           # 首页与右面板共用的聊天组件
 8. **引用**：chunk 级 + 底部「来源」面板（标题 + 片段 + 跳转原文档/笔记），正文标 `[n]`。
 9. **会话管理**：首页带历史会话列表（`kb_id` 空）；右面板按库持久化（`kb_id` 挂库）。
 10. **首页 UI 参考 ima**：会话列表 + 主问答区（联网搜索开关 + 基于知识库多选 + 消息流 + 输入框）；Copilot 浮窗本版不加。
-11. **模型**：单 `deepseek-chat`，无「快速/深度」档（后置）；rerank 用 SiliconFlow bge-reranker；改写/摘要 `temperature=0`，生成 `temperature=0.3`。
+11. **模型**：单 `deepseek-flash`，无「快速/深度」档（后置）；rerank 用 SiliconFlow bge-reranker；改写/摘要 `temperature=0`，生成 `temperature=0.3`。
 12. **评估最小集**：检索层 recall@k / MRR（`app/rag/metrics.py` 纯函数 + `app/rag/eval_runner.py` golden 集运行器，驱动 chunking 决策）+ 端到端 LLM-judge faithfulness / answer_relevancy / context_relevancy（`app/rag/eval.py`，复用现有 `LLMClient`，1–5 分归一化）；`scripts/eval_retrieval.py` 跑真实检索出报告，golden 集用「应命中片段」子串标注（`eval/golden.example.json`）；不引 ragas 重包（避免拖入 langchain），judge 用 `temperature=0`。

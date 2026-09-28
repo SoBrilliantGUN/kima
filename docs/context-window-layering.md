@@ -138,7 +138,7 @@ history_budget = window − L0 − L1 − L2 − L3 − L4 − safety_margin(500
    - `assemble_system_prompt` 改六段：常规指令 + 宪法 + soul/user + skills 列表。
    - 保留 `format_memory_block`（L2 `[MEMORY]` 块）。
 4. `app/agent/runtime/state.py`：新增 `format_state(run)`（Turn/State/Failures/Last action），来源字段映射现有 `AgentState`。
-5. `app/agent/service.py`：`_assemble_context` 改造成六层装配入口；`_build_input_messages` 的历史摘要逻辑并入 L5 压缩。
+5. `app/agent/orchestrate.py`：`assemble_context` 改造成六层装配入口；`build_input_messages` 的历史摘要逻辑并入 L5 压缩。
 6. `app/agent/runtime/reactive.py`：reminder 从 `SystemMessage` 改 user 角色 `[REMINDER]`；compress 节点接新 `ContextManager`。
 7. `app/core/config.py`：新增各层 ratio 配置 + `copilot_context_max_tokens` 改 1048576。
 8. 迁移 `tests/test_copilot_context.py`、`tests/test_copilot_compression.py`。
@@ -186,7 +186,7 @@ history_budget = window − L0 − L1 − L2 − L3 − L4 − safety_margin(500
 **修改**：
 - `backend/app/agent/memory.py`（宪法加载 + L0 组装 + L2 记忆块）
 - `backend/app/agent/runtime/state.py`（L1 快照 `format_state`）
-- `backend/app/agent/service.py`（六层装配入口 + 历史并入 L5）
+- `backend/app/agent/orchestrate.py`（六层装配入口 + 历史并入 L5）
 - `backend/app/agent/runtime/reactive.py`（reminder 改 user 角色 + compress 接新装配）
 - `backend/app/agent/tools.py`（`get_skill` + `spawn_rag`）
 - `backend/app/core/config.py` + `.env.example`（各层 ratio + window 值）

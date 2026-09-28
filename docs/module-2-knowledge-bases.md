@@ -56,7 +56,9 @@ class KnowledgeBase(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    color: Mapped[str] = mapped_column(String(7), nullable=False, default=DEFAULT_KB_COLOR)
+    color: Mapped[str] = mapped_column(
+        String(7), nullable=False, default=DEFAULT_KB_COLOR
+    )
 ```
 
 - `id` 用 `uuid.UUID` + app 端 `default=uuid.uuid4`：**避免自增 id 泄露数量**，将来多用户/分布式无需改造。
@@ -87,7 +89,9 @@ core/exceptions.py                # 领域异常 + 全局 handler 注册
 
 ```python
 class KnowledgeBaseRepository(Protocol):
-    async def list(self, *, limit: int, offset: int) -> tuple[list[KnowledgeBase], int]: ...
+    async def list(
+        self, *, limit: int, offset: int
+    ) -> tuple[list[KnowledgeBase], int]: ...
     async def get(self, kb_id: uuid.UUID) -> KnowledgeBase | None: ...
     async def get_by_name(self, name: str) -> KnowledgeBase | None: ...
     async def add(self, kb: KnowledgeBase) -> KnowledgeBase: ...
@@ -133,11 +137,13 @@ class KnowledgeBaseCreate(BaseModel):
     description: str | None = None
     color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
 
+
 class KnowledgeBaseUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     # @model_validator(mode="after") 保证至少一个字段非 None
+
 
 class KnowledgeBaseRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -147,6 +153,7 @@ class KnowledgeBaseRead(BaseModel):
     color: str
     created_at: datetime
     updated_at: datetime
+
 
 class KnowledgeBaseList(BaseModel):
     items: list[KnowledgeBaseRead]
@@ -169,9 +176,11 @@ class DomainError(Exception):
     status_code: int = 400
     code: str = "domain_error"
 
+
 class NotFoundError(DomainError):
     status_code = 404
     code = "not_found"
+
 
 class ConflictError(DomainError):
     status_code = 409
