@@ -16,12 +16,14 @@ from app.agent.events import (
     CopilotStepEvent,
     CopilotStreamEvent,
 )
-from app.api.deps import CopilotServiceDep
+from app.api.deps import CopilotServiceDep, SkillFileStoreDep
 from app.core.exceptions import DomainError
 from app.schemas.copilot import (
     CopilotApprovalList,
     CopilotApprovalRead,
     CopilotApproveRequest,
+    CopilotCustomSkillList,
+    CopilotCustomSkillRead,
     CopilotMemoryList,
     CopilotMemoryRead,
     CopilotRequest,
@@ -132,3 +134,17 @@ async def get_copilot_skills(service: CopilotServiceDep) -> CopilotSkillsList:
     """内置技能清单（名称 + 描述 + 是否写）。"""
     skills = service.list_skills()
     return CopilotSkillsList(items=[CopilotSkillRead.model_validate(s) for s in skills])
+
+
+@router.get("/custom-skills", response_model=CopilotCustomSkillList)
+async def get_copilot_custom_skills(
+    skill_store: SkillFileStoreDep,
+) -> CopilotCustomSkillList:
+    """自定义 Skill 清单（L2 技能层，一个 MD 一个 skill，只读）。"""
+    skills, _ = await skill_store.list_skills()
+    return CopilotCustomSkillList(
+        items=[
+            CopilotCustomSkillRead(name=s.name, description=s.description, content=s.content)
+            for s in skills
+        ]
+    )
