@@ -65,19 +65,21 @@ class ChatService:
     # --- 会话 CRUD ---
 
     async def list_conversations(
-        self, kb_id: uuid.UUID | None, *, limit: int, offset: int
+        self, kb_id: uuid.UUID | None, kind: str | None = None, *, limit: int, offset: int
     ) -> tuple[list[ChatConversation], int]:
         if kb_id is not None:
             await self._validate_kb(kb_id)
         limit = max(1, min(limit, 100))
         offset = max(0, offset)
-        return await self._repository.list_conversations(kb_id, limit=limit, offset=offset)
+        return await self._repository.list_conversations(kb_id, kind, limit=limit, offset=offset)
 
-    async def create_conversation(self, kb_id: uuid.UUID | None) -> ChatConversation:
+    async def create_conversation(
+        self, kb_id: uuid.UUID | None, kind: str = "qa"
+    ) -> ChatConversation:
         if kb_id is not None:
             await self._validate_kb(kb_id)
         return await self._repository.add_conversation(
-            ChatConversation(kb_id=kb_id, title=DEFAULT_CONVERSATION_TITLE)
+            ChatConversation(kb_id=kb_id, kind=kind, title=DEFAULT_CONVERSATION_TITLE)
         )
 
     async def get_conversation_detail(
@@ -159,7 +161,7 @@ class ChatService:
             await self._validate_kb(request.kb_id)
         title = request.question[:TITLE_MAX_LENGTH]
         return await self._repository.add_conversation(
-            ChatConversation(kb_id=request.kb_id, title=title)
+            ChatConversation(kb_id=request.kb_id, kind="qa", title=title)
         )
 
     async def _validate_kb(self, kb_id: uuid.UUID) -> None:

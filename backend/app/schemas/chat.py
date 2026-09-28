@@ -14,6 +14,7 @@ class ConversationRead(BaseModel):
 
     id: uuid.UUID
     kb_id: uuid.UUID | None
+    kind: str
     title: str
     created_at: datetime
     updated_at: datetime
@@ -32,6 +33,7 @@ class MessageRead(BaseModel):
     role: str
     content: str
     citations: list[dict[str, Any]] | None
+    steps: list[dict[str, Any]] | None = None
     created_at: datetime
 
 

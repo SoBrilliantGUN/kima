@@ -34,10 +34,13 @@ chat_router = APIRouter(prefix="/chat", tags=["chat"])
 async def list_conversations(
     service: ChatServiceDep,
     kb_id: uuid.UUID | None = None,
+    kind: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> ConversationList:
-    conversations, total = await service.list_conversations(kb_id, limit=limit, offset=offset)
+    conversations, total = await service.list_conversations(
+        kb_id, kind=kind, limit=limit, offset=offset
+    )
     return ConversationList(
         items=[ConversationRead.model_validate(c) for c in conversations], total=total
     )
@@ -59,6 +62,7 @@ async def get_conversation(
     return ConversationDetail(
         id=conversation.id,
         kb_id=conversation.kb_id,
+        kind=conversation.kind,
         title=conversation.title,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,

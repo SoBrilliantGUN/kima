@@ -12,7 +12,7 @@ class ChatRepository(Protocol):
     async def add_conversation(self, conversation: ChatConversation) -> ChatConversation: ...
     async def get_conversation(self, conversation_id: uuid.UUID) -> ChatConversation | None: ...
     async def list_conversations(
-        self, kb_id: uuid.UUID | None, *, limit: int, offset: int
+        self, kb_id: uuid.UUID | None, kind: str | None, *, limit: int, offset: int
     ) -> tuple[list[ChatConversation], int]: ...
     async def delete_conversation(self, conversation: ChatConversation) -> None: ...
     async def add_message(self, message: ChatMessage) -> ChatMessage: ...
@@ -35,13 +35,15 @@ class SqlAlchemyChatRepository:
         return await self._session.get(ChatConversation, conversation_id)
 
     async def list_conversations(
-        self, kb_id: uuid.UUID | None, *, limit: int, offset: int
+        self, kb_id: uuid.UUID | None, kind: str | None, *, limit: int, offset: int
     ) -> tuple[list[ChatConversation], int]:
         condition = (
             ChatConversation.kb_id == kb_id
             if kb_id is not None
             else ChatConversation.kb_id.is_(None)
         )
+        if kind is not None:
+            condition = condition & (ChatConversation.kind == kind)
         total = await self._session.scalar(
             select(func.count()).select_from(ChatConversation).where(condition)
         )
