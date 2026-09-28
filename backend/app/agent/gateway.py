@@ -115,9 +115,9 @@ class GatewayConfig:
     cost_store/daily_budget）仍按依赖注入单独传入。
     """
 
-    timeout: float = 60.0                 # 单次 LLM 调用秒轴硬熔断（默认 60s，恒生效）
-    soft_threshold: float = 0.80          # 任一轴占用 ≥ 此值软提示收尾
-    dlp_redact: bool = True               # 输入 DLP 脱敏（指纹按脱敏前的原文算）
+    timeout: float = 60.0  # 单次 LLM 调用秒轴硬熔断（默认 60s，恒生效）
+    soft_threshold: float = 0.80  # 任一轴占用 ≥ 此值软提示收尾
+    dlp_redact: bool = True  # 输入 DLP 脱敏（指纹按脱敏前的原文算）
     llm_vendor: str = ""
     llm_model: str = ""
     embed_vendor: str = ""
@@ -225,11 +225,7 @@ class LLMGateway:
         # fail-closed（账单完整性）：真实厂商（非 fake/空）返回的用量缺失（input/output 双 0）
         # 时立即中止。token/cost 两轴预算与成本审计都依赖 usage，若静默按 0 记账这两轴会假死、
         # 成本记 ¥0，失控调用可超预算烧钱。宁可不放行，也不盲记 0。
-        if (
-            vendor not in ("", "fake")
-            and usage.input_tokens == 0
-            and usage.output_tokens == 0
-        ):
+        if vendor not in ("", "fake") and usage.input_tokens == 0 and usage.output_tokens == 0:
             raise UsageMissingError(
                 f"{kind} 调用（{vendor}/{model}）未返回 token 用量：usage_metadata 缺失或"
                 "厂商未上报，"
@@ -359,8 +355,14 @@ class LLMGateway:
         node: str,
         model: BaseChatModel,
         messages: list[BaseMessage],
+        *,
+        count_turn: bool = True,
     ) -> AIMessage:
-        """形态 B：流式工具调用（包已 bind_tools 的 ``BaseChatModel.ainvoke``）。计 turn。"""
+        """形态 B：流式工具调用（包已 bind_tools 的 ``BaseChatModel.ainvoke``）。
+
+        ``count_turn`` 默认 True（agent 主循环计 turn）；子 Agent 传 False，只计 token/cost、
+        不计入主循环 max_turns（子 Agent 有独立 max_turns 兜底）。
+        """
 
         fingerprint = canonical_langchain(messages)
         if self._dlp_redact:
@@ -375,7 +377,7 @@ class LLMGateway:
         return await self._invoke(
             node,
             call,
-            count_turn=True,
+            count_turn=count_turn,
             extract=usage_from_aimessage,
             kind="agent",
             encode=aimessage_to_dict,
