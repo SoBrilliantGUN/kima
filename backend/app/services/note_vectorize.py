@@ -36,9 +36,7 @@ class NoteVectorizeService:
         await self._embed(note_id, chunks)
         await self._repository.add_chunks(chunks)
         # CAS：向量化期间笔记被再次编辑则跳过标记（下一轮会重新拾起新内容）
-        await self._repository.mark_vectorized(
-            note_id, datetime.now(UTC), note.updated_at
-        )
+        await self._repository.mark_vectorized(note_id, datetime.now(UTC), note.updated_at)
 
     def _build_chunks(self, note_id: uuid.UUID, parents: list[ParentChunk]) -> list[NoteChunk]:
         """把 chunk_document 的 ParentChunk 树拍平成 note_chunks 行（small-to-big）。

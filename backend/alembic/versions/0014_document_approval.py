@@ -7,6 +7,7 @@ Create Date: 2026-09-25
 - 新增 `documents.embedding_approved`（bool，默认 False）：嵌入成本预估超过阈值时置
   `needs_approval`，用户确认后置 True 跳过阈值检查（见 docs/module-4-documents.md）。
 """
+
 import sqlalchemy as sa
 
 from alembic import op

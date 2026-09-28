@@ -7,6 +7,7 @@ Create Date: 2026-09-23
 - 新增 `copilot_approvals`：高危写工具的审批单（run_id 索引、证据包 summary/level/args、
   状态机 pending/approved/rejected/expired、expires_at 支撑超时 fail-close）
 """
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -27,9 +28,7 @@ def upgrade() -> None:
         sa.Column("args", JSONB(), nullable=False),
         sa.Column("summary", sa.Text(), nullable=False, server_default=""),
         sa.Column("level", sa.String(length=16), nullable=False, server_default="high"),
-        sa.Column(
-            "status", sa.String(length=16), nullable=False, server_default="pending"
-        ),
+        sa.Column("status", sa.String(length=16), nullable=False, server_default="pending"),
         sa.Column("decision", sa.String(length=16), nullable=True),
         sa.Column("decided_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),

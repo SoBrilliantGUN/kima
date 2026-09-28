@@ -45,9 +45,7 @@ class SiliconFlowRerankerClient:
         }
         headers = {"Authorization": f"Bearer {self._api_key}"}
         async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                f"{self._base_url}/rerank", json=payload, headers=headers
-            )
+            response = await client.post(f"{self._base_url}/rerank", json=payload, headers=headers)
         response.raise_for_status()
 
         data: Any = response.json()

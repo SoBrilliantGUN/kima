@@ -79,9 +79,7 @@ class DailyBudget:
         for day, cost_cny, tokens in self._pending_rollover:
             await self._store.add(day, cost_cny, tokens)
         self._pending_rollover.clear()
-        await self._store.add(
-            self._day, self._unflushed_cost_cny, self._unflushed_tokens
-        )
+        await self._store.add(self._day, self._unflushed_cost_cny, self._unflushed_tokens)
         self._unflushed_cost_cny = 0.0
         self._unflushed_tokens = 0
 
@@ -103,9 +101,7 @@ class DailyBudget:
         """run 开始前预检全局日预算；超限抛 BudgetExceeded。"""
         self._rollover()
         if self._cost_cny >= self._max_cost_cny:
-            raise BudgetExceeded(
-                f"全局日成本超限：¥{self._cost_cny:.4f}/¥{self._max_cost_cny}"
-            )
+            raise BudgetExceeded(f"全局日成本超限：¥{self._cost_cny:.4f}/¥{self._max_cost_cny}")
         if self._max_tokens is not None and self._tokens >= self._max_tokens:
             raise BudgetExceeded(f"全局日 token 超限：{self._tokens}/{self._max_tokens}")
 

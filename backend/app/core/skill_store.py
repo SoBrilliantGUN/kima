@@ -21,9 +21,7 @@ from app.core.config import BACKEND_DIR
 SKILL_DIR = BACKEND_DIR / "data" / "skills"
 
 # 匹配 ``---\n<frontmatter>\n---\n<body>``；body 可空。
-_FRONTMATTER_RE = re.compile(
-    r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n(.*))?\Z", re.DOTALL
-)
+_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n(.*))?\Z", re.DOTALL)
 # 文件名安全化：非「Unicode 词字符/连字符」替换为下划线（保留中文/字母/数字/_/-）。
 _SLUG_RE = re.compile(r"[^\w\-]", re.UNICODE)
 

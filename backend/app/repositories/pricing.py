@@ -72,9 +72,7 @@ class InMemoryPricingRepository:
     """内存版（测试用）：按 (vendor, model, 区间) 直接给策略。"""
 
     def __init__(self) -> None:
-        self._policies: list[
-            tuple[str, str, datetime, datetime, list[dict[str, Any]]]
-        ] = []
+        self._policies: list[tuple[str, str, datetime, datetime, list[dict[str, Any]]]] = []
 
     def add(
         self,

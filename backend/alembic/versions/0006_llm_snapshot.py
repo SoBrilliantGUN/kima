@@ -6,6 +6,7 @@ Create Date: 2026-09-23
 
 - 新增 `copilot_llm_snapshots`（每次 LLM 调用的输入内容哈希 + 输出，恢复时复用不复跑）
 """
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 

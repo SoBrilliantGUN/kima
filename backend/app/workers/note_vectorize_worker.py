@@ -75,9 +75,7 @@ class NoteVectorizeWorker:
                 logger.exception("note vectorize worker 处理一轮失败")
             # 有唤醒立即处理；超时兜底按 idle 周期再查（捕获刚过 idle 阈值的笔记），不空转
             try:
-                await asyncio.wait_for(
-                    self._wake_event.wait(), timeout=self._idle_fallback_seconds
-                )
+                await asyncio.wait_for(self._wake_event.wait(), timeout=self._idle_fallback_seconds)
             except TimeoutError:
                 pass
             self._wake_event.clear()

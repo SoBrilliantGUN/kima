@@ -9,6 +9,7 @@ Create Date: 2026-09-22
 - GIN 索引加速词法检索
 - `kind` 列新增 `constraint` 值无需改表（String(16)、无 CHECK 约束）
 """
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 

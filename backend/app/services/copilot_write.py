@@ -71,9 +71,7 @@ class CopilotWriteMixin:
             candidate_kinds, embedding, self._conflict_top_k
         )
         verdicts = (
-            await self._judge.judge(content, [c.content for c in candidates])
-            if candidates
-            else []
+            await self._judge.judge(content, [c.content for c in candidates]) if candidates else []
         )
         now = datetime.now(UTC)
         # 去重分支（机制二「旧胜新丢」）：新记忆与某条同型已有记忆语义等价 → 不落盘，
@@ -96,9 +94,7 @@ class CopilotWriteMixin:
         )
         memory = await self._repository.add(memory)
         # 新记忆落盘后再让矛盾的旧记忆退场（superseded_by 指向新记忆 id，供复活守卫用）
-        await self._supersede_losers(
-            candidates, verdicts, memory.id, now, include_duplicate=False
-        )
+        await self._supersede_losers(candidates, verdicts, memory.id, now, include_duplicate=False)
         return memory
 
     async def _supersede_losers(

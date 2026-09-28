@@ -79,9 +79,7 @@ class DocumentWorker:
                 logger.exception("document worker 处理一轮失败")
             # 有唤醒立即处理；超时兜底醒来跑 recover_stuck（run_once 内做）后继续等，不空转
             try:
-                await asyncio.wait_for(
-                    self._wake_event.wait(), timeout=self._idle_fallback_seconds
-                )
+                await asyncio.wait_for(self._wake_event.wait(), timeout=self._idle_fallback_seconds)
             except TimeoutError:
                 pass
             self._wake_event.clear()

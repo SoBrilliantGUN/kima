@@ -10,6 +10,7 @@ Create Date: 2026-09-23
 - `copilot_memories`：`(kind, entity_id)` 加部分唯一索引（`WHERE entity_id IS NOT NULL
   AND NOT superseded`）。同实体的活跃语义记忆至多一条，并发覆盖不会「丢 version/重复建行」。
 """
+
 from alembic import op
 
 revision = "0009_concurrency"

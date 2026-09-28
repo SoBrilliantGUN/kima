@@ -44,9 +44,7 @@ def current() -> RunContext:
 
 
 @contextmanager
-def run_budget(
-    tracker: BudgetTracker, *, run_id: str
-) -> Iterator[None]:
+def run_budget(tracker: BudgetTracker, *, run_id: str) -> Iterator[None]:
     """在 run 期间把 ``tracker``/``run_id`` 注入网关 contextvar；退出时恢复原值。
 
     ``tracker``/``run_id`` 都必填。service 层在 ``graph.astream`` 前用本上下文包裹，使

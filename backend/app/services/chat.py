@@ -45,10 +45,7 @@ ChatEvent = MetaEvent | DeltaEvent | CitationsEvent | DoneEvent
 
 def _to_llm_messages(messages: list[ChatMessage]) -> list[LlmMessage]:
     """把 ORM 消息转成 LLM 协议消息（role + content）。"""
-    return [
-        LlmMessage(role=message.role.value, content=message.content)
-        for message in messages
-    ]
+    return [LlmMessage(role=message.role.value, content=message.content) for message in messages]
 
 
 class ChatService:

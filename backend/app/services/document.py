@@ -16,6 +16,8 @@ ALLOWED_EXTENSIONS: dict[str, DocumentType] = {
     ".pdf": DocumentType.PDF,
     ".docx": DocumentType.WORD,
 }
+
+
 class DocumentService:
     def __init__(
         self,

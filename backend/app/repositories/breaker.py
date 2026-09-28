@@ -26,14 +26,11 @@ class SqlAlchemyBreakerStore:
                 select(CopilotBreaker.name, CopilotBreaker.state, CopilotBreaker.failures)
             )
             return {
-                name: {"state": state, "failures": failures}
-                for name, state, failures in rows.all()
+                name: {"state": state, "failures": failures} for name, state, failures in rows.all()
             }
 
     async def save(self, name: str, state: str, failures: list[float]) -> None:
-        stmt = pg_insert(CopilotBreaker).values(
-            name=name, state=state, failures=failures
-        )
+        stmt = pg_insert(CopilotBreaker).values(name=name, state=state, failures=failures)
         stmt = stmt.on_conflict_do_update(
             index_elements=["name"],
             set_={

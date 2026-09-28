@@ -80,9 +80,7 @@ def apply_output_contract(name: str, result: str, contract: OutputContract | Non
                 return f"（契约校验失败：{name} 缺必填字段 {field_name!r}）"
             if not isinstance(data[field_name], typ):
                 return f"（契约校验失败：{name} 字段 {field_name!r} 类型不符）"
-        result = json.dumps(
-            {k: v for k, v in data.items() if k in declared}, ensure_ascii=False
-        )
+        result = json.dumps({k: v for k, v in data.items() if k in declared}, ensure_ascii=False)
     if contract.max_chars is not None:
         result = _clip(result, contract.max_chars)
     return result

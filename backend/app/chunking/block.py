@@ -226,7 +226,6 @@ def _split_large(parents: list[ParentChunk]) -> list[ParentChunk]:
             continue
         chunks = split_recursive(parent.content, PARENT_FALLBACK_WINDOW_TOKENS)
         result.extend(
-            ParentChunk(content=chunk, heading_path=parent.heading_path)
-            for chunk in chunks
+            ParentChunk(content=chunk, heading_path=parent.heading_path) for chunk in chunks
         )
     return result

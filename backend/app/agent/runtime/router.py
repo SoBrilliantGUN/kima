@@ -12,7 +12,15 @@ from app.agent.guardrail.injection import matches_injection_pattern
 
 # 投诉/负面情绪关键词（规则第一刀）
 _COMPLAINT_HINTS = (
-    "投诉", "气死", "差评", "太差了", "垃圾", "客服", "退钱", "退款", "要举报",
+    "投诉",
+    "气死",
+    "差评",
+    "太差了",
+    "垃圾",
+    "客服",
+    "退钱",
+    "退款",
+    "要举报",
 )
 # 长程多步任务关键词（规则第一刀 → planner 模式）
 _PLAN_HINTS = ("总结", "归纳", "调研", "报告", "对比", "分析", "整理", "汇总")
@@ -21,9 +29,9 @@ _QA_HINTS = ("是什么", "什么是", "为什么", "怎么", "如何", "定义"
 
 
 class Intent(StrEnum):
-    TASK = "task"          # 办事：检索/读/写/联网（默认，reactive）
-    QA = "qa"              # 问答：基于资料回答，不写（P2 细分）
-    PLAN = "plan"          # 长程多步任务 → planner 模式
+    TASK = "task"  # 办事：检索/读/写/联网（默认，reactive）
+    QA = "qa"  # 问答：基于资料回答，不写（P2 细分）
+    PLAN = "plan"  # 长程多步任务 → planner 模式
     COMPLAINT = "complaint"  # 投诉/负面情绪 → 确定性安抚流程
     INJECTION = "injection"  # 提示注入/越权 → 拒绝
 

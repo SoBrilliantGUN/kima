@@ -6,6 +6,7 @@ Create Date: 2026-09-23
 
 - 新增 `copilot_plans`（planner 路径的检查点快照：版本化 DAG + 每步运行时状态）
 """
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 

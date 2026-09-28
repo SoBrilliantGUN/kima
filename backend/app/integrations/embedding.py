@@ -25,9 +25,7 @@ class FakeEmbeddingClient:
 
     def _embed(self, text: str) -> list[float]:
         digest = hashlib.sha256(text.encode("utf-8")).digest()
-        vector = [
-            (digest[i % len(digest)] / 255.0) * 2.0 - 1.0 for i in range(self._dimension)
-        ]
+        vector = [(digest[i % len(digest)] / 255.0) * 2.0 - 1.0 for i in range(self._dimension)]
         self._validate(vector)
         return vector
 

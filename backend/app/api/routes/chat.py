@@ -71,9 +71,7 @@ async def get_conversation(
 
 
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_conversation(
-    service: ChatServiceDep, conversation_id: uuid.UUID
-) -> Response:
+async def delete_conversation(service: ChatServiceDep, conversation_id: uuid.UUID) -> Response:
     await service.delete_conversation(conversation_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

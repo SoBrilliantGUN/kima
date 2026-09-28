@@ -9,6 +9,7 @@ Create Date: 2026-09-23
 - `pricing_policy` 上加：非重叠 exclusion 约束（btree_gist）、时段覆盖校验触发器、审计触发器。
 - `copilot_daily_budget.cost_usd` 重命名为 `cost_cny`（币种统一人民币）。
 """
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 

@@ -7,6 +7,7 @@ Create Date: 2026-09-22
 - `superseded_at`：被 superseded 的时间戳（软删除窗口起点，N 天内可召回复活）
 - `superseded_by`：压它的那条记忆 id（复活守卫：压它的那条还活着就不复活，防真冲突误复活）
 """
+
 import sqlalchemy as sa
 
 from alembic import op

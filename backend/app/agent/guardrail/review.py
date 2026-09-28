@@ -127,10 +127,7 @@ class LLMOutputReviewer:
         self._gateway = gateway
 
     async def review(self, final_answer: str, trace: str) -> ReviewResult:
-        user = (
-            f"助手最终回答：\n{final_answer}\n\n"
-            f"本轮工具调用轨迹：\n{trace}"
-        )
+        user = f"助手最终回答：\n{final_answer}\n\n本轮工具调用轨迹：\n{trace}"
         messages = [ChatMessage("system", self._SYSTEM), ChatMessage("user", user)]
         try:
             result = await self._gateway.complete("review", messages, temperature=0)

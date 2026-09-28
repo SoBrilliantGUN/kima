@@ -15,13 +15,9 @@ LIST_LIMIT_MAX = 100
 LIST_LIMIT_DEFAULT = 50
 
 # —— 下行参数契约（防线② 参数级校验，执行前由 Loop 统一拦截）——
-_UUID_PATTERN = (
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-)
+_UUID_PATTERN = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 _MEMORY_KINDS = frozenset({"constraint", "fact", "preference", "episodic"})
-LIST_PARAM_CONTRACT = ParamContract(
-    min={"limit": 1, "offset": 0}, max={"limit": LIST_LIMIT_MAX}
-)
+LIST_PARAM_CONTRACT = ParamContract(min={"limit": 1, "offset": 0}, max={"limit": LIST_LIMIT_MAX})
 MEMORY_KIND_CONTRACT = ParamContract(enum={"kind": _MEMORY_KINDS})
 PROFILE_KIND_CONTRACT = ParamContract(enum={"kind": frozenset({"soul", "user"})})
 DOC_ID_CONTRACT = ParamContract(pattern={"document_id": _UUID_PATTERN})

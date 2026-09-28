@@ -8,6 +8,7 @@ Create Date: 2026-09-26
 术语错位，改名对齐文章原生机制词汇 constraint/fact/preference/episodic（见 module-6 §2.1
 与决策 #58）。`kind` 列存字符串值（native_enum=False），故需数据迁移改写存量行。
 """
+
 from alembic import op
 
 revision = "0015_rename_memory_kinds"
@@ -17,18 +18,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "UPDATE copilot_memories SET kind = 'preference' WHERE kind = 'procedural'"
-    )
-    op.execute(
-        "UPDATE copilot_memories SET kind = 'fact' WHERE kind = 'semantic'"
-    )
+    op.execute("UPDATE copilot_memories SET kind = 'preference' WHERE kind = 'procedural'")
+    op.execute("UPDATE copilot_memories SET kind = 'fact' WHERE kind = 'semantic'")
 
 
 def downgrade() -> None:
-    op.execute(
-        "UPDATE copilot_memories SET kind = 'procedural' WHERE kind = 'preference'"
-    )
-    op.execute(
-        "UPDATE copilot_memories SET kind = 'semantic' WHERE kind = 'fact'"
-    )
+    op.execute("UPDATE copilot_memories SET kind = 'procedural' WHERE kind = 'preference'")
+    op.execute("UPDATE copilot_memories SET kind = 'semantic' WHERE kind = 'fact'")

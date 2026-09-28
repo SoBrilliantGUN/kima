@@ -56,10 +56,14 @@ async def _lexical_documents(
     session: AsyncSession, kb_ids: list[uuid.UUID], query: str, top_k: int
 ) -> list[RetrievedChunk]:
     rows = (
-        await session.execute(
-            _DOCUMENT_LEXICAL_SQL, {"query": query, "kb_ids": kb_ids, "limit": top_k}
+        (
+            await session.execute(
+                _DOCUMENT_LEXICAL_SQL, {"query": query, "kb_ids": kb_ids, "limit": top_k}
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     return [
         RetrievedChunk(
             source_type=SourceType.DOCUMENT,
@@ -78,10 +82,14 @@ async def _lexical_notes(
     session: AsyncSession, kb_ids: list[uuid.UUID], query: str, top_k: int
 ) -> list[RetrievedChunk]:
     rows = (
-        await session.execute(
-            _NOTE_LEXICAL_SQL, {"query": query, "kb_ids": kb_ids, "limit": top_k}
+        (
+            await session.execute(
+                _NOTE_LEXICAL_SQL, {"query": query, "kb_ids": kb_ids, "limit": top_k}
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     return [
         RetrievedChunk(
             source_type=SourceType.NOTE,

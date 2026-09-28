@@ -85,9 +85,7 @@ class CopilotRecallMixin:
             return
         # 复活守卫批量查：一次取出所有「压它的赢家」，判断还活着吗（避免逐条 get 的 N+1）
         superseder_ids = [m.superseded_by for m in recoverable if m.superseded_by is not None]
-        alive = {
-            m.id for m in await self._repository.get_many(superseder_ids) if not m.superseded
-        }
+        alive = {m.id for m in await self._repository.get_many(superseder_ids) if not m.superseded}
         revived: list[uuid.UUID] = []
         for memory in recoverable:
             if memory.superseded_by in alive:

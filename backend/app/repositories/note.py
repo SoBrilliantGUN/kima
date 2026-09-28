@@ -31,10 +31,7 @@ class SqlAlchemyNoteRepository:
     async def list(self, *, limit: int, offset: int) -> tuple[list[Note], int]:
         total = await self._session.scalar(select(func.count()).select_from(Note))
         rows = await self._session.scalars(
-            select(Note)
-            .order_by(Note.updated_at.desc(), Note.id.asc())
-            .limit(limit)
-            .offset(offset)
+            select(Note).order_by(Note.updated_at.desc(), Note.id.asc()).limit(limit).offset(offset)
         )
         return list(rows), int(total or 0)
 

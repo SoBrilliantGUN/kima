@@ -37,9 +37,7 @@ class SqlAlchemyKnowledgeBaseRepository:
         return await self._session.get(KnowledgeBase, kb_id)
 
     async def get_by_name(self, name: str) -> KnowledgeBase | None:
-        rows = await self._session.scalars(
-            select(KnowledgeBase).where(KnowledgeBase.name == name)
-        )
+        rows = await self._session.scalars(select(KnowledgeBase).where(KnowledgeBase.name == name))
         return rows.first()
 
     async def add(self, kb: KnowledgeBase) -> KnowledgeBase:

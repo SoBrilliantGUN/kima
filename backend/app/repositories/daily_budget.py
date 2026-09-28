@@ -36,9 +36,7 @@ class SqlAlchemyDailyBudgetRepository:
 
     async def add(self, day: date, cost_cny: float, tokens: int) -> None:
         """原子累加增量：day 不存在则插入、存在则 ``cost += Δ`` / ``tokens += Δ``。"""
-        stmt = pg_insert(CopilotDailyBudget).values(
-            day=day, cost_cny=cost_cny, tokens=tokens
-        )
+        stmt = pg_insert(CopilotDailyBudget).values(day=day, cost_cny=cost_cny, tokens=tokens)
         stmt = stmt.on_conflict_do_update(
             index_elements=["day"],
             set_={

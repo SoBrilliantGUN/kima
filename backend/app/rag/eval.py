@@ -10,9 +10,7 @@ from dataclasses import dataclass
 
 from app.integrations.llm import ChatMessage, LLMClient
 
-_SCORE_SYSTEM = (
-    "你是严格的中文评估助手。根据评分标准给出 1–5 的整数分，只输出一个数字，不要解释。"
-)
+_SCORE_SYSTEM = "你是严格的中文评估助手。根据评分标准给出 1–5 的整数分，只输出一个数字，不要解释。"
 
 
 @dataclass(frozen=True)

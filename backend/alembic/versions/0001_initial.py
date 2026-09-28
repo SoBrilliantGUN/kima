@@ -12,6 +12,7 @@ Create Date: 2026-09-18
   parent 存上下文不向量化（embedding NULL）、child 向量化
 - 检索索引：HNSW 部分索引（只索引 child）+ tsv GIN（pg_jieba 词法检索）
 """
+
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR

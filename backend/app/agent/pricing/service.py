@@ -61,9 +61,7 @@ class PricingService:
     async def _resolve_uncached(self, vendor: str, model: str, now: datetime) -> PriceQuote:
         found = await self._repo.find_policy(vendor, model, now)
         if found is None:
-            raise PricingError(
-                f"无生效价格：vendor={vendor} model={model} at {now.isoformat()}"
-            )
+            raise PricingError(f"无生效价格：vendor={vendor} model={model} at {now.isoformat()}")
         policy_id, schedule = found
         slot = _slot_for(schedule, now.time())
         return PriceQuote(
@@ -80,9 +78,7 @@ class PricingService:
             raise PricingError(f"厂商未注册 strategy：{vendor}")
         return strategy.compute_cost(usage, quote.prices)
 
-    async def validate_startup(
-        self, now: datetime, targets: list[tuple[str, str]]
-    ) -> None:
+    async def validate_startup(self, now: datetime, targets: list[tuple[str, str]]) -> None:
         """启动校验：每个 (vendor, model) 未来 3 天连续覆盖 + 价格字段齐全，否则抛错。
 
         窗口 ``[now, now+3d)`` 必须被策略区间无缝覆盖（非重叠已由 DB exclusion 约束保证），
@@ -131,6 +127,4 @@ class PricingService:
             for slot in schedule:
                 missing = required - set(slot.get("prices", {}))
                 if missing:
-                    raise PricingError(
-                        f"价格字段缺失：vendor={vendor} 缺 {sorted(missing)}"
-                    )
+                    raise PricingError(f"价格字段缺失：vendor={vendor} 缺 {sorted(missing)}")

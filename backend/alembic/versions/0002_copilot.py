@@ -8,6 +8,7 @@ Create Date: 2026-09-20
 - 新增 `copilot_events`（append-only 思维链事件日志，seq 全局单调）
 - 回改 `chat_conversations` +`kind`（qa/copilot）、`chat_messages` +`steps`（工具轨迹投影）
 """
+
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects.postgresql import JSONB
@@ -59,8 +60,7 @@ def upgrade() -> None:
         "WHERE embedding IS NOT NULL AND NOT superseded"
     )
     op.execute(
-        "CREATE INDEX ix_copilot_memories_kind "
-        "ON copilot_memories (kind) WHERE NOT superseded"
+        "CREATE INDEX ix_copilot_memories_kind ON copilot_memories (kind) WHERE NOT superseded"
     )
     # semantic 同 entity 覆盖 / 召回按实体锚定
     op.execute(

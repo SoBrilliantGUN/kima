@@ -9,6 +9,7 @@ Create Date: 2026-09-24
   内存里 meta 事件持有的会话上下文。挂起时 assistant 消息尚未落库，故 assistant_message_id
   只能在落单这一刻固化。
 """
+
 import sqlalchemy as sa
 
 from alembic import op
@@ -20,12 +21,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "copilot_approvals", sa.Column("conversation_id", sa.Uuid(), nullable=True)
-    )
-    op.add_column(
-        "copilot_approvals", sa.Column("assistant_message_id", sa.Uuid(), nullable=True)
-    )
+    op.add_column("copilot_approvals", sa.Column("conversation_id", sa.Uuid(), nullable=True))
+    op.add_column("copilot_approvals", sa.Column("assistant_message_id", sa.Uuid(), nullable=True))
 
 
 def downgrade() -> None:
