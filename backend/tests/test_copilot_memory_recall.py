@@ -104,16 +104,16 @@ async def test_recall_fact_hybrid_returns_exact_term() -> None:
     """事实召回走 dense + lexical 混合：精确词命中（词法通道）也能进场（烟测不报错）。"""
     service = make_service()
     async with gateway_run():
-        await service.write_memory(
-            MemoryKind.FACT, "生产库连接串 postgres://prod", entity_id="e1"
-        )
+        await service.write_memory(MemoryKind.FACT, "生产库连接串 postgres://prod", entity_id="e1")
         recalled = await service.recall("postgres")
     assert any("postgres" in m.content for m in recalled.fact)
 
 
 async def test_llm_classifier_maps_constraint() -> None:
     llm = ScriptedLLM(
-        ['{"memory_type":"constraint","entity_id":null,"trigger_condition":{"type":"domain","value":"database"}}']
+        [
+            '{"memory_type":"constraint","entity_id":null,"trigger_condition":{"type":"domain","value":"database"}}'
+        ]
     )
     classifier = LLMMemoryClassifier(make_gateway(llm=llm))
     async with gateway_run():
@@ -156,21 +156,17 @@ def test_format_memory_block_constraint_first_and_budget_caps_low_priority() -> 
     assert block.index("禁止使用 ORM") < block.index("用户是产品经理")
 
 
-def test_format_memory_block_no_budget_full_injection() -> None:
-    """max_tokens 缺省：四型全量注入（向后兼容），且约束在最前。"""
+def test_format_memory_block_greedy_skips_oversized_inserts_later() -> None:
+    """贪心填充：组内塞不进的跳过，后边更小的仍塞进（同组事实一条超预算、一条塞得进）。"""
     recalled = RecalledMemories(
-        constraint=[_mem(MemoryKind.CONSTRAINT, "禁止使用 ORM")],
-        preference=[_mem(MemoryKind.PREFERENCE, "回答要简洁")],
-        fact=[_mem(MemoryKind.FACT, "用户是产品经理")],
-        episodic=[_mem(MemoryKind.EPISODIC, "昨天讨论了架构")],
+        constraint=[],
+        preference=[],
+        fact=[
+            _mem(MemoryKind.FACT, "长" * 100),  # 单条超预算
+            _mem(MemoryKind.FACT, "用户是产品经理"),  # 小，塞得进
+        ],
+        episodic=[],
     )
-    block = format_memory_block(recalled)
-    assert block.startswith("[MEMORY]\n")
-    for text in ("禁止使用 ORM", "回答要简洁", "用户是产品经理", "昨天讨论了架构"):
-        assert text in block
-    assert (
-        block.index("禁止使用 ORM")
-        < block.index("回答要简洁")
-        < block.index("用户是产品经理")
-        < block.index("昨天讨论了架构")
-    )
+    block = format_memory_block(recalled, max_tokens=50)
+    assert "用户是产品经理" in block
+    assert "长" not in block

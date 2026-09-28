@@ -41,7 +41,8 @@ async def _make_kb(kb_repo: FakeKnowledgeBaseRepository) -> KnowledgeBase:
 
 
 async def test_create_file_pdf_pending(
-    service: DocumentService, kb_repo: FakeKnowledgeBaseRepository,
+    service: DocumentService,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     doc = await service.create_file(kb.id, content=b"%PDF-1.4", filename="报告.pdf")
@@ -52,7 +53,8 @@ async def test_create_file_pdf_pending(
 
 
 async def test_document_filename_reconstructs_title_and_ext(
-    service: DocumentService, kb_repo: FakeKnowledgeBaseRepository,
+    service: DocumentService,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     pdf = await service.create_file(kb.id, content=b"%PDF-1.4", filename="我的报告.pdf")
@@ -62,7 +64,8 @@ async def test_document_filename_reconstructs_title_and_ext(
 
 
 async def test_create_file_rejects_unsupported_ext(
-    service: DocumentService, kb_repo: FakeKnowledgeBaseRepository,
+    service: DocumentService,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     with pytest.raises(ValidationError):
@@ -70,7 +73,8 @@ async def test_create_file_rejects_unsupported_ext(
 
 
 async def test_create_file_rejects_oversized(
-    service: DocumentService, kb_repo: FakeKnowledgeBaseRepository,
+    service: DocumentService,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     with pytest.raises(ValidationError):
@@ -83,7 +87,8 @@ async def test_create_file_missing_kb_404(service: DocumentService) -> None:
 
 
 async def test_create_from_url_pending(
-    service: DocumentService, kb_repo: FakeKnowledgeBaseRepository,
+    service: DocumentService,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     doc = await service.create_from_url(
@@ -114,7 +119,8 @@ async def test_delete_removes_file_and_doc(
 
 
 async def test_retry_error_resets(
-    service: DocumentService, kb_repo: FakeKnowledgeBaseRepository,
+    service: DocumentService,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     doc = await service.create_file(kb.id, content=b"x", filename="a.pdf")
@@ -130,7 +136,8 @@ async def test_retry_error_resets(
 
 
 async def test_retry_non_error_409(
-    service: DocumentService, kb_repo: FakeKnowledgeBaseRepository,
+    service: DocumentService,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     doc = await service.create_file(kb.id, content=b"x", filename="a.pdf")
@@ -149,7 +156,8 @@ async def test_list_by_kb(service: DocumentService, kb_repo: FakeKnowledgeBaseRe
 
 
 async def test_get_file_url_type_409(
-    service: DocumentService, kb_repo: FakeKnowledgeBaseRepository,
+    service: DocumentService,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     doc = await service.create_from_url(
@@ -160,7 +168,8 @@ async def test_get_file_url_type_409(
 
 
 async def test_get_content_done(
-    service: DocumentService, kb_repo: FakeKnowledgeBaseRepository,
+    service: DocumentService,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     doc = await service.create_file(kb.id, content=b"%PDF-1.4", filename="a.pdf")
@@ -171,7 +180,8 @@ async def test_get_content_done(
 
 
 async def test_get_content_pending_409(
-    service: DocumentService, kb_repo: FakeKnowledgeBaseRepository,
+    service: DocumentService,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     doc = await service.create_file(kb.id, content=b"%PDF-1.4", filename="a.pdf")

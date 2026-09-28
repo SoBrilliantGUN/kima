@@ -7,15 +7,16 @@ from pathlib import Path
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
+from app.agent.compose import CopilotRuntime, build_runtime
 from app.agent.events import (
     CopilotDeltaEvent,
     CopilotDoneEvent,
     CopilotMetaEvent,
     CopilotStepEvent,
 )
+from app.agent.run import run
 from app.agent.runtime.budget import HardBudget
 from app.agent.runtime.config import RuntimeConfig
-from app.agent.service import CopilotService
 from app.agent.tuning import CopilotTuning
 from app.core.memory_store import FileMemoryStore
 from app.core.skill_store import FileSkillStore
@@ -104,16 +105,14 @@ class FakeChatRepository:
 
 def make_service(
     tmp_path: Path, model: ScriptedAgentModel, runtime: RuntimeConfig | None = None
-) -> tuple[CopilotService, FakeCopilotEventRepository, FakeChatRepository]:
+) -> tuple[CopilotRuntime, FakeCopilotEventRepository, FakeChatRepository]:
     kb_repo = FakeKnowledgeBaseRepository()
     kb_service = KnowledgeBaseService(kb_repo)
     note_service = NoteService(FakeNoteRepository(), kb_repo)
     document_service = DocumentService(FakeDocumentRepository(), kb_repo, FakeFileStore())
     embedder = FakeEmbeddingClient(dimension=8)
     gateway = make_gateway(embedder=embedder, reranker=FakeRerankerClient())
-    retriever = RagRetriever(
-        repository=_EmptyRetrievalRepo(), gateway=gateway
-    )
+    retriever = RagRetriever(repository=_EmptyRetrievalRepo(), gateway=gateway)
     memory_service = CopilotMemoryService(
         repository=FakeCopilotMemoryRepository(),
         gateway=gateway,
@@ -125,24 +124,28 @@ def make_service(
     )
     event_repo = FakeCopilotEventRepository()
     chat_repo = FakeChatRepository()
-    return CopilotService(
-        model=model,
-        checkpointer=None,
-        tracer=None,
-        rag_retriever=retriever,
-        kb_service=kb_service,
-        note_service=note_service,
-        document_service=document_service,
-        web_search=FakeWebSearchClient(),
-        memory_service=memory_service,
-        memory_store=FileMemoryStore(tmp_path),
-        skill_store=FileSkillStore(tmp_path / "skills"),
-        chat_repository=chat_repo,
-        event_repository=event_repo,
-        reviewer=FakeOutputReviewer(),
-        tuning=CopilotTuning(max_result_chars=4000),
-        runtime=runtime,
-    ), event_repo, chat_repo
+    return (
+        build_runtime(
+            model=model,
+            checkpointer=None,
+            tracer=None,
+            rag_retriever=retriever,
+            kb_service=kb_service,
+            note_service=note_service,
+            document_service=document_service,
+            web_search=FakeWebSearchClient(),
+            memory_service=memory_service,
+            memory_store=FileMemoryStore(tmp_path),
+            skill_store=FileSkillStore(tmp_path / "skills"),
+            chat_repository=chat_repo,
+            event_repository=event_repo,
+            reviewer=FakeOutputReviewer(),
+            tuning=CopilotTuning(max_result_chars=4000),
+            runtime=runtime,
+        ),
+        event_repo,
+        chat_repo,
+    )
 
 
 async def test_agent_tool_loop_and_event_log(tmp_path: Path) -> None:
@@ -152,9 +155,9 @@ async def test_agent_tool_loop_and_event_log(tmp_path: Path) -> None:
             AIMessage(content="库里没有笔记。"),
         ]
     )
-    service, event_repo, chat_repo = make_service(tmp_path, model)
+    rt, event_repo, chat_repo = make_service(tmp_path, model)
 
-    events = [event async for event in service.run(CopilotRequest(question="有哪些笔记？"))]
+    events = [event async for event in run(rt, CopilotRequest(question="有哪些笔记？"))]
 
     kinds = [type(e) for e in events]
     assert CopilotMetaEvent in kinds
@@ -193,9 +196,9 @@ async def test_done_event_records_accounting_and_attribution(tmp_path: Path) -> 
     """done 事件落「单位任务账本」：intent/model 归因 + 账本快照（成本/token/缓存命中/轮数）。"""
     model = ScriptedAgentModel(responses=[AIMessage(content="你好。")])
     runtime = RuntimeConfig(budget=HardBudget(max_turns=5))
-    service, event_repo, _ = make_service(tmp_path, model, runtime=runtime)
+    rt, event_repo, _ = make_service(tmp_path, model, runtime=runtime)
 
-    events = [event async for event in service.run(CopilotRequest(question="你好"))]
+    events = [event async for event in run(rt, CopilotRequest(question="你好"))]
 
     assert isinstance(events[-1], CopilotDoneEvent)
     done = event_repo.events[-1]

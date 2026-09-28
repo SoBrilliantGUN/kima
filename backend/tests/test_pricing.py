@@ -109,11 +109,17 @@ async def test_validate_startup_rejects_gap() -> None:
     now = datetime(2026, 9, 23, 0, 0, tzinfo=UTC)
     # [now, now+1d] 与 [now+2d, now+5d] 之间有 1 天空洞
     repo.add(
-        "deepseek", "deepseek-chat", now - timedelta(days=1), now + timedelta(days=1),
+        "deepseek",
+        "deepseek-chat",
+        now - timedelta(days=1),
+        now + timedelta(days=1),
         _DEEPSEEK_FULL_DAY,
     )
     repo.add(
-        "deepseek", "deepseek-chat", now + timedelta(days=2), now + timedelta(days=5),
+        "deepseek",
+        "deepseek-chat",
+        now + timedelta(days=2),
+        now + timedelta(days=5),
         _DEEPSEEK_FULL_DAY,
     )
     service = PricingService(repo, cache_ttl_seconds=0)

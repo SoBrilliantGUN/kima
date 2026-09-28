@@ -72,11 +72,21 @@ async def test_with_retry_no_retry_permanent() -> None:
 # 两个强制幂等的写工具（create_note / write_memory），用于幂等键派生回归
 _WRITE_REGISTRY = {
     "create_note": ToolMeta(
-        "create_note", SideEffectLevel.MEDIUM, "tool_result", 500, True,
+        "create_note",
+        "新建笔记",
+        SideEffectLevel.MEDIUM,
+        "tool_result",
+        500,
+        True,
         idempotency_key_fields=("content",),
     ),
     "write_memory": ToolMeta(
-        "write_memory", SideEffectLevel.MEDIUM, "tool_result", 5000, True,
+        "write_memory",
+        "写长期记忆",
+        SideEffectLevel.MEDIUM,
+        "tool_result",
+        5000,
+        True,
         idempotency_key_fields=("kind", "content", "entity_id"),
     ),
 }
@@ -97,9 +107,20 @@ def test_idempotency_keys_content_derived_stable() -> None:
     run_id = "r1"
     turn1 = cast(
         AgentState,
-        {"messages": [AIMessage(content="", tool_calls=[
-            {"name": "create_note", "args": {"title": "a", "content": "正文一"}, "id": "c1"},
-        ])]},
+        {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "create_note",
+                            "args": {"title": "a", "content": "正文一"},
+                            "id": "c1",
+                        },
+                    ],
+                )
+            ]
+        },
     )
     s1 = inject_idempotency_keys(turn1, run_id, _WRITE_REGISTRY)
     key1 = _idempotency_key(s1)
@@ -108,9 +129,20 @@ def test_idempotency_keys_content_derived_stable() -> None:
     # 同内容、不同标题（非 key_fields）→ 同一键（业务身份只看 content）
     turn1b = cast(
         AgentState,
-        {"messages": [AIMessage(content="", tool_calls=[
-            {"name": "create_note", "args": {"title": "b", "content": "正文一"}, "id": "c1b"},
-        ])]},
+        {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "create_note",
+                            "args": {"title": "b", "content": "正文一"},
+                            "id": "c1b",
+                        },
+                    ],
+                )
+            ]
+        },
     )
     s1b = inject_idempotency_keys(turn1b, run_id, _WRITE_REGISTRY)
     assert _idempotency_key(s1b) == key1
@@ -118,9 +150,20 @@ def test_idempotency_keys_content_derived_stable() -> None:
     # 不同内容 → 不同键
     turn2 = cast(
         AgentState,
-        {"messages": [AIMessage(content="", tool_calls=[
-            {"name": "create_note", "args": {"title": "a", "content": "正文二"}, "id": "c2"},
-        ])]},
+        {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "create_note",
+                            "args": {"title": "a", "content": "正文二"},
+                            "id": "c2",
+                        },
+                    ],
+                )
+            ]
+        },
     )
     s2 = inject_idempotency_keys(turn2, run_id, _WRITE_REGISTRY)
     assert _idempotency_key(s2) != key1

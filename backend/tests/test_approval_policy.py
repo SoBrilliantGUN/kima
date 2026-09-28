@@ -16,7 +16,7 @@ from app.repositories.approval import InMemoryApprovalStore
 
 
 def _registry(name: str, level: SideEffectLevel) -> dict[str, ToolMeta]:
-    return {name: ToolMeta(name, level, "tool_result", 500)}
+    return {name: ToolMeta(name, "test", level, "tool_result", 500)}
 
 
 def test_graded_policy_maps_levels() -> None:
@@ -24,20 +24,15 @@ def test_graded_policy_maps_levels() -> None:
     assert policy.decide("create_note", SideEffectLevel.LOW) is ApprovalDecision.ALLOW
     assert policy.decide("create_note", SideEffectLevel.MEDIUM) is ApprovalDecision.NOTIFY
     assert (
-        policy.decide("update_profile", SideEffectLevel.HIGH)
-        is ApprovalDecision.REQUIRE_APPROVAL
+        policy.decide("update_profile", SideEffectLevel.HIGH) is ApprovalDecision.REQUIRE_APPROVAL
     )
 
 
 def test_strict_policy_requires_all_writes() -> None:
     policy = ApprovalPolicy.strict()
+    assert policy.decide("create_note", SideEffectLevel.MEDIUM) is ApprovalDecision.REQUIRE_APPROVAL
     assert (
-        policy.decide("create_note", SideEffectLevel.MEDIUM)
-        is ApprovalDecision.REQUIRE_APPROVAL
-    )
-    assert (
-        policy.decide("update_profile", SideEffectLevel.HIGH)
-        is ApprovalDecision.REQUIRE_APPROVAL
+        policy.decide("update_profile", SideEffectLevel.HIGH) is ApprovalDecision.REQUIRE_APPROVAL
     )
     assert policy.decide("read_note", SideEffectLevel.LOW) is ApprovalDecision.ALLOW
 
@@ -48,8 +43,7 @@ def test_policy_override_wins_over_level_map() -> None:
         overrides={"write_memory": ApprovalDecision.REQUIRE_APPROVAL},
     )
     assert (
-        policy.decide("write_memory", SideEffectLevel.MEDIUM)
-        is ApprovalDecision.REQUIRE_APPROVAL
+        policy.decide("write_memory", SideEffectLevel.MEDIUM) is ApprovalDecision.REQUIRE_APPROVAL
     )
     assert policy.decide("create_note", SideEffectLevel.MEDIUM) is ApprovalDecision.NOTIFY
 

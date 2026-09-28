@@ -154,6 +154,7 @@ def _registry_for_limit() -> dict[str, ToolMeta]:
     return {
         "list_notes": ToolMeta(
             "list_notes",
+            "列出笔记",
             SideEffectLevel.LOW,
             "tool_result",
             100,
@@ -185,8 +186,11 @@ async def test_graph_rejects_invalid_param_and_runs_valid() -> None:
         ]
     )
     graph = build_reactive_graph(
-        model, [list_notes], reviewer=FakeOutputReviewer(),
-        registry=_registry_for_limit(), runtime=RuntimeConfig()
+        model,
+        [list_notes],
+        reviewer=FakeOutputReviewer(),
+        registry=_registry_for_limit(),
+        runtime=RuntimeConfig(),
     )
     initial = {
         "messages": [HumanMessage(content="hi")],

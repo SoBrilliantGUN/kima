@@ -16,12 +16,14 @@ from tests.fakes import FakeOutputReviewer
 
 # 把 create_note 标为写工具（MEDIUM），使 HITL 门禁生效（不强制幂等，测试工具无该参数）
 _WRITE_REGISTRY = {
-    "create_note": ToolMeta("create_note", SideEffectLevel.MEDIUM, "tool_result", 500)
+    "create_note": ToolMeta("create_note", "新建笔记", SideEffectLevel.MEDIUM, "tool_result", 500)
 }
 
 # HIGH 写工具（update_profile 覆盖人设档案）：分级审批里唯一同步打断人的操作
 _HIGH_REGISTRY = {
-    "update_profile": ToolMeta("update_profile", SideEffectLevel.HIGH, "tool_result", 100)
+    "update_profile": ToolMeta(
+        "update_profile", "更新档案/人设", SideEffectLevel.HIGH, "tool_result", 100
+    )
 }
 
 
@@ -122,9 +124,7 @@ async def test_write_tool_interrupt_and_reject() -> None:
     # resume(reject)：工具不执行，返回拒绝 ToolMessage
     resumed = [
         c
-        async for c in graph.astream(
-            Command(resume="reject"), config=config, stream_mode="updates"
-        )
+        async for c in graph.astream(Command(resume="reject"), config=config, stream_mode="updates")
     ]
     assert calls == []  # 工具未被调用
     assert any("tools" in c for c in resumed)

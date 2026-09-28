@@ -122,8 +122,10 @@ async def test_budget_terminates_graph() -> None:
         ]
     )
     graph = build_reactive_graph(
-        model, [dummy], reviewer=FakeOutputReviewer(),
-        runtime=RuntimeConfig(budget=HardBudget(max_turns=1))
+        model,
+        [dummy],
+        reviewer=FakeOutputReviewer(),
+        runtime=RuntimeConfig(budget=HardBudget(max_turns=1)),
     )
     initial = {
         "messages": [HumanMessage(content="hi")],

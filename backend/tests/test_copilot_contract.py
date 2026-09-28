@@ -9,15 +9,16 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from pydantic import PrivateAttr
 
+from app.agent.compose import CopilotRuntime, build_runtime
 from app.agent.guardrail.review import (
     ReviewIssue,
     ReviewResult,
     ReviewVerdict,
     SideEffectVerifier,
 )
+from app.agent.plan_runner import PlanRunner
 from app.agent.runtime.budget import BudgetTracker, HardBudget
 from app.agent.runtime.planner import LLMPlanner, Plan, PlanStep, StepStatus
-from app.agent.service import CopilotService
 from app.agent.toolmeta import OutputContract, apply_output_contract
 from app.agent.tuning import CopilotTuning
 from app.core.memory_store import FileMemoryStore
@@ -115,9 +116,7 @@ class RecordingModel(FakeMessagesListChatModel):
     def calls(self) -> list[list[BaseMessage]]:
         return self._calls
 
-    async def ainvoke(
-        self, input: object, config: object = None, **kwargs: object
-    ) -> AIMessage:
+    async def ainvoke(self, input: object, config: object = None, **kwargs: object) -> AIMessage:
         self._calls.append(cast(list[BaseMessage], input))
         return cast(AIMessage, self.responses[0])
 
@@ -177,16 +176,14 @@ def _make_service(
     model: RecordingModel,
     reviewer: FakeOutputReviewer | None = None,
     verifier: SideEffectVerifier | None = None,
-) -> CopilotService:
+) -> CopilotRuntime:
     kb_repo = FakeKnowledgeBaseRepository()
     kb_service = KnowledgeBaseService(kb_repo)
     note_service = NoteService(FakeNoteRepository(), kb_repo)
     document_service = DocumentService(FakeDocumentRepository(), kb_repo, FakeFileStore())
     embedder = FakeEmbeddingClient(dimension=8)
     gateway = make_gateway(embedder=embedder, reranker=FakeRerankerClient())
-    retriever = RagRetriever(
-        repository=_EmptyRetrievalRepo(), gateway=gateway
-    )
+    retriever = RagRetriever(repository=_EmptyRetrievalRepo(), gateway=gateway)
     memory_service = CopilotMemoryService(
         repository=FakeCopilotMemoryRepository(),
         gateway=gateway,
@@ -196,7 +193,7 @@ def _make_service(
         recency_window_days=7,
         conflict_top_k=10,
     )
-    return CopilotService(
+    return build_runtime(
         model=model,
         checkpointer=None,
         tracer=None,
@@ -218,10 +215,10 @@ def _make_service(
 
 async def test_synthesize_carries_constraints(tmp_path: Path) -> None:
     model = RecordingModel(AIMessage(content="答案"))
-    service = _make_service(tmp_path, model)
+    rt = _make_service(tmp_path, model)
     plan = Plan(steps=(PlanStep(step_id="1", action="search", params={}, is_terminal=True),))
 
-    answer = await service._synthesize_plan_answer(
+    answer = await PlanRunner(rt)._synthesize_plan_answer(
         "任务",
         {"1": "r1"},
         BudgetTracker(HardBudget()),
@@ -249,17 +246,20 @@ async def test_plan_review_appends_correction_on_mismatch(tmp_path: Path) -> Non
         ]
     )
     model = RecordingModel(AIMessage(content="答案"))
-    service = _make_service(tmp_path, model, reviewer=reviewer)
+    rt = _make_service(tmp_path, model, reviewer=reviewer)
     plan = Plan(
         steps=(
             PlanStep(
-                step_id="1", action="search", params={},
-                status=StepStatus.COMPLETED, output_ref="r1",
+                step_id="1",
+                action="search",
+                params={},
+                status=StepStatus.COMPLETED,
+                output_ref="r1",
             ),
         )
     )
 
-    answer = await service._review_plan_answer(
+    answer = await PlanRunner(rt)._review_plan_answer(
         "已创建笔记", plan, {"1": "r1"}, uuid.uuid4(), BudgetTracker(HardBudget())
     )
     assert "自检更正" in answer
@@ -269,12 +269,12 @@ async def test_plan_review_appends_correction_on_mismatch(tmp_path: Path) -> Non
 async def test_plan_review_passes_when_ok(tmp_path: Path) -> None:
     reviewer = FakeOutputReviewer(results=[ReviewResult(verdict=ReviewVerdict.OK)])
     model = RecordingModel(AIMessage(content="答案"))
-    service = _make_service(tmp_path, model, reviewer=reviewer)
+    rt = _make_service(tmp_path, model, reviewer=reviewer)
     plan = Plan(
         steps=(PlanStep(step_id="1", action="search", params={}, status=StepStatus.COMPLETED),)
     )
 
-    answer = await service._review_plan_answer(
+    answer = await PlanRunner(rt)._review_plan_answer(
         "普通回答", plan, {"1": "r1"}, uuid.uuid4(), BudgetTracker(HardBudget())
     )
     assert answer == "普通回答"
@@ -293,18 +293,20 @@ async def test_plan_review_deterministic_verifier_forces_correction(tmp_path: Pa
     reviewer = FakeOutputReviewer(results=[ReviewResult(verdict=ReviewVerdict.OK)])
     verifier = _FailingVerifier()
     model = RecordingModel(AIMessage(content="答案"))
-    service = _make_service(tmp_path, model, reviewer=reviewer, verifier=verifier)
+    rt = _make_service(tmp_path, model, reviewer=reviewer, verifier=verifier)
     plan = Plan(
         steps=(
             PlanStep(
-                step_id="1", action="create_note", params={"title": "t", "content": "c"},
+                step_id="1",
+                action="create_note",
+                params={"title": "t", "content": "c"},
                 status=StepStatus.COMPLETED,
                 output_ref="已创建笔记 00000000-0000-0000-0000-000000000001",
             ),
         )
     )
 
-    answer = await service._review_plan_answer(
+    answer = await PlanRunner(rt)._review_plan_answer(
         "已创建笔记",
         plan,
         {"1": "已创建笔记 00000000-0000-0000-0000-000000000001"},

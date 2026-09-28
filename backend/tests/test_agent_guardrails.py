@@ -1,4 +1,4 @@
-"""Loop 五宪法落地的守卫测试：全局日预算 / 审查 fail-closed / 确定性副作用对账 / 历史截断。"""
+"""Loop 五宪法落地的守卫测试：全局日预算 / 审查 fail-closed / 确定性副作用对账。"""
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
@@ -14,7 +14,6 @@ from app.agent.guardrail.review import (
     ReviewVerdict,
 )
 from app.agent.guardrail.review_node import build_review_node, trace_from_messages
-from app.agent.helpers import truncate_history_tokens
 from app.agent.runtime.budget import (
     BudgetExceeded,
     BudgetTracker,
@@ -24,7 +23,7 @@ from app.agent.runtime.budget import (
 )
 from app.agent.side_effect import DbSideEffectVerifier
 from app.integrations.embedding import FakeEmbeddingClient
-from app.integrations.llm import ChatMessage, loads_json_repair
+from app.integrations.llm import loads_json_repair
 from app.services.copilot import CopilotMemoryService
 from app.services.note import NoteService
 from tests.fakes import (
@@ -203,14 +202,12 @@ def test_loads_json_repair_fixes_malformed_json() -> None:
     """语法坏 JSON（尾逗号/未加引号 key/代码块外壳）被 json_repair 确定性修复。"""
     assert loads_json_repair('{"verdict":"ok",}') == {"verdict": "ok"}
     assert loads_json_repair('{verdict: "ok"}') == {"verdict": "ok"}
-    assert loads_json_repair("```json\n{\"verdict\":\"ok\"}\n```") == {"verdict": "ok"}
+    assert loads_json_repair('```json\n{"verdict":"ok"}\n```') == {"verdict": "ok"}
 
 
 def test_loads_json_repair_keeps_json_word_inside_content() -> None:
     """回归：fence 无语言标签或标签大小写不同时，内容里的 'json' 不被误删。"""
-    assert loads_json_repair('```\n{"note": "export to json"}\n```') == {
-        "note": "export to json"
-    }
+    assert loads_json_repair('```\n{"note": "export to json"}\n```') == {"note": "export to json"}
     assert loads_json_repair('```JSON\n{"json": 1}\n```') == {"json": 1}
 
 
@@ -356,17 +353,6 @@ async def test_side_effect_verifier_note() -> None:
     # 明确失败 → 跳过（交给 LLM 审查器）
     skipped = await verifier.verify("create_note", {}, "创建失败：boom")
     assert skipped is None
-
-
-def testtruncate_history_tokens() -> None:
-    msgs = [
-        ChatMessage("user", "甲" * 100),
-        ChatMessage("assistant", "乙" * 100),
-    ]
-    trimmed = truncate_history_tokens(msgs, budget=120)
-    assert len(trimmed) == 1
-    assert trimmed[0].content == "乙" * 100
-    assert trimmed[0].role == "assistant"
 
 
 async def test_side_effect_verifier_memory_missing() -> None:

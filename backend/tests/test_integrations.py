@@ -44,9 +44,7 @@ async def test_fake_embedding_dimension_and_determinism() -> None:
 
 
 async def test_siliconflow_embedding_factory_constructs() -> None:
-    client = get_embedding_client(
-        Settings(embedding_provider="siliconflow", embedding_dim=1024)
-    )
+    client = get_embedding_client(Settings(embedding_provider="siliconflow", embedding_dim=1024))
     assert client.dimension == 1024
 
 

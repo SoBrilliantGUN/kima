@@ -56,9 +56,7 @@ def make_tools(tmp_path: Path) -> tuple[list[BaseTool], FakeNoteRepository]:
     document_service = DocumentService(FakeDocumentRepository(), kb_repo, FakeFileStore())
     embedder = FakeEmbeddingClient(dimension=8)
     gateway = make_gateway(embedder=embedder, reranker=FakeRerankerClient())
-    retriever = RagRetriever(
-        repository=_EmptyRetrievalRepo(), gateway=gateway
-    )
+    retriever = RagRetriever(repository=_EmptyRetrievalRepo(), gateway=gateway)
     memory_service = CopilotMemoryService(
         repository=FakeCopilotMemoryRepository(),
         gateway=gateway,
@@ -105,9 +103,7 @@ async def test_create_note_idempotency_key_conflict(tmp_path: Path) -> None:
     tools, note_repo = make_tools(tmp_path)
     create_note = _tool(tools, "create_note")
 
-    first = await create_note.ainvoke(
-        {"title": "A", "content": "正文一", "idempotency_key": "k1"}
-    )
+    first = await create_note.ainvoke({"title": "A", "content": "正文一", "idempotency_key": "k1"})
     assert "已创建" in first
     with pytest.raises(ToolFailure):
         await create_note.ainvoke(

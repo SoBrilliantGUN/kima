@@ -94,9 +94,7 @@ async def test_delete_last_knowledge_base_conflict(api_client: AsyncClient) -> N
 
 
 async def test_create_invalid_color_422(api_client: AsyncClient) -> None:
-    response = await api_client.post(
-        "/api/knowledge-bases", json={"name": "工作", "color": "blue"}
-    )
+    response = await api_client.post("/api/knowledge-bases", json={"name": "工作", "color": "blue"})
     assert response.status_code == 422
 
 

@@ -18,9 +18,12 @@ from app.agent.memory import (
     assemble_system_prompt,
     format_memory_block,
     format_reminder,
+    format_subagent_constraints,
     load_constitution,
+    render_tool_hint,
 )
 from app.agent.runtime.reactive import build_reactive_graph
+from app.agent.toolmeta import SideEffectLevel, ToolMeta, ToolRegistry
 from app.models.copilot import CopilotMemory, MemoryKind
 from app.services.copilot import RecalledMemories
 from tests.fakes import FakeOutputReviewer
@@ -39,6 +42,16 @@ def _recalled(**kwargs: list[CopilotMemory]) -> RecalledMemories:
     )
 
 
+def _meta(name: str, hint: str, level: SideEffectLevel) -> ToolMeta:
+    return ToolMeta(
+        name=name,
+        hint=hint,
+        side_effect_level=level,
+        source="tool_result",
+        estimated_latency_ms=100,
+    )
+
+
 def test_load_constitution_non_empty() -> None:
     assert load_constitution().strip()
 
@@ -54,14 +67,58 @@ def test_assemble_system_prompt_includes_constitution_and_excludes_memories() ->
     assert "一条只该出现在 L2 的记忆内容" not in prompt
 
 
+def test_render_tool_hint_groups_by_side_effect() -> None:
+    """工具提示按副作用分三段（只读 / 写 / 高危写），名字+用途取自 ToolMeta.hint。"""
+    registry: ToolRegistry = {
+        "search_knowledge_base": _meta(
+            "search_knowledge_base", "检索知识库原文", SideEffectLevel.LOW
+        ),
+        "create_note": _meta("create_note", "新建笔记", SideEffectLevel.MEDIUM),
+        "delete_skill": _meta("delete_skill", "删除 skill", SideEffectLevel.HIGH),
+    }
+    hint = render_tool_hint(registry)
+    assert "只读：" in hint and "search_knowledge_base（检索知识库原文）" in hint
+    assert "写（有副作用，调用前确认）：" in hint and "create_note（新建笔记）" in hint
+    assert "高危写（会触发审批）：" in hint and "delete_skill（删除 skill）" in hint
+
+
+def test_assemble_system_prompt_includes_tool_hint_when_registry_present() -> None:
+    """registry 传入时 L0 含派生工具提示；不传则不含。"""
+    registry: ToolRegistry = {
+        "create_note": _meta("create_note", "新建笔记", SideEffectLevel.MEDIUM),
+    }
+    with_hint = assemble_system_prompt(soul="s", user="u", registry=registry)
+    assert "create_note（新建笔记）" in with_hint
+    without_hint = assemble_system_prompt(soul="s", user="u")
+    assert "create_note（新建笔记）" not in without_hint
+
+
 def test_format_reminder_wraps_with_reminder_prefix() -> None:
     reminder = format_reminder()
     assert reminder.startswith("[REMINDER]\n")
     assert load_constitution() in reminder
 
 
+def test_format_subagent_constraints_only_constraint_and_constitution() -> None:
+    """子 Agent 精简约束（父显式下传）：只含宪法铁律（红线）+ constraint 型硬约束，
+    不传偏好/事实/情节（检索子任务只需底线）。"""
+    block = format_subagent_constraints(
+        _recalled(
+            constraint=[_mem(MemoryKind.CONSTRAINT, "禁止泄露用户隐私")],
+            preference=[_mem(MemoryKind.PREFERENCE, "回答要简洁")],
+            fact=[_mem(MemoryKind.FACT, "用户是产品经理")],
+            episodic=[_mem(MemoryKind.EPISODIC, "昨天讨论了架构")],
+        )
+    )
+    assert load_constitution() in block  # 红线/宪法铁律在场
+    assert "禁止泄露用户隐私" in block  # 硬约束在场
+    assert "回答要简洁" not in block  # 偏好不传
+    assert "用户是产品经理" not in block  # 事实不传
+    assert "昨天讨论了架构" not in block  # 情节不传
+
+
 def test_format_memory_block_empty() -> None:
-    assert format_memory_block(_recalled()) == ""
+    assert format_memory_block(_recalled(), max_tokens=1000) == ""
 
 
 def test_format_memory_block_wraps_with_memory_prefix() -> None:
@@ -70,7 +127,8 @@ def test_format_memory_block_wraps_with_memory_prefix() -> None:
             preference=[_mem(MemoryKind.PREFERENCE, "回答要简洁")],
             fact=[_mem(MemoryKind.FACT, "用户是产品经理")],
             episodic=[_mem(MemoryKind.EPISODIC, "昨天讨论了架构")],
-        )
+        ),
+        max_tokens=1000,
     )
     assert block.startswith("[MEMORY]\n")
     assert "回答要简洁" in block
@@ -141,9 +199,7 @@ async def test_state_block_precedes_reminder() -> None:
     """装配顺序：history → (memory) → state → reminder，state 在 reminder 之前。"""
     model = _RecordingModel(responses=[AIMessage(content="ok")])
     graph = build_reactive_graph(model, [], reviewer=FakeOutputReviewer())
-    async for _ in graph.astream(
-        _initial(reminder="[REMINDER]\n宪法正文"), stream_mode="updates"
-    ):
+    async for _ in graph.astream(_initial(reminder="[REMINDER]\n宪法正文"), stream_mode="updates"):
         pass
     assert len(model.received) == 1
     received = model.received[0]

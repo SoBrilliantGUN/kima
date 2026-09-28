@@ -169,7 +169,7 @@ def test_evaluate_tool_results_clean_web_observe() -> None:
     tool_calls = [{"name": "search_web", "args": {}, "id": "c1"}]
     state = cast(AgentState, {"messages": [AIMessage(content="", tool_calls=tool_calls)]})
     result = {"messages": [ToolMessage(content="今天天气不错", tool_call_id="c1")]}
-    registry = {"search_web": ToolMeta("search_web", SideEffectLevel.LOW, "web", 5000)}
+    registry = {"search_web": ToolMeta("search_web", "联网搜索", SideEffectLevel.LOW, "web", 5000)}
     sanitized = evaluate_tool_results(state, result, registry)
     # web 来源 20：0.5*100 + 0.3*20 + 0.2*100 = 76 → 观察；每块都打标，分数随块走
     content = sanitized["messages"][0].content

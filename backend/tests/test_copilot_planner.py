@@ -19,8 +19,10 @@ from tests.fakes import ScriptedLLM, gateway_run, make_gateway
 
 
 def test_parse_plan() -> None:
-    raw = '```json\n{"steps":[{"id":"1","action":"search","params":{"q":"x"},' \
+    raw = (
+        '```json\n{"steps":[{"id":"1","action":"search","params":{"q":"x"},'
         '"depends_on":[],"terminal":false}]}\n```'
+    )
     plan = parse_plan(raw)
     assert len(plan.steps) == 1
     step = plan.steps[0]
@@ -42,8 +44,10 @@ def test_parse_plan_rejects_bad_structure() -> None:
 
 def test_parse_plan_replaces_field() -> None:
     """replaces 声明映射到 replaces_step_id（增量重规划的「替代身份证」）。"""
-    raw = '{"steps":[{"id":"2r","action":"scp","params":{},' \
+    raw = (
+        '{"steps":[{"id":"2r","action":"scp","params":{},'
         '"depends_on":["1"],"replaces":"2","terminal":false}]}'
+    )
     step = parse_plan(raw).steps[0]
     assert step.replaces_step_id == "2"
     assert step.depends_on == ("1",)
@@ -146,12 +150,18 @@ def test_plan_to_from_dict_roundtrip() -> None:
     plan = Plan(
         steps=(
             PlanStep(
-                step_id="1", action="a", params={"x": 1},
-                status=StepStatus.COMPLETED, output_ref="r1",
+                step_id="1",
+                action="a",
+                params={"x": 1},
+                status=StepStatus.COMPLETED,
+                output_ref="r1",
             ),
             PlanStep(
-                step_id="2", action="b", depends_on=("1",),
-                status=StepStatus.FAILED, error="boom",
+                step_id="2",
+                action="b",
+                depends_on=("1",),
+                status=StepStatus.FAILED,
+                error="boom",
             ),
         )
     )
@@ -259,12 +269,18 @@ async def test_execute_plan_replaces_downstream_not_orphaned() -> None:
         assert step.step_id == "2"
         return [
             PlanStep(
-                step_id="2r", action="scp", params={},
-                depends_on=("1",), replaces_step_id="2",
+                step_id="2r",
+                action="scp",
+                params={},
+                depends_on=("1",),
+                replaces_step_id="2",
             ),
             PlanStep(
-                step_id="3r", action="verify", params={},
-                depends_on=("2r",), replaces_step_id="3",
+                step_id="3r",
+                action="verify",
+                params={},
+                depends_on=("2r",),
+                replaces_step_id="3",
             ),
         ]
 
@@ -279,8 +295,11 @@ async def test_execute_plan_resumes_from_checkpoint() -> None:
     plan = Plan(
         steps=(
             PlanStep(
-                step_id="1", action="dump", params={},
-                status=StepStatus.COMPLETED, output_ref="dump-ok",
+                step_id="1",
+                action="dump",
+                params={},
+                status=StepStatus.COMPLETED,
+                output_ref="dump-ok",
             ),
             PlanStep(step_id="2", action="verify", params={}, depends_on=("1",)),
         )
@@ -307,8 +326,11 @@ async def test_plan_store_save_load_roundtrip() -> None:
     plan = Plan(
         steps=(
             PlanStep(
-                step_id="1", action="a", params={},
-                status=StepStatus.COMPLETED, output_ref="r1",
+                step_id="1",
+                action="a",
+                params={},
+                status=StepStatus.COMPLETED,
+                output_ref="r1",
             ),
         )
     )

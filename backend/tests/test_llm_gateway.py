@@ -259,7 +259,9 @@ async def test_soft_reminder_injected_at_threshold() -> None:
     daily.record(Usage(input_tokens=90, output_tokens=0), cost_cny=0.0)  # 90/100 = 0.9 ≥ 0.8
     llm = ScriptedLLM(["ok"])
     gateway = make_gateway(
-        llm=llm, daily_budget=daily, retry=_fast_retry(1),
+        llm=llm,
+        daily_budget=daily,
+        retry=_fast_retry(1),
         config=GatewayConfig(soft_threshold=0.8),
     )
 
@@ -274,7 +276,9 @@ async def test_no_soft_reminder_below_threshold() -> None:
     daily.record(Usage(input_tokens=10, output_tokens=0), cost_cny=0.0)  # 0.1 < 0.8
     llm = ScriptedLLM(["ok"])
     gateway = make_gateway(
-        llm=llm, daily_budget=daily, retry=_fast_retry(1),
+        llm=llm,
+        daily_budget=daily,
+        retry=_fast_retry(1),
         config=GatewayConfig(soft_threshold=0.8),
     )
 
@@ -289,7 +293,10 @@ async def test_soft_reminder_does_not_break_snapshot() -> None:
     llm = ScriptedLLM(["ok", "ok"])
     daily = DailyBudget(max_cost_cny=100.0, max_tokens=100, store=FakeDailyBudgetStore())
     gateway = make_gateway(
-        llm=llm, daily_budget=daily, snapshots=store, retry=_fast_retry(1),
+        llm=llm,
+        daily_budget=daily,
+        snapshots=store,
+        retry=_fast_retry(1),
         config=GatewayConfig(soft_threshold=0.0),
     )
     messages = [ChatMessage("user", "hi")]
@@ -357,9 +364,7 @@ async def test_stream_records_usage_without_counting_turn() -> None:
 
 async def test_stream_snapshot_reuses() -> None:
     store = InMemorySnapshotStore()
-    gateway = make_gateway(
-        llm=ScriptedLLM(["hello world"]), snapshots=store, retry=_fast_retry(1)
-    )
+    gateway = make_gateway(llm=ScriptedLLM(["hello world"]), snapshots=store, retry=_fast_retry(1))
     messages = [ChatMessage("user", "hi")]
 
     with run_budget(BudgetTracker(HardBudget()), run_id="r1"):

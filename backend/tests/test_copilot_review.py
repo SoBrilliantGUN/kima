@@ -7,9 +7,10 @@ from pathlib import Path
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
+from app.agent.compose import CopilotRuntime, build_runtime
 from app.agent.events import CopilotReviewEvent
 from app.agent.guardrail.review import ReviewIssue, ReviewResult, ReviewVerdict
-from app.agent.service import CopilotService
+from app.agent.run import run
 from app.agent.tuning import CopilotTuning
 from app.core.memory_store import FileMemoryStore
 from app.core.skill_store import FileSkillStore
@@ -103,7 +104,7 @@ def make_service(
     reviewer: FakeOutputReviewer,
     review_max_attempts: int = 2,
 ) -> tuple[
-    CopilotService,
+    CopilotRuntime,
     FakeCopilotEventRepository,
     FakeChatRepository,
     FakeCopilotMemoryRepository,
@@ -114,9 +115,7 @@ def make_service(
     document_service = DocumentService(FakeDocumentRepository(), kb_repo, FakeFileStore())
     embedder = FakeEmbeddingClient(dimension=8)
     gateway = make_gateway(embedder=embedder, reranker=FakeRerankerClient())
-    retriever = RagRetriever(
-        repository=_EmptyRetrievalRepo(), gateway=gateway
-    )
+    retriever = RagRetriever(repository=_EmptyRetrievalRepo(), gateway=gateway)
     memory_repo = FakeCopilotMemoryRepository()
     memory_service = CopilotMemoryService(
         repository=memory_repo,
@@ -129,7 +128,7 @@ def make_service(
     )
     event_repo = FakeCopilotEventRepository()
     chat_repo = FakeChatRepository()
-    service = CopilotService(
+    service = build_runtime(
         model=model,
         gateway=gateway,
         checkpointer=None,
@@ -192,9 +191,9 @@ async def test_review_repairs_missing_write(tmp_path: Path) -> None:
             ReviewResult(verdict=ReviewVerdict.OK),
         ]
     )
-    service, event_repo, chat_repo, memory_repo = make_service(tmp_path, model, reviewer)
+    rt, event_repo, chat_repo, memory_repo = make_service(tmp_path, model, reviewer)
 
-    events = [event async for event in service.run(CopilotRequest(question="记住我喜欢编程"))]
+    events = [event async for event in run(rt, CopilotRequest(question="记住我喜欢编程"))]
 
     review_verdicts = [e.verdict for e in events if isinstance(e, CopilotReviewEvent)]
     assert review_verdicts == ["mismatch", "repaired"]
@@ -214,9 +213,9 @@ async def test_review_repairs_missing_write(tmp_path: Path) -> None:
 async def test_review_passes_no_repair(tmp_path: Path) -> None:
     model = ScriptedAgentModel(responses=[AIMessage(content="这是普通回答。")])
     reviewer = FakeOutputReviewer(results=[ReviewResult(verdict=ReviewVerdict.OK)])
-    service, event_repo, chat_repo, _ = make_service(tmp_path, model, reviewer)
+    rt, event_repo, chat_repo, _ = make_service(tmp_path, model, reviewer)
 
-    events = [event async for event in service.run(CopilotRequest(question="你好"))]
+    events = [event async for event in run(rt, CopilotRequest(question="你好"))]
 
     review_verdicts = [e.verdict for e in events if isinstance(e, CopilotReviewEvent)]
     assert review_verdicts == ["ok"]
@@ -250,11 +249,11 @@ async def test_review_corrects_when_repair_fails(tmp_path: Path) -> None:
             ),
         ]
     )
-    service, event_repo, chat_repo, memory_repo = make_service(
+    rt, event_repo, chat_repo, memory_repo = make_service(
         tmp_path, model, reviewer, review_max_attempts=1
     )
 
-    events = [event async for event in service.run(CopilotRequest(question="记住它"))]
+    events = [event async for event in run(rt, CopilotRequest(question="记住它"))]
 
     review_verdicts = [e.verdict for e in events if isinstance(e, CopilotReviewEvent)]
     assert review_verdicts == ["mismatch", "corrected"]

@@ -77,7 +77,8 @@ async def test_upload_pdf(api_client: AsyncClient, kb_repo: FakeKnowledgeBaseRep
 
 
 async def test_upload_rejects_unsupported(
-    api_client: AsyncClient, kb_repo: FakeKnowledgeBaseRepository,
+    api_client: AsyncClient,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     response = await api_client.post(
@@ -99,7 +100,8 @@ async def test_upload_missing_kb_404(api_client: AsyncClient) -> None:
 
 
 async def test_create_from_url(
-    api_client: AsyncClient, kb_repo: FakeKnowledgeBaseRepository,
+    api_client: AsyncClient,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     response = await api_client.post(
@@ -111,7 +113,8 @@ async def test_create_from_url(
 
 
 async def test_create_from_url_invalid_422(
-    api_client: AsyncClient, kb_repo: FakeKnowledgeBaseRepository,
+    api_client: AsyncClient,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     response = await api_client.post(
@@ -162,7 +165,8 @@ async def test_get_file_pdf(api_client: AsyncClient, kb_repo: FakeKnowledgeBaseR
 
 
 async def test_get_file_url_409(
-    api_client: AsyncClient, kb_repo: FakeKnowledgeBaseRepository,
+    api_client: AsyncClient,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     created = (
@@ -200,7 +204,8 @@ async def test_get_content_done(
 
 
 async def test_get_content_pending_409(
-    api_client: AsyncClient, kb_repo: FakeKnowledgeBaseRepository,
+    api_client: AsyncClient,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     created = (
@@ -237,7 +242,8 @@ async def test_retry_error(
 
 
 async def test_retry_non_error_409(
-    api_client: AsyncClient, kb_repo: FakeKnowledgeBaseRepository,
+    api_client: AsyncClient,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     created = (
@@ -252,7 +258,8 @@ async def test_retry_non_error_409(
 
 
 async def test_delete_document(
-    api_client: AsyncClient, kb_repo: FakeKnowledgeBaseRepository,
+    api_client: AsyncClient,
+    kb_repo: FakeKnowledgeBaseRepository,
 ) -> None:
     kb = await _make_kb(kb_repo)
     created = (

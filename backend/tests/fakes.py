@@ -99,9 +99,7 @@ class FakeNoteRepository:
 
     async def delete(self, note: Note) -> None:
         self._store.pop(note.id, None)
-        self._associations = {
-            (n, k) for (n, k) in self._associations if n != note.id
-        }
+        self._associations = {(n, k) for (n, k) in self._associations if n != note.id}
 
     async def associate(self, note_id: uuid.UUID, kb_id: uuid.UUID) -> bool:
         key = (note_id, kb_id)
@@ -367,9 +365,7 @@ class FakeCopilotMemoryRepository:
         candidates.sort(key=lambda m: _cosine_distance(m.embedding or [], query_vec))
         return candidates[:top_k]
 
-    async def search_lexical(
-        self, kind: MemoryKind, query: str, top_k: int
-    ) -> list[CopilotMemory]:
+    async def search_lexical(self, kind: MemoryKind, query: str, top_k: int) -> list[CopilotMemory]:
         """词法召回模拟：子串命中（单测无 pg_jieba，用「query 出现在 content 里」近似 BM25）。"""
         candidates = [
             m
@@ -612,4 +608,3 @@ async def gateway_run(run_id: str = "r1") -> AsyncIterator[None]:
     """
     with run_budget(BudgetTracker(HardBudget()), run_id=run_id):
         yield
-

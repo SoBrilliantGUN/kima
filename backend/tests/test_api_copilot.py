@@ -11,9 +11,13 @@ from httpx import ASGITransport, AsyncClient
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
-from app.agent.service import CopilotService
+from app.agent.compose import CopilotRuntime, build_runtime
 from app.agent.tuning import CopilotTuning
-from app.api.deps_copilot import get_copilot_service
+from app.api.deps_copilot import (
+    get_copilot_memory_service,
+    get_copilot_runtime,
+    get_memory_file_store,
+)
 from app.api.deps_core import get_chat_service
 from app.core.memory_store import FileMemoryStore
 from app.core.skill_store import FileSkillStore
@@ -86,9 +90,7 @@ class FakeChatRepository:
         self, kb_id: uuid.UUID | None, kind: str | None, *, limit: int, offset: int
     ) -> tuple[list[ChatConversation], int]:
         self.last_kind = kind
-        items = [
-            c for c in self._conversations.values() if kind is None or c.kind == kind
-        ]
+        items = [c for c in self._conversations.values() if kind is None or c.kind == kind]
         return items[offset : offset + limit], len(items)
 
     async def delete_conversation(self, conversation: ChatConversation) -> None:
@@ -104,16 +106,16 @@ class FakeChatRepository:
         return list(self._messages.get(conversation_id, []))
 
 
-def _make_copilot_service(tmp_path: Path) -> tuple[CopilotService, FakeChatRepository]:
+def _make_copilot_service(
+    tmp_path: Path,
+) -> tuple[CopilotRuntime, FakeChatRepository, FileMemoryStore, CopilotMemoryService]:
     kb_repo = FakeKnowledgeBaseRepository()
     kb_service = KnowledgeBaseService(kb_repo)
     note_service = NoteService(FakeNoteRepository(), kb_repo)
     document_service = DocumentService(FakeDocumentRepository(), kb_repo, FakeFileStore())
     embedder = FakeEmbeddingClient(dimension=8)
     gateway = make_gateway(embedder=embedder, reranker=FakeRerankerClient())
-    retriever = RagRetriever(
-        repository=_EmptyRetrievalRepo(), gateway=gateway
-    )
+    retriever = RagRetriever(repository=_EmptyRetrievalRepo(), gateway=gateway)
     memory_service = CopilotMemoryService(
         repository=FakeCopilotMemoryRepository(),
         gateway=gateway,
@@ -124,7 +126,8 @@ def _make_copilot_service(tmp_path: Path) -> tuple[CopilotService, FakeChatRepos
         conflict_top_k=10,
     )
     chat_repo = FakeChatRepository()
-    service = CopilotService(
+    memory_store = FileMemoryStore(tmp_path)
+    rt = build_runtime(
         model=ScriptedAgentModel(responses=[AIMessage(content="这是回答")]),
         checkpointer=None,
         tracer=None,
@@ -134,22 +137,26 @@ def _make_copilot_service(tmp_path: Path) -> tuple[CopilotService, FakeChatRepos
         document_service=document_service,
         web_search=FakeWebSearchClient(),
         memory_service=memory_service,
-        memory_store=FileMemoryStore(tmp_path),
+        memory_store=memory_store,
         skill_store=FileSkillStore(tmp_path / "skills"),
         chat_repository=chat_repo,
         event_repository=FakeCopilotEventRepository(),
         reviewer=FakeOutputReviewer(),
         tuning=CopilotTuning(max_result_chars=4000),
     )
-    return service, chat_repo
+    return rt, chat_repo, memory_store, memory_service
 
 
 @pytest.fixture
 async def api_client(tmp_path: Path) -> AsyncIterator[AsyncClient]:
-    service, chat_repo = _make_copilot_service(tmp_path)
-    app.dependency_overrides[get_copilot_service] = lambda: service
+    rt, chat_repo, memory_store, memory_service = _make_copilot_service(tmp_path)
+    app.dependency_overrides[get_copilot_runtime] = lambda: rt
+    app.dependency_overrides[get_memory_file_store] = lambda: memory_store
+    app.dependency_overrides[get_copilot_memory_service] = lambda: memory_service
     app.dependency_overrides[get_chat_service] = lambda: ChatService(
-        chat_repo, FakeKnowledgeBaseRepository(), None  # type: ignore[arg-type]
+        chat_repo,
+        FakeKnowledgeBaseRepository(),
+        None,  # type: ignore[arg-type]
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -189,7 +196,7 @@ async def test_copilot_skills_endpoint(api_client: AsyncClient) -> None:
     response = await api_client.get("/api/copilot/skills")
     assert response.status_code == 200
     items = response.json()["items"]
-    assert len(items) == 17
+    assert len(items) == 16
     write_names = {item["name"] for item in items if item["has_side_effect"]}
     assert write_names == {
         "create_note",

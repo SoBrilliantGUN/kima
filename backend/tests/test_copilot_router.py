@@ -5,16 +5,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage
 
+from app.agent.compose import CopilotRuntime, build_runtime
 from app.agent.events import (
     CopilotDeltaEvent,
     CopilotDoneEvent,
     CopilotMetaEvent,
+    CopilotReviewEvent,
     CopilotStreamEvent,
 )
+from app.agent.run import run
 from app.agent.runtime.router import Intent, classify_by_rules, classify_intent
 from app.agent.runtime.workflow import COMPLAINT_RESPONSE, REJECT_RESPONSE
-from app.agent.service import CopilotService
+from app.agent.tools import _RAG_SUBAGENT_TOOL_NAMES, QA_TOOL_NAMES
 from app.agent.tuning import CopilotTuning
 from app.core.memory_store import FileMemoryStore
 from app.core.skill_store import FileSkillStore
@@ -114,16 +118,14 @@ class FakeChatRepository:
 
 def make_service(
     tmp_path: Path, model: ScriptedAgentModel
-) -> tuple[CopilotService, FakeCopilotEventRepository, FakeChatRepository]:
+) -> tuple[CopilotRuntime, FakeCopilotEventRepository, FakeChatRepository]:
     kb_repo = FakeKnowledgeBaseRepository()
     kb_service = KnowledgeBaseService(kb_repo)
     note_service = NoteService(FakeNoteRepository(), kb_repo)
     document_service = DocumentService(FakeDocumentRepository(), kb_repo, FakeFileStore())
     embedder = FakeEmbeddingClient(dimension=8)
     gateway = make_gateway(embedder=embedder, reranker=FakeRerankerClient())
-    retriever = RagRetriever(
-        repository=_EmptyRetrievalRepo(), gateway=gateway
-    )
+    retriever = RagRetriever(repository=_EmptyRetrievalRepo(), gateway=gateway)
     memory_service = CopilotMemoryService(
         repository=FakeCopilotMemoryRepository(),
         gateway=gateway,
@@ -135,30 +137,34 @@ def make_service(
     )
     event_repo = FakeCopilotEventRepository()
     chat_repo = FakeChatRepository()
-    return CopilotService(
-        model=model,
-        checkpointer=None,
-        tracer=None,
-        rag_retriever=retriever,
-        kb_service=kb_service,
-        note_service=note_service,
-        document_service=document_service,
-        web_search=FakeWebSearchClient(),
-        memory_service=memory_service,
-        memory_store=FileMemoryStore(tmp_path),
-        skill_store=FileSkillStore(tmp_path / "skills"),
-        chat_repository=chat_repo,
-        event_repository=event_repo,
-        reviewer=FakeOutputReviewer(),
-        tuning=CopilotTuning(max_result_chars=4000),
-    ), event_repo, chat_repo
+    return (
+        build_runtime(
+            model=model,
+            checkpointer=None,
+            tracer=None,
+            rag_retriever=retriever,
+            kb_service=kb_service,
+            note_service=note_service,
+            document_service=document_service,
+            web_search=FakeWebSearchClient(),
+            memory_service=memory_service,
+            memory_store=FileMemoryStore(tmp_path),
+            skill_store=FileSkillStore(tmp_path / "skills"),
+            chat_repository=chat_repo,
+            event_repository=event_repo,
+            reviewer=FakeOutputReviewer(),
+            tuning=CopilotTuning(max_result_chars=4000),
+        ),
+        event_repo,
+        chat_repo,
+    )
 
 
 async def _run_question(
     tmp_path: Path, question: str
 ) -> tuple[list[CopilotStreamEvent], FakeCopilotEventRepository, FakeChatRepository]:
-    service, event_repo, chat_repo = make_service(tmp_path, ScriptedAgentModel(responses=[]))
-    events = [event async for event in service.run(CopilotRequest(question=question))]
+    rt, event_repo, chat_repo = make_service(tmp_path, ScriptedAgentModel(responses=[]))
+    events = [event async for event in run(rt, CopilotRequest(question=question))]
     return events, event_repo, chat_repo
 
 
@@ -195,3 +201,32 @@ async def test_injection_routes_to_reject(tmp_path: Path) -> None:
     route = next(e for e in event_repo.events if e.type == "route")
     assert route.payload["intent"] == "injection"
     assert "tool_call" not in [e.type for e in event_repo.events]
+
+
+def test_qa_tool_names_prevents_subagent_recursion() -> None:
+    """QA 可派 spawn_rag 子 Agent，但子 Agent 工具集不含 spawn_rag（防无限递归）。"""
+    assert "spawn_rag" in QA_TOOL_NAMES
+    assert "spawn_rag" not in _RAG_SUBAGENT_TOOL_NAMES
+    # QA 只读：不含任何写工具
+    assert "create_note" not in QA_TOOL_NAMES
+    assert "write_memory" not in QA_TOOL_NAMES
+
+
+async def test_qa_question_routes_to_reactive_loop(tmp_path: Path) -> None:
+    """QA 走 reactive 主循环（含 review 自检），不再是 naive RAG 直答。"""
+    model = ScriptedAgentModel(
+        responses=[AIMessage(content="向量检索是基于向量相似度匹配的检索方法。")]
+    )
+    rt, event_repo, chat_repo = make_service(tmp_path, model)
+    events = [event async for event in run(rt, CopilotRequest(question="向量检索是什么"))]
+
+    kinds = [type(e) for e in events]
+    assert CopilotMetaEvent in kinds
+    assert CopilotReviewEvent in kinds  # 过 review 自检（主循环必选闸门）
+    assert CopilotDoneEvent in kinds
+
+    # assistant 落库 = 模型回答
+    conversation = list(chat_repo._conversations.values())[0]
+    messages = await chat_repo.list_messages(conversation.id)
+    assistant = next(m for m in messages if m.role.value == "assistant")
+    assert "向量检索" in assistant.content

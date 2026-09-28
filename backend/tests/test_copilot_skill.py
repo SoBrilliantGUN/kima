@@ -15,15 +15,7 @@ from tests.fakes import FakeOutputReviewer
 
 
 def test_parse_skill_with_frontmatter() -> None:
-    text = (
-        "---\n"
-        "name: 写周报\n"
-        "description: 写周报用这个模板\n"
-        "---\n"
-        "\n"
-        "# 正文\n"
-        "按这个结构写。\n"
-    )
+    text = "---\nname: 写周报\ndescription: 写周报用这个模板\n---\n\n# 正文\n按这个结构写。\n"
     skill = _parse_skill("fallback", text)
     assert skill.name == "写周报"
     assert skill.description == "写周报用这个模板"
