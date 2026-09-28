@@ -160,6 +160,7 @@ def validate_param_contract(
 class ToolMeta:
     """工具安全指纹：注册时声明，Loop 据此裁决。
 
+    - ``hint``：一行用途摘要（L0 工具提示派生源，必填，漏填即 TypeError）
     - ``side_effect_level``：副作用等级（写工具 ≥ MEDIUM，删/冻结类高危 = HIGH）
     - ``source``：结果来源评级（kb/web/tool_result），供零信任打分
     - ``estimated_latency_ms``：预计延迟，超时上限 = 此值 × :data:`LATENCY_TIMEOUT_FACTOR`
@@ -176,6 +177,7 @@ class ToolMeta:
     """
 
     name: str
+    hint: str
     side_effect_level: SideEffectLevel
     source: str
     estimated_latency_ms: int
