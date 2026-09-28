@@ -1,4 +1,4 @@
-"""分路召回：约束硬召回（不过阈值）+ 写入分类器覆盖 + 事实/情节混合召回 + 记忆块预算合并。
+"""分路召回：约束硬召回（不过阈值）+ 写入分类器覆盖 + 事实/偏好/情节混合召回 + 记忆块预算合并。
 
 对齐《分路召回架构》：约束是「确定域」，只要任务沾边就无条件在场，不靠余弦相似度碰运气；
 事实/偏好/情节是「概率域」，走混合召回（向量 + 词法）。写入时加确定性分类兜底，防止
@@ -31,9 +31,7 @@ def make_service(
         gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=8)),
         judge=FakeConflictJudge(),
         classifier=classifier or FakeMemoryClassifier(),
-        capacity=200,
         episodic_ttl_days=30,
-        recall_floor=0.05,
         recency_window_days=7,
         conflict_top_k=10,
     )

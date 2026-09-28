@@ -39,6 +39,7 @@ from tests.fakes import (
     FakeKnowledgeBaseRepository,
     FakeMemoryClassifier,
     FakeNoteRepository,
+    FakeOutputReviewer,
     make_gateway,
 )
 
@@ -118,9 +119,7 @@ def make_service(
         gateway=gateway,
         judge=FakeConflictJudge(),
         classifier=FakeMemoryClassifier(),
-        capacity=200,
         episodic_ttl_days=30,
-        recall_floor=0.05,
         recency_window_days=7,
         conflict_top_k=10,
     )
@@ -140,6 +139,7 @@ def make_service(
         skill_store=FileSkillStore(tmp_path / "skills"),
         chat_repository=chat_repo,
         event_repository=event_repo,
+        reviewer=FakeOutputReviewer(),
         tuning=CopilotTuning(max_result_chars=4000),
         runtime=runtime,
     ), event_repo, chat_repo
@@ -182,7 +182,10 @@ async def test_agent_tool_loop_and_event_log(tmp_path: Path) -> None:
     assert conversation.kind == ChatKind.COPILOT.value
     messages = await chat_repo.list_messages(conversation.id)
     assistant = next(m for m in messages if m.role.value == "assistant")
-    assert assistant.steps == [{"tool_name": "list_notes", "args": {}}]
+    assert assistant.steps == [
+        {"tool_name": "list_notes", "args": {}},
+        {"tool_name": "review", "args": {"verdict": "ok", "issues": []}},
+    ]
     assert done.assistant_message_id == assistant.id
 
 

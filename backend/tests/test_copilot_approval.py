@@ -12,6 +12,7 @@ from app.agent.approval import ApprovalPolicy
 from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.reactive import build_reactive_graph
 from app.agent.toolmeta import SideEffectLevel, ToolMeta
+from tests.fakes import FakeOutputReviewer
 
 # 把 create_note 标为写工具（MEDIUM），使 HITL 门禁生效（不强制幂等，测试工具无该参数）
 _WRITE_REGISTRY = {
@@ -62,6 +63,7 @@ async def test_write_tool_interrupt_and_approve() -> None:
     graph = build_reactive_graph(
         model,
         [create_note],
+        reviewer=FakeOutputReviewer(),
         checkpointer=InMemorySaver(),
         runtime=RuntimeConfig(require_write_approval=True),
         registry=_WRITE_REGISTRY,
@@ -107,6 +109,7 @@ async def test_write_tool_interrupt_and_reject() -> None:
     graph = build_reactive_graph(
         model,
         [create_note],
+        reviewer=FakeOutputReviewer(),
         checkpointer=InMemorySaver(),
         runtime=RuntimeConfig(require_write_approval=True),
         registry=_WRITE_REGISTRY,
@@ -151,6 +154,7 @@ async def test_medium_write_auto_executes_under_graded_policy() -> None:
     graph = build_reactive_graph(
         model,
         [create_note],
+        reviewer=FakeOutputReviewer(),
         checkpointer=InMemorySaver(),
         runtime=RuntimeConfig(approval_policy=ApprovalPolicy.graded()),
         registry=_WRITE_REGISTRY,  # create_note = MEDIUM → NOTIFY
@@ -189,6 +193,7 @@ async def test_high_write_interrupt_carries_evidence() -> None:
     graph = build_reactive_graph(
         model,
         [update_profile],
+        reviewer=FakeOutputReviewer(),
         checkpointer=InMemorySaver(),
         runtime=RuntimeConfig(approval_policy=ApprovalPolicy.graded()),
         registry=_HIGH_REGISTRY,

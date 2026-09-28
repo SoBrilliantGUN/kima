@@ -26,7 +26,7 @@ from app.agent.toolmeta import (
     validate_param_contract,
 )
 from app.integrations.llm import ChatMessage
-from tests.fakes import ScriptedLLM, make_gateway
+from tests.fakes import FakeOutputReviewer, ScriptedLLM, make_gateway
 
 # --- 防线③：敏感信息脱敏（中国场景 PII） ---
 
@@ -185,7 +185,8 @@ async def test_graph_rejects_invalid_param_and_runs_valid() -> None:
         ]
     )
     graph = build_reactive_graph(
-        model, [list_notes], registry=_registry_for_limit(), runtime=RuntimeConfig()
+        model, [list_notes], reviewer=FakeOutputReviewer(),
+        registry=_registry_for_limit(), runtime=RuntimeConfig()
     )
     initial = {
         "messages": [HumanMessage(content="hi")],
@@ -221,6 +222,7 @@ async def test_graph_security_breaker_freezes_on_repeated_violations() -> None:
     graph = build_reactive_graph(
         model,
         [list_notes],
+        reviewer=FakeOutputReviewer(),
         registry=_registry_for_limit(),
         security_breaker=SecurityBreaker(threshold=2),
         runtime=RuntimeConfig(),
@@ -262,6 +264,7 @@ async def test_graph_tool_call_budget_terminates() -> None:
     graph = build_reactive_graph(
         model,
         [list_notes],
+        reviewer=FakeOutputReviewer(),
         registry=_registry_for_limit(),
         runtime=RuntimeConfig(budget=HardBudget(max_tool_calls=1)),
     )

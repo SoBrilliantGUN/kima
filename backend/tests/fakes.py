@@ -346,9 +346,6 @@ class FakeCopilotMemoryRepository:
         self._store[memory.id] = memory
         return memory
 
-    async def delete(self, memory: CopilotMemory) -> None:
-        self._store.pop(memory.id, None)
-
     async def delete_superseded_older_than(self, cutoff: datetime) -> int:
         doomed = [
             m

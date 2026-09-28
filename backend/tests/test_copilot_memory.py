@@ -24,25 +24,24 @@ def make_service(
         gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=8)),
         judge=judge or FakeConflictJudge(),
         classifier=FakeMemoryClassifier(),
-        capacity=kwargs.get("capacity", 200),
         episodic_ttl_days=kwargs.get("episodic_ttl_days", 30),
-        recall_floor=kwargs.get("recall_floor", 0.05),
         recency_window_days=kwargs.get("recency_window_days", 7),
         conflict_top_k=kwargs.get("conflict_top_k", 10),
     )
 
 
-async def test_recall_preference_full_and_others_topk() -> None:
+async def test_recall_preference_hybrid_topk() -> None:
+    """偏好也走混合召回 top-k：数量超过 top-k 时被截断，不再是全量硬召回。"""
     service = make_service()
     async with gateway_run():
-        for i in range(3):
+        for i in range(8):
             await service.write_memory(MemoryKind.PREFERENCE, f"规则 {i}")
         for i in range(3):
             await service.write_memory(MemoryKind.FACT, f"事实 {i}", entity_id=f"e{i}")
         await service.write_memory(MemoryKind.EPISODIC, "某次事件")
 
         recalled = await service.recall("任意查询")
-    assert len(recalled.preference) == 3  # 全量注入
+    assert len(recalled.preference) == 5  # top-k=5 截断，不再全量
     assert len(recalled.fact) == 3  # top-k=5 覆盖 3 条
     assert len(recalled.episodic) == 1
 

@@ -38,6 +38,7 @@ from tests.fakes import (
     FakeKnowledgeBaseRepository,
     FakeMemoryClassifier,
     FakeNoteRepository,
+    FakeOutputReviewer,
     make_gateway,
 )
 
@@ -128,9 +129,7 @@ def make_service(
         gateway=gateway,
         judge=FakeConflictJudge(),
         classifier=FakeMemoryClassifier(),
-        capacity=200,
         episodic_ttl_days=30,
-        recall_floor=0.05,
         recency_window_days=7,
         conflict_top_k=10,
     )
@@ -150,6 +149,7 @@ def make_service(
         skill_store=FileSkillStore(tmp_path / "skills"),
         chat_repository=chat_repo,
         event_repository=event_repo,
+        reviewer=FakeOutputReviewer(),
         tuning=CopilotTuning(max_result_chars=4000),
     ), event_repo, chat_repo
 

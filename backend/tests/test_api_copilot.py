@@ -38,6 +38,7 @@ from tests.fakes import (
     FakeKnowledgeBaseRepository,
     FakeMemoryClassifier,
     FakeNoteRepository,
+    FakeOutputReviewer,
     make_gateway,
 )
 
@@ -118,9 +119,7 @@ def _make_copilot_service(tmp_path: Path) -> tuple[CopilotService, FakeChatRepos
         gateway=gateway,
         judge=FakeConflictJudge(),
         classifier=FakeMemoryClassifier(),
-        capacity=200,
         episodic_ttl_days=30,
-        recall_floor=0.05,
         recency_window_days=7,
         conflict_top_k=10,
     )
@@ -139,6 +138,7 @@ def _make_copilot_service(tmp_path: Path) -> tuple[CopilotService, FakeChatRepos
         skill_store=FileSkillStore(tmp_path / "skills"),
         chat_repository=chat_repo,
         event_repository=FakeCopilotEventRepository(),
+        reviewer=FakeOutputReviewer(),
         tuning=CopilotTuning(max_result_chars=4000),
     )
     return service, chat_repo
@@ -189,7 +189,7 @@ async def test_copilot_skills_endpoint(api_client: AsyncClient) -> None:
     response = await api_client.get("/api/copilot/skills")
     assert response.status_code == 200
     items = response.json()["items"]
-    assert len(items) == 15
+    assert len(items) == 17
     write_names = {item["name"] for item in items if item["has_side_effect"]}
     assert write_names == {
         "create_note",

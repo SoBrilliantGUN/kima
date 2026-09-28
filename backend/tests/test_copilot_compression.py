@@ -1,14 +1,14 @@
 """run 内上下文五级渐进压缩：ratio 计算、级别判定、各级压缩、图内 compress 节点。
 
-对齐「上下文是 RAM 不是硬盘」：工具结果/历史（L3）随轮次累积会稀释注意力，压缩从
-最老的工具日志逐级挤水分，L0（system）/ 最近几轮决策永远不动。
+对齐「上下文是 RAM 不是硬盘」：L5（history + 工具日志）随轮次累积会稀释注意力，压缩从
+最老的历史逐级挤水分，L0-L4（system/state/memory/skills/reminder 固定层）永不压缩。
 """
 
 from typing import Any
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatResult
 from langchain_core.tools import tool
 from pydantic import Field
@@ -18,15 +18,16 @@ from app.agent.runtime.context import (
     ContextConfig,
     ContextManager,
     estimate_ratio,
+    format_state,
     pick_level,
 )
 from app.agent.runtime.reactive import build_reactive_graph
-from tests.fakes import ScriptedLLM, gateway_run, make_gateway
+from tests.fakes import FakeOutputReviewer, ScriptedLLM, gateway_run, make_gateway
 
 
 def _messages_with_tool_cycles(cycles: int) -> list[BaseMessage]:
-    """构造 [system, q, (AIMessage(tool_call), ToolMessage(result)) * cycles]。"""
-    messages: list[BaseMessage] = [SystemMessage(content="system"), HumanMessage(content="q")]
+    """构造 [q, (AIMessage(tool_call), ToolMessage(result)) * cycles]（纯 L5，无 system）。"""
+    messages: list[BaseMessage] = [HumanMessage(content="q")]
     for i in range(cycles):
         messages.append(
             AIMessage(
@@ -40,9 +41,11 @@ def _messages_with_tool_cycles(cycles: int) -> list[BaseMessage]:
 
 def test_estimate_ratio() -> None:
     assert estimate_ratio([], max_tokens=100) == 0.0
-    # 全是 CJK 字符："你好" * 100 = 200 token + 每条消息 4 token 开销
+    # 全是 CJK 字符："你好" * 100 = 200 字符，ratio 在 (0, 1)
     ratio = estimate_ratio([HumanMessage(content="你好" * 100)], max_tokens=10_000)
     assert 0.0 < ratio < 1.0
+    # fixed_tokens（L0-L4）计入分子
+    assert estimate_ratio([], fixed_tokens=500, max_tokens=1000) == 0.5
 
 
 def test_pick_level_thresholds() -> None:
@@ -54,17 +57,24 @@ def test_pick_level_thresholds() -> None:
     assert pick_level(0.95, cfg) == CompressionLevel.EMERGENCY
 
 
+def test_format_state_has_state_prefix() -> None:
+    block = format_state(turn_count=3, tool_failures=1, last_action="echo")
+    assert block.startswith("[STATE]\n")
+    assert "Turn: 3" in block
+    assert "Failures: 1" in block
+    assert "Last action: echo" in block
+
+
 async def test_tool_compress_with_summarizer() -> None:
     cfg = ContextConfig(tool_result_min_chars=10)
     mgr = ContextManager(cfg, summarizer=make_gateway(llm=ScriptedLLM(contents=["中间摘要"])))
     messages = [
-        SystemMessage(content="system"),
         HumanMessage(content="q"),
         ToolMessage(content="A" * 5000, tool_call_id="c0"),
     ]
     async with gateway_run():
         out = await mgr.compress(messages, CompressionLevel.TOOL_COMPRESS)
-    compressed = out[2]
+    compressed = out[1]
     assert isinstance(compressed, ToolMessage)
     assert compressed.tool_call_id == "c0"
     assert "中间摘要" in str(compressed.content)
@@ -75,40 +85,45 @@ async def test_tool_compress_without_summarizer_truncates() -> None:
     cfg = ContextConfig(tool_result_min_chars=10)
     mgr = ContextManager(cfg)  # 无摘要器 → 只保留首尾
     messages = [
-        SystemMessage(content="system"),
         HumanMessage(content="q"),
         ToolMessage(content="A" * 5000, tool_call_id="c0"),
     ]
     out = await mgr.compress(messages, CompressionLevel.TOOL_COMPRESS)
-    assert "中间已截断" in str(out[2].content)
-    assert len(str(out[2].content)) < 5000
+    assert "中间已截断" in str(out[1].content)
+    assert len(str(out[1].content)) < 5000
 
 
-async def test_history_summary_keeps_head_and_recent_turn() -> None:
-    cfg = ContextConfig(recent_turns=1)
+async def test_history_summary_keeps_recent_and_summarizes_older() -> None:
+    cfg = ContextConfig(history_recent_msgs=2)
     mgr = ContextManager(cfg, summarizer=make_gateway(llm=ScriptedLLM(contents=["历史摘要内容"])))
-    messages = _messages_with_tool_cycles(3)  # [system, q] + 3 轮工具 = 8 条
+    messages = _messages_with_tool_cycles(3)  # [q] + 3 轮 = 7 条
     async with gateway_run():
         out = await mgr.compress(messages, CompressionLevel.HISTORY_SUMMARY)
-    # head(2) + summary(1) + tail(最近 1 轮 = 2) = 5
-    assert len(out) == 5
-    assert out[0].type == "system"
-    assert out[1].type == "human"  # 本轮问题保留
-    assert "历史摘要内容" in str(out[2].content)  # 中间被摘要
-    assert out[3].type == "ai"
-    assert out[4].type == "tool"
+    # summary(1) + 最近 2 条 = 3
+    assert len(out) == 3
+    assert str(out[0].content).startswith("[HISTORY SUMMARY]")
+    assert "历史摘要内容" in str(out[0].content)
+    assert out[1].type == "ai"
+    assert out[2].type == "tool"
 
 
-async def test_emergency_drops_middle() -> None:
+async def test_topic_summary_uses_topic_prefix() -> None:
+    cfg = ContextConfig(topic_recent_msgs=2)
+    mgr = ContextManager(cfg, summarizer=make_gateway(llm=ScriptedLLM(contents=["主题摘要"])))
+    messages = _messages_with_tool_cycles(3)
+    async with gateway_run():
+        out = await mgr.compress(messages, CompressionLevel.TOPIC_SUMMARY)
+    assert str(out[0].content).startswith("[TOPIC SUMMARY]")
+
+
+async def test_emergency_keeps_last_two_only() -> None:
     cfg = ContextConfig()
     mgr = ContextManager(cfg)
     messages = _messages_with_tool_cycles(3)
     out = await mgr.compress(messages, CompressionLevel.EMERGENCY)
-    assert len(out) == 4  # head(2) + tail(最近 1 轮 = 2)
-    assert out[0].type == "system"
-    assert out[1].type == "human"
-    assert out[2].type == "ai"
-    assert out[3].type == "tool"
+    assert len(out) == 2  # 最后 2 条（无历史摘要时）
+    assert out[0].type == "ai"
+    assert out[1].type == "tool"
 
 
 class _RecordingModel(FakeMessagesListChatModel):
@@ -153,9 +168,14 @@ async def test_graph_compress_node_replaces_messages() -> None:
     )
     cfg = ContextConfig(max_tokens=50)  # 极小窗口逼出压缩
     mgr = ContextManager(cfg)  # 无摘要器 → 丢弃中间
-    graph = build_reactive_graph(model, [big_result], context_manager=mgr)
+    graph = build_reactive_graph(
+        model, [big_result], reviewer=FakeOutputReviewer(), context_manager=mgr
+    )
     initial = {
         "messages": [HumanMessage(content="q")],
+        "system_prompt": "",
+        "memory_block": "",
+        "reminder": "",
         "attempts": 0,
         "review_verdict": "",
         "review_issues": [],
@@ -166,9 +186,10 @@ async def test_graph_compress_node_replaces_messages() -> None:
 
     # 三轮 agent 调用都发生
     assert len(model.received) == 3
-    # 第三轮前，compress 节点把 5 条历史压到 3 条（头 1 + 最近 1 轮 2）
+    # 第三轮前，compress 节点把历史压到「最近 2 条 + [STATE]」= 3 条
     assert len(model.received[2]) == 3
-    assert model.received[2][0].type == "human"  # 问题保留
+    assert model.received[2][0].type == "ai"  # 最近的 tool_call 保留
+    assert str(model.received[2][-1].content).startswith("[STATE]")
     # observability：updates 里出现过 compression_level > 0
     compress_levels = [
         u["compress"].get("compression_level", 0)

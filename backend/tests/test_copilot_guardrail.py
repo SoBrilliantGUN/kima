@@ -29,6 +29,7 @@ from app.agent.runtime.reactive import build_reactive_graph
 from app.agent.runtime.reactive_helpers import evaluate_tool_results
 from app.agent.runtime.state import AgentState
 from app.agent.toolmeta import SideEffectLevel, ToolMeta
+from tests.fakes import FakeOutputReviewer
 
 # —— 红线（硬正则，一票否决）——
 
@@ -253,7 +254,10 @@ async def test_injection_guard_blocks_tool_args() -> None:
         ]
     )
     graph = build_reactive_graph(
-        model, [create_note], runtime=RuntimeConfig(injection_policy=DEFAULT_INJECTION_POLICY)
+        model,
+        [create_note],
+        reviewer=FakeOutputReviewer(),
+        runtime=RuntimeConfig(injection_policy=DEFAULT_INJECTION_POLICY),
     )
     initial = {
         "messages": [HumanMessage(content="写个笔记")],

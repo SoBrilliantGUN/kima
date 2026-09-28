@@ -123,9 +123,7 @@ def make_service(
         gateway=gateway,
         judge=FakeConflictJudge(),
         classifier=FakeMemoryClassifier(),
-        capacity=200,
         episodic_ttl_days=30,
-        recall_floor=0.05,
         recency_window_days=7,
         conflict_top_k=10,
     )

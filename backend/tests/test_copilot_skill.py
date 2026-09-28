@@ -1,8 +1,17 @@
 """自定义 Skill（L2 技能层）文件存储：frontmatter 解析 + 目录只读加载。"""
 
 from pathlib import Path
+from typing import Any
 
+from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.outputs import ChatResult
+from pydantic import Field
+
+from app.agent.runtime.reactive import _build_invoked_skills_block, build_reactive_graph
 from app.core.skill_store import FileSkillStore, _parse_skill
+from tests.fakes import FakeOutputReviewer
 
 
 def test_parse_skill_with_frontmatter() -> None:
@@ -104,3 +113,59 @@ async def test_list_skills_paginates(tmp_path: Path) -> None:
     assert [s.name for s in page2] == ["skill2", "skill3"]
     all_, _ = await store.list_skills()
     assert len(all_) == 5
+
+
+def test_build_invoked_skills_block_empty() -> None:
+    assert _build_invoked_skills_block({}) == ""
+
+
+def test_build_invoked_skills_block_formats() -> None:
+    block = _build_invoked_skills_block({"写周报": "1. 完成\n2. 计划"})
+    assert block.startswith("[INVOKED SKILLS]\n")
+    assert "### Skill: 写周报" in block
+    assert "1. 完成" in block
+
+
+class _RecordingModel(FakeMessagesListChatModel):
+    """记录每次模型调用收到的消息列表。"""
+
+    received: list[list[BaseMessage]] = Field(default_factory=list, exclude=True)
+
+    def bind_tools(self, tools: object, **kwargs: object) -> "_RecordingModel":
+        return self
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        self.received.append(list(messages))
+        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+
+async def test_invoked_skills_block_injected_into_agent_input() -> None:
+    """L3 [INVOKED SKILLS] 块：get_skill 加载的全文每轮拼进 agent 输入（skills 在 state 前）。"""
+    model = _RecordingModel(responses=[AIMessage(content="done")])
+    graph = build_reactive_graph(
+        model, [], reviewer=FakeOutputReviewer(), invoked_skills={"写周报": "1. 完成\n2. 计划"}
+    )
+    initial = {
+        "messages": [HumanMessage(content="hi")],
+        "system_prompt": "system",
+        "memory_block": "",
+        "reminder": "",
+        "attempts": 0,
+        "review_verdict": "",
+        "review_issues": [],
+        "correction": "",
+    }
+    async for _ in graph.astream(initial, stream_mode="updates"):
+        pass
+    assert len(model.received) == 1
+    contents = [str(m.content) for m in model.received[0]]
+    skills_idx = next(i for i, c in enumerate(contents) if c.startswith("[INVOKED SKILLS]"))
+    state_idx = next(i for i, c in enumerate(contents) if c.startswith("[STATE]"))
+    assert skills_idx < state_idx  # skills 在 state 之前
+    assert "写周报" in contents[skills_idx]

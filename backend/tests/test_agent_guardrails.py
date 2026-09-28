@@ -332,9 +332,7 @@ async def test_side_effect_verifier_note() -> None:
         gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=8)),
         judge=FakeConflictJudge(),
         classifier=FakeMemoryClassifier(),
-        capacity=200,
         episodic_ttl_days=30,
-        recall_floor=0.05,
         recency_window_days=7,
         conflict_top_k=10,
     )
@@ -379,9 +377,7 @@ async def test_side_effect_verifier_memory_missing() -> None:
         gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=8)),
         judge=FakeConflictJudge(),
         classifier=FakeMemoryClassifier(),
-        capacity=200,
         episodic_ttl_days=30,
-        recall_floor=0.05,
         recency_window_days=7,
         conflict_top_k=10,
     )

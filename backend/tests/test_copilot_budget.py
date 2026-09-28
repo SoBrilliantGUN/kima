@@ -14,6 +14,7 @@ from app.agent.runtime.budget import (
 )
 from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.reactive import build_reactive_graph
+from tests.fakes import FakeOutputReviewer
 
 
 def test_extract_usage() -> None:
@@ -121,7 +122,8 @@ async def test_budget_terminates_graph() -> None:
         ]
     )
     graph = build_reactive_graph(
-        model, [dummy], runtime=RuntimeConfig(budget=HardBudget(max_turns=1))
+        model, [dummy], reviewer=FakeOutputReviewer(),
+        runtime=RuntimeConfig(budget=HardBudget(max_turns=1))
     )
     initial = {
         "messages": [HumanMessage(content="hi")],

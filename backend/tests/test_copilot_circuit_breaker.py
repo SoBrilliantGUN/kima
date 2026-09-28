@@ -7,6 +7,7 @@ from langchain_core.tools import tool
 
 from app.agent.resilience.circuit_breaker import CircuitBreaker, with_circuit_breaker
 from app.agent.runtime.reactive import build_reactive_graph
+from tests.fakes import FakeOutputReviewer
 
 
 def test_breaker_opens_after_failures() -> None:
@@ -76,7 +77,9 @@ def test_reactive_graph_filters_broken_tool_from_bind() -> None:
     breaker = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=60.0)
     breaker.record_failure("bad_tool")  # OPEN
 
-    build_reactive_graph(Model(responses=[]), [good_tool, bad_tool], breaker=breaker)
+    build_reactive_graph(
+        Model(responses=[]), [good_tool, bad_tool], reviewer=FakeOutputReviewer(), breaker=breaker
+    )
 
     assert bound and "bad_tool" not in bound[0]
     assert "good_tool" in bound[0]

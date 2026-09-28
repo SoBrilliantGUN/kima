@@ -192,9 +192,7 @@ def _make_service(
         gateway=gateway,
         judge=FakeConflictJudge(),
         classifier=FakeMemoryClassifier(),
-        capacity=200,
         episodic_ttl_days=30,
-        recall_floor=0.05,
         recency_window_days=7,
         conflict_top_k=10,
     )
@@ -213,7 +211,7 @@ def _make_service(
         chat_repository=FakeChatRepository(),
         event_repository=FakeCopilotEventRepository(),
         tuning=CopilotTuning(max_result_chars=4000),
-        reviewer=reviewer,
+        reviewer=reviewer or FakeOutputReviewer(),
         verifier=verifier,
     )
 

@@ -18,16 +18,14 @@ from tests.fakes import (
 
 
 def make_service(
-    repository: FakeCopilotMemoryRepository | None = None, *, capacity: int = 200
+    repository: FakeCopilotMemoryRepository | None = None,
 ) -> CopilotMemoryService:
     return CopilotMemoryService(
         repository=repository or FakeCopilotMemoryRepository(),
         gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=8)),
         judge=FakeConflictJudge(),
         classifier=FakeMemoryClassifier(),
-        capacity=capacity,
         episodic_ttl_days=30,
-        recall_floor=0.05,
         recency_window_days=7,
         conflict_top_k=10,
     )
@@ -59,47 +57,12 @@ async def test_activation_episodic_decays_by_ttl() -> None:
 
 
 async def test_activation_recency_bonus() -> None:
+    """recency 增益把情节顶到 1.0 封顶（clamp），不会超过 1.0。"""
     service = make_service()
     now = datetime.now(UTC)
     memory = _memory(MemoryKind.EPISODIC, ttl_days=30)
     memory.last_access = now
-    assert service.compute_activation(memory, now) == pytest.approx(1.0 + 0.3)
-
-
-async def test_capacity_eviction_keeps_latest() -> None:
-    repository = FakeCopilotMemoryRepository()
-    service = make_service(repository, capacity=2)
-    async with gateway_run():
-        await service.write_memory(MemoryKind.EPISODIC, "事件 1")
-        await service.write_memory(MemoryKind.EPISODIC, "事件 2")
-        await service.write_memory(MemoryKind.EPISODIC, "事件 3")  # 触发淘汰
-
-    active = await repository.count_active(MemoryKind.EPISODIC)
-    assert active == 2  # 硬淘汰到容量
-
-
-async def test_capacity_eviction_skips_constraint() -> None:
-    """constraint 是红线，容量硬淘汰不作用于它（可超容量）。"""
-    repository = FakeCopilotMemoryRepository()
-    service = make_service(repository, capacity=2)
-    async with gateway_run():
-        await service.write_memory(MemoryKind.CONSTRAINT, "规则 1")
-        await service.write_memory(MemoryKind.CONSTRAINT, "规则 2")
-        await service.write_memory(MemoryKind.CONSTRAINT, "规则 3")  # constraint 不淘汰
-
-    assert await repository.count_active(MemoryKind.CONSTRAINT) == 3
-
-
-async def test_capacity_eviction_evicts_preference() -> None:
-    """preference 仅受容量淘汰：超容量时按 activation 淘汰最低分。"""
-    repository = FakeCopilotMemoryRepository()
-    service = make_service(repository, capacity=2)
-    async with gateway_run():
-        await service.write_memory(MemoryKind.PREFERENCE, "规则 1")
-        await service.write_memory(MemoryKind.PREFERENCE, "规则 2")
-        await service.write_memory(MemoryKind.PREFERENCE, "规则 3")  # 触发淘汰
-
-    assert await repository.count_active(MemoryKind.PREFERENCE) == 2
+    assert service.compute_activation(memory, now) == pytest.approx(1.0)
 
 
 async def test_search_memory_touches_access_count() -> None:

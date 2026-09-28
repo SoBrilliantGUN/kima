@@ -11,6 +11,7 @@ from app.agent.runtime.loop_guard import (
     fingerprint,
 )
 from app.agent.runtime.reactive import build_reactive_graph
+from tests.fakes import FakeOutputReviewer
 
 
 def testfingerprint_ignores_volatile_keys() -> None:
@@ -66,7 +67,10 @@ async def test_loop_guard_terminates_graph() -> None:
         ]
     )
     graph = build_reactive_graph(
-        model, [dummy], runtime=RuntimeConfig(loop_guard=LoopGuard(repeat_threshold=3))
+        model,
+        [dummy],
+        reviewer=FakeOutputReviewer(),
+        runtime=RuntimeConfig(loop_guard=LoopGuard(repeat_threshold=3)),
     )
     initial = {
         "messages": [HumanMessage(content="hi")],
