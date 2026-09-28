@@ -64,7 +64,10 @@ class CopilotMemoryService(CopilotRecallMixin, CopilotWriteMixin):
         base = math.exp(-age_days / ttl_days)
         frequency = math.log(1 + max(0, memory.access_count or 0)) * ACCESS_LOG_FACTOR
         recency = 0.0
-        if memory.last_access is not None and (now - memory.last_access).days < self._recency_window.days:
+        if (
+            memory.last_access is not None
+            and (now - memory.last_access).days < self._recency_window.days
+        ):
             recency = RECENCY_BONUS
         return min(1.0, base + frequency + recency)
 

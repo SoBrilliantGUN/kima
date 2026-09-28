@@ -37,7 +37,8 @@ class CopilotRecallMixin:
 
         - constraint：硬召回全量（list_active，不过相似度阈值）——约束是确定域，
           「只要任务沾边就必须在场」，不靠余弦相似度碰运气。
-        - fact / preference / episodic：混合召回 = dense 向量 + lexical 词法（BM25）RRF 融合 + 软遗忘过滤。
+        - fact / preference / episodic：混合召回 = dense 向量 + lexical 词法（BM25）RRF
+          融合 + 软遗忘过滤。
         - 先做软删除复活（机制二）：窗口期内被强命中的 superseded 软记忆翻回 active，
           再走正常召回路径；最后对命中条目回写 access_count/last_access（检索强化）。
         """
