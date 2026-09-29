@@ -1,5 +1,4 @@
 import asyncio
-import logging
 from dataclasses import dataclass
 from typing import Protocol, cast
 
@@ -15,8 +14,6 @@ from playwright.async_api import (
 )
 
 from app.core.exceptions import FetchError
-
-logger = logging.getLogger(__name__)
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -133,19 +130,18 @@ class FallbackWebFetcher:
     """先静态抓取；正文为空（SPA 空壳）时回退到 Playwright 浏览器渲染。
 
     仅对 `EmptyContentError` 回退——HTTP 错误（如 404）说明页面本身不可达，
-    用浏览器渲染也无法救回，直接抛出。
+    用浏览器渲染也无法救回，直接抛出。SPA 渲染器恒在场（非 None）：如今网页大多是 SPA，
+    playwright 是必须能力，不再允许「无 SPA 回退」的静默降级。
     """
 
-    def __init__(self, static: WebFetcher, spa: WebFetcher | None) -> None:
+    def __init__(self, static: WebFetcher, spa: WebFetcher) -> None:
         self._static = static
         self._spa = spa
 
     async def fetch(self, url: str) -> FetchedPage:
         try:
             return await self._static.fetch(url)
-        except EmptyContentError as exc:
-            if self._spa is None:
-                raise FetchError("无法抓取该网页") from exc
+        except EmptyContentError:
             return await self._spa.fetch(url)
 
 
@@ -172,24 +168,14 @@ _playwright: Playwright | None = None
 _browser: Browser | None = None
 
 
-async def start_browser() -> Browser | None:
-    """启动共享的无头浏览器；失败时记录日志并返回 None，不影响应用启动。"""
+async def start_browser() -> Browser:
+    """启动共享的无头浏览器；失败抛异常拒绝启动（playwright 必须在场，不静默降级）。"""
     global _playwright, _browser
     if _browser is not None:
         return _browser
-    try:
-        _playwright = await async_playwright().start()
-        _browser = await _playwright.chromium.launch(headless=True)
-        return _browser
-    except Exception as exc:
-        logger.exception("Playwright 浏览器启动失败，SPA 页面抓取将不可用")
-        if isinstance(exc, NotImplementedError):
-            logger.warning(
-                "Windows 上以 `--reload` 运行时 uvicorn 使用 SelectorEventLoop，"
-                "无法创建子进程启动 Playwright；改用 `uvicorn app.main:app`（去掉 --reload）"
-                "即可启用 SPA 抓取"
-            )
-        return None
+    _playwright = await async_playwright().start()
+    _browser = await _playwright.chromium.launch(headless=True)
+    return _browser
 
 
 async def stop_browser() -> None:
@@ -203,6 +189,8 @@ async def stop_browser() -> None:
         _playwright = None
 
 
-def get_browser() -> Browser | None:
-    """返回已启动的共享浏览器（未启动或启动失败时为 None）。"""
+def get_browser() -> Browser:
+    """返回已启动的共享浏览器；未启动即报错（playwright 必须在场）。"""
+    if _browser is None:
+        raise RuntimeError("Playwright 浏览器未启动（必须在场，先经 lifespan start_browser）")
     return _browser

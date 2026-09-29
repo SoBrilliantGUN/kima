@@ -67,7 +67,6 @@ class Settings(BaseSettings):
     memory_conflict_top_k: int = 10  # 写记忆冲突判定的 cosine 预筛候选数
     memory_superseded_window_days: int = 7  # 软删除窗口：被 superseded 后 N 天内可召回复活
     memory_revival_similarity: float = 0.5  # 复活阈值：superseded 记忆与 query 余弦相似度 ≥ 此值
-    memory_block_max_tokens: int = 2000  # 记忆注入块 token 预算（约束子预算 ≤40%）
 
     # Copilot 工具
     copilot_max_result_chars: int = 4000  # read/search 工具返回截断阈值

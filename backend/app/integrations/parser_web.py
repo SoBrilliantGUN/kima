@@ -71,5 +71,4 @@ class WebDocumentParser:
         if self._fetcher is not None:
             return self._fetcher
         browser = get_browser()
-        spa = PlaywrightWebFetcher(browser) if browser is not None else None
-        return FallbackWebFetcher(TrafilaturaWebFetcher(), spa)
+        return FallbackWebFetcher(TrafilaturaWebFetcher(), PlaywrightWebFetcher(browser))
