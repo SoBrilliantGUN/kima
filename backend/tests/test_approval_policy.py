@@ -9,10 +9,10 @@ from app.agent.approval import (
     approval_summary,
     resolve_approval_decision,
 )
-from app.agent.runtime.config import RuntimeConfig
 from app.agent.toolmeta import SideEffectLevel, ToolMeta
 from app.models.copilot import ApprovalStatus, CopilotApproval
 from app.repositories.approval import InMemoryApprovalStore
+from tests.fakes import make_runtime_config
 
 
 def _registry(name: str, level: SideEffectLevel) -> dict[str, ToolMeta]:
@@ -55,7 +55,7 @@ def test_policy_unknown_level_fail_closed() -> None:
 
 
 def test_resolve_readonly_is_allow() -> None:
-    runtime = RuntimeConfig(approval_policy=ApprovalPolicy.graded())
+    runtime = make_runtime_config(approval_policy=ApprovalPolicy.graded())
     assert (
         resolve_approval_decision("read_note", _registry("read_note", SideEffectLevel.LOW), runtime)
         is ApprovalDecision.ALLOW
@@ -63,7 +63,7 @@ def test_resolve_readonly_is_allow() -> None:
 
 
 def test_resolve_graded_medium_is_notify() -> None:
-    runtime = RuntimeConfig(approval_policy=ApprovalPolicy.graded())
+    runtime = make_runtime_config(approval_policy=ApprovalPolicy.graded())
     assert (
         resolve_approval_decision(
             "create_note", _registry("create_note", SideEffectLevel.MEDIUM), runtime
@@ -73,27 +73,12 @@ def test_resolve_graded_medium_is_notify() -> None:
 
 
 def test_resolve_graded_high_requires_approval() -> None:
-    runtime = RuntimeConfig(approval_policy=ApprovalPolicy.graded())
+    runtime = make_runtime_config(approval_policy=ApprovalPolicy.graded())
     assert (
         resolve_approval_decision(
             "update_profile", _registry("update_profile", SideEffectLevel.HIGH), runtime
         )
         is ApprovalDecision.REQUIRE_APPROVAL
-    )
-
-
-def test_resolve_fallback_to_require_write_approval() -> None:
-    # 无 policy 时退回旧布尔语义：require_write_approval=True → 所有写审批
-    runtime = RuntimeConfig(require_write_approval=True)
-    assert (
-        resolve_approval_decision(
-            "create_note", _registry("create_note", SideEffectLevel.MEDIUM), runtime
-        )
-        is ApprovalDecision.REQUIRE_APPROVAL
-    )
-    assert (
-        resolve_approval_decision("read_note", _registry("read_note", SideEffectLevel.LOW), runtime)
-        is ApprovalDecision.ALLOW
     )
 
 

@@ -33,6 +33,7 @@ from tests.fakes import (
     FakeMemoryClassifier,
     FakeNoteRepository,
     FakeOutputReviewer,
+    FakeSideEffectVerifier,
     ScriptedLLM,
     make_gateway,
 )
@@ -303,6 +304,7 @@ async def test_review_node_verifier_forces_mismatch() -> None:
         reviewer,
         review_max_attempts=2,
         verifier=_FailingVerifier(),
+        tracker=BudgetTracker(HardBudget()),
         write_tool_names=frozenset({"create_note", "write_memory", "update_profile"}),
     )
     result = await node(_write_state())
@@ -315,7 +317,12 @@ async def test_review_node_unverified_correction() -> None:
     reviewer = FakeOutputReviewer(
         results=[ReviewResult(verdict=ReviewVerdict.UNVERIFIED, issues=[])]
     )
-    node = build_review_node(reviewer, review_max_attempts=2)
+    node = build_review_node(
+        reviewer,
+        review_max_attempts=2,
+        verifier=FakeSideEffectVerifier(),
+        tracker=BudgetTracker(HardBudget()),
+    )
     result = await node(_write_state(), {"configurable": {"thread_id": "t1"}})
     assert result["review_verdict"] == "unverified"
     assert result["correction"]

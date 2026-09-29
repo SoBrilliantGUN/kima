@@ -5,11 +5,15 @@
 以及业务意图键派生（内容派生、跨工具/跨 run 隔离）与 request_hash 参数指纹。
 """
 
+import asyncio
 import uuid
 from pathlib import Path
 
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.tools import BaseTool
 
+from app.agent.resilience.circuit_breaker import CircuitBreaker
+from app.agent.resilience.security_breaker import SecurityBreaker
 from app.agent.toolmeta import idempotency_key_for, request_hash_for
 from app.agent.tools import build_tools
 from app.core.memory_store import FileMemoryStore
@@ -36,7 +40,10 @@ from tests.fakes import (
     FakeKnowledgeBaseRepository,
     FakeMemoryClassifier,
     FakeNoteRepository,
+    FakeOutputReviewer,
+    FakeSideEffectVerifier,
     make_gateway,
+    make_runtime_config,
 )
 
 
@@ -169,6 +176,14 @@ def _make_tools(
         memory_store=FileMemoryStore(tmp_path),
         skill_store=FileSkillStore(tmp_path / "skills"),
         max_result_chars=100,
+        model=FakeMessagesListChatModel(responses=[]),
+        gateway=gateway,
+        reviewer=FakeOutputReviewer(),
+        runtime=make_runtime_config(),
+        verifier=FakeSideEffectVerifier(),
+        security_breaker=SecurityBreaker(),
+        lock=asyncio.Lock(),
+        breaker=CircuitBreaker(),
         idempotency_store=store,
     )
     return tools, note_repo, note_service

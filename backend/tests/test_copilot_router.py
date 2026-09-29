@@ -16,7 +16,6 @@ from app.agent.events import (
     CopilotStreamEvent,
 )
 from app.agent.run import run
-from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.router import Intent, classify_by_rules, classify_intent
 from app.agent.runtime.workflow import COMPLAINT_RESPONSE, REJECT_RESPONSE
 from app.agent.tools import _RAG_SUBAGENT_TOOL_NAMES, QA_TOOL_NAMES
@@ -45,6 +44,7 @@ from tests.fakes import (
     FakeOutputReviewer,
     make_copilot_defaults,
     make_gateway,
+    make_runtime_config,
 )
 
 
@@ -153,7 +153,7 @@ def make_service(
             chat_repository=chat_repo,
             event_repository=event_repo,
             reviewer=FakeOutputReviewer(),
-            runtime=RuntimeConfig(),
+            runtime=make_runtime_config(),
             **make_copilot_defaults(note_service, memory_service),
         ),
         event_repo,

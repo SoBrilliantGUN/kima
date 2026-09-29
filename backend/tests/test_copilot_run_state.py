@@ -11,6 +11,7 @@ from app.agent.resume import _has_terminal_event, resume
 from app.agent.runtime.context import RunState
 from app.agent.session import RunSession
 from app.models.copilot import CopilotEvent
+from app.repositories.approval import InMemoryApprovalStore
 from tests.fakes import FakeCopilotEventRepository
 
 
@@ -22,8 +23,8 @@ def _rt(event_repo: FakeCopilotEventRepository | None = None) -> SimpleNamespace
     return SimpleNamespace(
         db_lock=asyncio.Lock(),
         event_repository=event_repo or FakeCopilotEventRepository(),
-        approval_store=None,
-        runtime=SimpleNamespace(daily_budget=None, approval_timeout_seconds=None),
+        approval_store=InMemoryApprovalStore(),
+        runtime=SimpleNamespace(daily_budget=None, approval_timeout_seconds=900.0),
     )
 
 

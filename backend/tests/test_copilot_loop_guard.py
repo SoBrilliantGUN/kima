@@ -4,14 +4,12 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langchain_core.tools import tool
 
-from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.loop_guard import (
     InfiniteLoopDetected,
     LoopGuard,
     fingerprint,
 )
-from app.agent.runtime.reactive import build_reactive_graph
-from tests.fakes import FakeOutputReviewer
+from tests.fakes import FakeOutputReviewer, make_reactive_graph, make_runtime_config
 
 
 def testfingerprint_ignores_volatile_keys() -> None:
@@ -66,11 +64,11 @@ async def test_loop_guard_terminates_graph() -> None:
             for i in range(10)
         ]
     )
-    graph = build_reactive_graph(
+    graph = make_reactive_graph(
         model,
         [dummy],
         reviewer=FakeOutputReviewer(),
-        runtime=RuntimeConfig(loop_guard=LoopGuard(repeat_threshold=3)),
+        runtime=make_runtime_config(loop_guard=LoopGuard(repeat_threshold=3)),
     )
     initial = {
         "messages": [HumanMessage(content="hi")],
@@ -80,7 +78,7 @@ async def test_loop_guard_terminates_graph() -> None:
         "correction": "",
     }
     try:
-        async for _ in graph.astream(initial, stream_mode="updates"):
+        async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
             pass
     except InfiniteLoopDetected as exc:
         assert "死循环" in str(exc)

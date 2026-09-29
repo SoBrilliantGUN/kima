@@ -9,10 +9,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from app.agent.approval import ApprovalPolicy
-from app.agent.runtime.config import RuntimeConfig
-from app.agent.runtime.reactive import build_reactive_graph
 from app.agent.toolmeta import SideEffectLevel, ToolMeta
-from tests.fakes import FakeOutputReviewer
+from tests.fakes import FakeOutputReviewer, make_reactive_graph, make_runtime_config
 
 # 把 create_note 标为写工具（MEDIUM），使 HITL 门禁生效（不强制幂等，测试工具无该参数）
 _WRITE_REGISTRY = {
@@ -62,12 +60,12 @@ async def test_write_tool_interrupt_and_approve() -> None:
             AIMessage(content="写好了。"),
         ]
     )
-    graph = build_reactive_graph(
+    graph = make_reactive_graph(
         model,
         [create_note],
         reviewer=FakeOutputReviewer(),
         checkpointer=InMemorySaver(),
-        runtime=RuntimeConfig(require_write_approval=True),
+        runtime=make_runtime_config(approval_policy=ApprovalPolicy.strict()),
         registry=_WRITE_REGISTRY,
     )
     config = {"configurable": {"thread_id": "t1"}}
@@ -108,12 +106,12 @@ async def test_write_tool_interrupt_and_reject() -> None:
             AIMessage(content="好的。"),
         ]
     )
-    graph = build_reactive_graph(
+    graph = make_reactive_graph(
         model,
         [create_note],
         reviewer=FakeOutputReviewer(),
         checkpointer=InMemorySaver(),
-        runtime=RuntimeConfig(require_write_approval=True),
+        runtime=make_runtime_config(approval_policy=ApprovalPolicy.strict()),
         registry=_WRITE_REGISTRY,
     )
     config = {"configurable": {"thread_id": "t2"}}
@@ -151,12 +149,12 @@ async def test_medium_write_auto_executes_under_graded_policy() -> None:
             AIMessage(content="写好了。"),
         ]
     )
-    graph = build_reactive_graph(
+    graph = make_reactive_graph(
         model,
         [create_note],
         reviewer=FakeOutputReviewer(),
         checkpointer=InMemorySaver(),
-        runtime=RuntimeConfig(approval_policy=ApprovalPolicy.graded()),
+        runtime=make_runtime_config(approval_policy=ApprovalPolicy.graded()),
         registry=_WRITE_REGISTRY,  # create_note = MEDIUM → NOTIFY
     )
     config = {"configurable": {"thread_id": "t3"}}
@@ -190,12 +188,12 @@ async def test_high_write_interrupt_carries_evidence() -> None:
             AIMessage(content="好的。"),
         ]
     )
-    graph = build_reactive_graph(
+    graph = make_reactive_graph(
         model,
         [update_profile],
         reviewer=FakeOutputReviewer(),
         checkpointer=InMemorySaver(),
-        runtime=RuntimeConfig(approval_policy=ApprovalPolicy.graded()),
+        runtime=make_runtime_config(approval_policy=ApprovalPolicy.graded()),
         registry=_HIGH_REGISTRY,
     )
     config = {"configurable": {"thread_id": "t4"}}

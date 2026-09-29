@@ -23,8 +23,7 @@ from app.agent.runtime.context import (
     format_state,
     _pick_level,
 )
-from app.agent.runtime.reactive import build_reactive_graph
-from tests.fakes import FakeOutputReviewer, ScriptedLLM, gateway_run, make_gateway
+from tests.fakes import FakeOutputReviewer, ScriptedLLM, gateway_run, make_gateway, make_reactive_graph
 
 
 def _messages_with_tool_cycles(cycles: int) -> list[BaseMessage]:
@@ -105,18 +104,6 @@ async def test_tool_compress_with_summarizer() -> None:
     assert len(str(compressed.content)) < 5000
 
 
-async def test_tool_compress_without_summarizer_truncates() -> None:
-    cfg = ContextConfig(tool_result_min_chars=10)
-    mgr = ContextManager(cfg)  # 无摘要器 → 只保留首尾
-    messages = [
-        HumanMessage(content="q"),
-        ToolMessage(content="A" * 5000, tool_call_id="c0"),
-    ]
-    out = await mgr.compress(messages, CompressionLevel.TOOL_COMPRESS)
-    assert "中间已截断" in str(out[1].content)
-    assert len(str(out[1].content)) < 5000
-
-
 async def test_history_summary_keeps_recent_and_summarizes_older() -> None:
     cfg = ContextConfig(history_recent_msgs=2)
     mgr = ContextManager(cfg, summarizer=make_gateway(llm=ScriptedLLM(contents=["历史摘要内容"])))
@@ -142,7 +129,7 @@ async def test_topic_summary_uses_topic_prefix() -> None:
 
 async def test_emergency_keeps_last_two_only() -> None:
     cfg = ContextConfig()
-    mgr = ContextManager(cfg)
+    mgr = ContextManager(cfg, summarizer=make_gateway())
     messages = _messages_with_tool_cycles(3)
     out = await mgr.compress(messages, CompressionLevel.EMERGENCY)
     assert len(out) == 2  # 最后 2 条（无历史摘要时）
@@ -191,8 +178,8 @@ async def test_graph_compress_node_replaces_messages() -> None:
         ]
     )
     cfg = ContextConfig(max_tokens=50)  # 极小窗口逼出压缩
-    mgr = ContextManager(cfg)  # 无摘要器 → 丢弃中间
-    graph = build_reactive_graph(
+    mgr = ContextManager(cfg, summarizer=make_gateway(llm=ScriptedLLM(contents=["中间摘要"])))
+    graph = make_reactive_graph(
         model, [big_result], reviewer=FakeOutputReviewer(), context_manager=mgr
     )
     initial = {
@@ -206,7 +193,12 @@ async def test_graph_compress_node_replaces_messages() -> None:
         "correction": "",
         "compression_level": 0,
     }
-    updates = [u async for u in graph.astream(initial, stream_mode="updates")]
+    updates = [
+        u
+        async for u in graph.astream(
+            initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"
+        )
+    ]
 
     # 三轮 agent 调用都发生
     assert len(model.received) == 3

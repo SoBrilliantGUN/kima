@@ -10,9 +10,9 @@ from langchain_core.outputs import ChatResult
 from pydantic import Field
 
 from app.agent.runtime.context import ContextConfig
-from app.agent.runtime.reactive import _build_invoked_skills_block, build_reactive_graph
+from app.agent.runtime.reactive import _build_invoked_skills_block
 from app.core.skill_store import FileSkillStore, _parse_skill
-from tests.fakes import FakeOutputReviewer
+from tests.fakes import FakeOutputReviewer, make_reactive_graph
 
 
 def test_parse_skill_with_frontmatter() -> None:
@@ -151,7 +151,7 @@ class _RecordingModel(FakeMessagesListChatModel):
 async def test_invoked_skills_block_injected_into_agent_input() -> None:
     """L3 [INVOKED SKILLS] 块：get_skill 加载的全文每轮拼进 agent 输入（skills 在 state 前）。"""
     model = _RecordingModel(responses=[AIMessage(content="done")])
-    graph = build_reactive_graph(
+    graph = make_reactive_graph(
         model, [], reviewer=FakeOutputReviewer(), invoked_skills={"写周报": "1. 完成\n2. 计划"}
     )
     initial = {
@@ -164,7 +164,7 @@ async def test_invoked_skills_block_injected_into_agent_input() -> None:
         "review_issues": [],
         "correction": "",
     }
-    async for _ in graph.astream(initial, stream_mode="updates"):
+    async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
         pass
     assert len(model.received) == 1
     contents = [str(m.content) for m in model.received[0]]

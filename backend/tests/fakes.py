@@ -7,19 +7,24 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.gateway import GatewayConfig, LLMGateway, run_budget
-from app.agent.guardrail.review import ReviewResult, ReviewVerdict, SideEffectVerifier
+from app.agent.guardrail.review import OutputReviewer, ReviewResult, ReviewVerdict, SideEffectVerifier
 from app.agent.memory_classifier import MemoryClassification
 from app.agent.pricing import PriceQuote, PricingService
 from app.agent.resilience.circuit_breaker import CircuitBreaker
 from app.agent.resilience.retry import Backoff, RetryPolicy
 from app.agent.resilience.security_breaker import SecurityBreaker
 from app.agent.runtime.budget import BudgetTracker, DailyBudget, HardBudget, Usage
+from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.plan_model import Plan, PlanStep
+from app.agent.runtime.reactive import build_reactive_graph
 from app.agent.side_effect import DbSideEffectVerifier
 from app.agent.snapshot import InMemorySnapshotStore, SnapshotStore
+from app.agent.toolmeta import ToolRegistry
 from app.integrations.embedding import EmbeddingClient, FakeEmbeddingClient
 from app.integrations.llm import ChatMessage, ChatResult, LLMClient
 from app.integrations.parser import ParsedDocument, ParserError, SourceType
@@ -650,6 +655,69 @@ def make_gateway(
         reranker=reranker or FakeRerankerClient(),
         pricing=pricing or FakePricingService(),
         cost_store=cost_store or InMemoryCostStore(),
+    )
+
+
+class FakeSideEffectVerifier:
+    """no-op 副作用对账器：恒返回 None（不强制 mismatch）。需要失败场景的用例另注入 _FailingVerifier。"""
+
+    async def verify(self, tool_name: str, args: dict[str, Any], result: str) -> str | None:
+        return None
+
+
+def make_runtime_config(**overrides: Any) -> RuntimeConfig:
+    """构造带 concrete 默认的 ``RuntimeConfig``（daily_budget 必填），可按需覆盖任意旋钮。"""
+    kwargs: dict[str, Any] = {
+        "daily_budget": DailyBudget(
+            max_cost_cny=1e9, max_tokens=10**12, store=FakeDailyBudgetStore()
+        ),
+    }
+    kwargs.update(overrides)
+    return RuntimeConfig(**kwargs)
+
+
+def make_reactive_graph(
+    model: BaseChatModel,
+    tools: list[BaseTool],
+    *,
+    reviewer: OutputReviewer | None = None,
+    checkpointer: Any = None,
+    runtime: RuntimeConfig | None = None,
+    verifier: SideEffectVerifier | None = None,
+    registry: ToolRegistry | None = None,
+    breaker: CircuitBreaker | None = None,
+    security_breaker: SecurityBreaker | None = None,
+    gateway: LLMGateway | None = None,
+    tracker: BudgetTracker | None = None,
+    **kwargs: Any,
+) -> Any:
+    """测试 helper：构造 reactive 图，为恒在场参数提供 concrete 默认，可按需覆盖。
+
+    与 ``build_reactive_graph`` 不同，本 helper 的 Optional 参数用 None 表示「用默认 fake」，
+    而非「关闭能力」——避免每个用例手写一串无关依赖。
+    """
+    runtime = runtime or make_runtime_config()
+    reviewer = reviewer or FakeOutputReviewer()
+    verifier = verifier if verifier is not None else FakeSideEffectVerifier()
+    registry = registry if registry is not None else {}
+    breaker = breaker or CircuitBreaker()
+    security_breaker = security_breaker or SecurityBreaker()
+    gateway = gateway or make_gateway()
+    checkpointer = checkpointer or InMemorySaver()
+    tracker = tracker or BudgetTracker(runtime.budget, sink=runtime.daily_budget)
+    return build_reactive_graph(
+        model,
+        tools,
+        reviewer=reviewer,
+        checkpointer=checkpointer,
+        runtime=runtime,
+        verifier=verifier,
+        registry=registry,
+        breaker=breaker,
+        security_breaker=security_breaker,
+        gateway=gateway,
+        tracker=tracker,
+        **kwargs,
     )
 
 

@@ -18,7 +18,6 @@ from app.agent.guardrail.review import (
 )
 from app.agent.plan_runner import PlanRunner
 from app.agent.runtime.budget import BudgetTracker, HardBudget
-from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.planner import LLMPlanner, Plan, PlanStep, StepStatus
 from app.agent.toolmeta import OutputContract, apply_output_contract
 from app.core.memory_store import FileMemoryStore
@@ -47,6 +46,7 @@ from tests.fakes import (
     gateway_run,
     make_copilot_defaults,
     make_gateway,
+    make_runtime_config,
 )
 
 # --- OutputContract 上行契约关（纯函数） ---
@@ -208,7 +208,7 @@ def _make_service(
         chat_repository=FakeChatRepository(),
         event_repository=FakeCopilotEventRepository(),
         reviewer=reviewer or FakeOutputReviewer(),
-        runtime=RuntimeConfig(),
+        runtime=make_runtime_config(),
         **make_copilot_defaults(note_service, memory_service, verifier=verifier),
     )
 

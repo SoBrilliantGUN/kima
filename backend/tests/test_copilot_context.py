@@ -22,11 +22,10 @@ from app.agent.memory import (
     load_constitution,
     render_tool_hint,
 )
-from app.agent.runtime.reactive import build_reactive_graph
 from app.agent.toolmeta import SideEffectLevel, ToolMeta, ToolRegistry
 from app.models.copilot import CopilotMemory, MemoryKind
 from app.services.copilot import RecalledMemories
-from tests.fakes import FakeOutputReviewer
+from tests.fakes import FakeOutputReviewer, make_reactive_graph
 
 
 def _mem(kind: MemoryKind, content: str) -> CopilotMemory:
@@ -185,8 +184,8 @@ async def test_reminder_is_tail_message_every_round() -> None:
             AIMessage(content="done"),
         ]
     )
-    graph = build_reactive_graph(model, [echo], reviewer=FakeOutputReviewer())
-    async for _ in graph.astream(_initial(reminder=reminder), stream_mode="updates"):
+    graph = make_reactive_graph(model, [echo], reviewer=FakeOutputReviewer())
+    async for _ in graph.astream(_initial(reminder=reminder), config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
         pass
 
     assert len(model.received) == 2
@@ -198,8 +197,8 @@ async def test_reminder_is_tail_message_every_round() -> None:
 async def test_state_block_precedes_reminder() -> None:
     """装配顺序：history → (memory) → state → reminder，state 在 reminder 之前。"""
     model = _RecordingModel(responses=[AIMessage(content="ok")])
-    graph = build_reactive_graph(model, [], reviewer=FakeOutputReviewer())
-    async for _ in graph.astream(_initial(reminder="[REMINDER]\n宪法正文"), stream_mode="updates"):
+    graph = make_reactive_graph(model, [], reviewer=FakeOutputReviewer())
+    async for _ in graph.astream(_initial(reminder="[REMINDER]\n宪法正文"), config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
         pass
     assert len(model.received) == 1
     received = model.received[0]

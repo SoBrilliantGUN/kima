@@ -42,6 +42,7 @@ from tests.fakes import (
     FakeOutputReviewer,
     make_copilot_defaults,
     make_gateway,
+    make_runtime_config,
 )
 
 
@@ -139,7 +140,7 @@ def make_service(
             chat_repository=chat_repo,
             event_repository=event_repo,
             reviewer=FakeOutputReviewer(),
-            runtime=runtime or RuntimeConfig(),
+            runtime=runtime or make_runtime_config(),
             **make_copilot_defaults(note_service, memory_service),
         ),
         event_repo,
@@ -194,7 +195,7 @@ async def test_agent_tool_loop_and_event_log(tmp_path: Path) -> None:
 async def test_done_event_records_accounting_and_attribution(tmp_path: Path) -> None:
     """done 事件落「单位任务账本」：intent/model 归因 + 账本快照（成本/token/缓存命中/轮数）。"""
     model = ScriptedAgentModel(responses=[AIMessage(content="你好。")])
-    runtime = RuntimeConfig(budget=HardBudget(max_turns=5))
+    runtime = make_runtime_config(budget=HardBudget(max_turns=5))
     rt, event_repo, _ = make_service(tmp_path, model, runtime=runtime)
 
     events = [event async for event in run(rt, CopilotRequest(question="你好"))]

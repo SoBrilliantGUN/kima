@@ -9,9 +9,10 @@ from langchain_core.outputs import ChatResult
 from langchain_core.tools import BaseTool, tool
 from pydantic import Field
 
-from app.agent.runtime.config import RuntimeConfig
+from app.agent.resilience.circuit_breaker import CircuitBreaker
+from app.agent.resilience.security_breaker import SecurityBreaker
 from app.agent.runtime.rag_subagent import RagSubagent
-from tests.fakes import FakeOutputReviewer
+from tests.fakes import FakeOutputReviewer, FakeSideEffectVerifier, make_gateway, make_runtime_config
 
 
 class _RecordingModel(FakeMessagesListChatModel):
@@ -43,9 +44,13 @@ def _make_subagent(
     return RagSubagent(
         model,
         tools,
-        None,  # registry：测试自定义工具无 ToolMeta，传 None 跳过工具门禁
+        {},  # registry：测试自定义工具无 ToolMeta，传空表跳过工具门禁
         reviewer=FakeOutputReviewer(),
-        runtime=RuntimeConfig(),
+        runtime=make_runtime_config(),
+        verifier=FakeSideEffectVerifier(),
+        breaker=CircuitBreaker(),
+        security_breaker=SecurityBreaker(),
+        gateway=make_gateway(),
         max_turns=max_turns,
         max_result_chars=max_result_chars,
     )

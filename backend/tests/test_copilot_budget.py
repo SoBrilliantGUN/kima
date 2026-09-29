@@ -12,9 +12,7 @@ from app.agent.runtime.budget import (
     Usage,
     extract_usage,
 )
-from app.agent.runtime.config import RuntimeConfig
-from app.agent.runtime.reactive import build_reactive_graph
-from tests.fakes import FakeOutputReviewer
+from tests.fakes import FakeOutputReviewer, make_reactive_graph, make_runtime_config
 
 
 def test_extract_usage() -> None:
@@ -121,11 +119,11 @@ async def test_budget_terminates_graph() -> None:
             AIMessage(content="", tool_calls=[{"name": "dummy", "args": {}, "id": "c2"}]),
         ]
     )
-    graph = build_reactive_graph(
+    graph = make_reactive_graph(
         model,
         [dummy],
         reviewer=FakeOutputReviewer(),
-        runtime=RuntimeConfig(budget=HardBudget(max_turns=1)),
+        runtime=make_runtime_config(budget=HardBudget(max_turns=1)),
     )
     initial = {
         "messages": [HumanMessage(content="hi")],
@@ -135,7 +133,7 @@ async def test_budget_terminates_graph() -> None:
         "correction": "",
     }
     try:
-        async for _ in graph.astream(initial, stream_mode="updates"):
+        async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
             pass
     except BudgetExceeded as exc:
         assert "turns" in str(exc)

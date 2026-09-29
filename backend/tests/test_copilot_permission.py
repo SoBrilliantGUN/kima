@@ -17,8 +17,6 @@ from app.agent.gateway import GatewayConfig, run_budget
 from app.agent.guardrail.sensitive import redact_sensitive
 from app.agent.resilience.security_breaker import SecurityBreaker, SecurityBreakerTripped
 from app.agent.runtime.budget import BudgetExceeded, BudgetTracker, HardBudget
-from app.agent.runtime.config import RuntimeConfig
-from app.agent.runtime.reactive import build_reactive_graph
 from app.agent.toolmeta import (
     ParamContract,
     SideEffectLevel,
@@ -26,7 +24,13 @@ from app.agent.toolmeta import (
     validate_param_contract,
 )
 from app.integrations.llm import ChatMessage
-from tests.fakes import FakeOutputReviewer, ScriptedLLM, make_gateway
+from tests.fakes import (
+    FakeOutputReviewer,
+    ScriptedLLM,
+    make_gateway,
+    make_reactive_graph,
+    make_runtime_config,
+)
 
 # --- 防线③：敏感信息脱敏（中国场景 PII） ---
 
@@ -185,12 +189,12 @@ async def test_graph_rejects_invalid_param_and_runs_valid() -> None:
             AIMessage(content="done"),
         ]
     )
-    graph = build_reactive_graph(
+    graph = make_reactive_graph(
         model,
         [list_notes],
         reviewer=FakeOutputReviewer(),
         registry=_registry_for_limit(),
-        runtime=RuntimeConfig(),
+        runtime=make_runtime_config(),
     )
     initial = {
         "messages": [HumanMessage(content="hi")],
@@ -199,7 +203,7 @@ async def test_graph_rejects_invalid_param_and_runs_valid() -> None:
         "review_issues": [],
         "correction": "",
     }
-    async for _ in graph.astream(initial, stream_mode="updates"):
+    async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
         pass
     # 非法 limit=1000 被拒收，只执行了合法 limit=10
     assert calls == [10]
@@ -223,13 +227,13 @@ async def test_graph_security_breaker_freezes_on_repeated_violations() -> None:
             for i in range(5)
         ]
     )
-    graph = build_reactive_graph(
+    graph = make_reactive_graph(
         model,
         [list_notes],
         reviewer=FakeOutputReviewer(),
         registry=_registry_for_limit(),
         security_breaker=SecurityBreaker(threshold=2),
-        runtime=RuntimeConfig(),
+        runtime=make_runtime_config(),
     )
     initial = {
         "messages": [HumanMessage(content="hi")],
@@ -239,7 +243,7 @@ async def test_graph_security_breaker_freezes_on_repeated_violations() -> None:
         "correction": "",
     }
     with pytest.raises(SecurityBreakerTripped):
-        async for _ in graph.astream(initial, stream_mode="updates"):
+        async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
             pass
     assert calls == []  # 熔断前所有违规调用都被拒收，工具从未真正执行
 
@@ -265,12 +269,12 @@ async def test_graph_tool_call_budget_terminates() -> None:
             ),
         ]
     )
-    graph = build_reactive_graph(
+    graph = make_reactive_graph(
         model,
         [list_notes],
         reviewer=FakeOutputReviewer(),
         registry=_registry_for_limit(),
-        runtime=RuntimeConfig(budget=HardBudget(max_tool_calls=1)),
+        runtime=make_runtime_config(budget=HardBudget(max_tool_calls=1)),
     )
     initial = {
         "messages": [HumanMessage(content="hi")],
@@ -280,6 +284,6 @@ async def test_graph_tool_call_budget_terminates() -> None:
         "correction": "",
     }
     with pytest.raises(BudgetExceeded):
-        async for _ in graph.astream(initial, stream_mode="updates"):
+        async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
             pass
     assert calls == [10]  # 只执行了第一次，第二次被第五轴预算拦截

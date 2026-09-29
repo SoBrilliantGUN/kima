@@ -1,12 +1,16 @@
 """Copilot 工具：create_note 幂等 / update_profile 文件 / 结果截断。"""
 
+import asyncio
 import uuid
 from pathlib import Path
 
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.tools import BaseTool
 
+from app.agent.resilience.circuit_breaker import CircuitBreaker
 from app.agent.resilience.result import ToolFailure
+from app.agent.resilience.security_breaker import SecurityBreaker
 from app.agent.tools import build_tools
 from app.core.memory_store import FileMemoryStore
 from app.core.skill_store import FileSkillStore
@@ -15,6 +19,7 @@ from app.integrations.rerank import FakeRerankerClient
 from app.integrations.search import FakeWebSearchClient
 from app.rag.retriever import RagRetriever
 from app.rag.schema import RetrievedChunk
+from app.repositories.idempotency import InMemoryIdempotencyStore
 from app.services.copilot import CopilotMemoryService
 from app.services.document import DocumentService
 from app.services.knowledge_base import KnowledgeBaseService
@@ -27,7 +32,10 @@ from tests.fakes import (
     FakeKnowledgeBaseRepository,
     FakeMemoryClassifier,
     FakeNoteRepository,
+    FakeOutputReviewer,
+    FakeSideEffectVerifier,
     make_gateway,
+    make_runtime_config,
 )
 
 
@@ -76,6 +84,15 @@ def make_tools(tmp_path: Path) -> tuple[list[BaseTool], FakeNoteRepository]:
         memory_store=FileMemoryStore(tmp_path),
         skill_store=FileSkillStore(tmp_path / "skills"),
         max_result_chars=100,
+        model=FakeMessagesListChatModel(responses=[]),
+        gateway=gateway,
+        reviewer=FakeOutputReviewer(),
+        runtime=make_runtime_config(),
+        verifier=FakeSideEffectVerifier(),
+        security_breaker=SecurityBreaker(),
+        lock=asyncio.Lock(),
+        breaker=CircuitBreaker(),
+        idempotency_store=InMemoryIdempotencyStore(),
     )
     return tools, note_repo
 
