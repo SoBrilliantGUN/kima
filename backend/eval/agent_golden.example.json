@@ -1,0 +1,12 @@
+[
+  {
+    "question": "库里有哪些笔记？",
+    "expected_tools": ["list_notes"],
+    "expected_answer_contains": "笔记"
+  },
+  {
+    "question": "记住我喜欢编程",
+    "expected_tools": ["write_memory"],
+    "expected_answer_contains": "记忆"
+  }
+]
