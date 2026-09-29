@@ -24,6 +24,7 @@ from app.agent.guardrail.review import (
     ReviewVerdict,
     SideEffectVerifier,
 )
+from app.agent.runtime.context import RunState
 from app.agent.runtime.state import AgentState
 
 _TRACE_RESULT_CHARS = 2000
@@ -177,9 +178,14 @@ def build_review_node(
                     )
                     break
         if result is None:
-            run_id = None
-            if config is not None:
-                run_id = str(config.get("configurable", {}).get("thread_id", "")) or None
+            assert config is not None, (
+                "review 节点必须在 config 中携带 thread_id（=run_id）；"
+                "run_id 是快照/记账的划界键，缺它不可静默跳过"
+            )
+            assert tracker is not None, (
+                " reviewer 走网关时必须带 run context（记账/快照），不可旁路"
+            )
+            run_id = str(config.get("configurable", {}).get("thread_id", ""))
             with run_budget(tracker, run_id=run_id):
                 result = await reviewer.review(
                     _last_answer(messages), trace_from_messages(messages)
@@ -195,11 +201,16 @@ def build_review_node(
                     {"claim": "审查器未能完成对账", "tool": "", "evidence": "review_unavailable"}
                 ],
                 "correction": _unverified_note(),
+                "run_state": RunState.COMPLETED.value,
             }
         if result.verdict is ReviewVerdict.OK:
             # 审查通过：修过一轮则为 repaired，首轮通过则为 ok
             verdict = "repaired" if attempts > 0 else "ok"
-            return {"review_verdict": verdict, "review_issues": []}
+            return {
+                "review_verdict": verdict,
+                "review_issues": [],
+                "run_state": RunState.COMPLETED.value,
+            }
         issues = _issues_to_dicts(result.issues)
         if attempts >= review_max_attempts:
             # 不一致且已修满上限：放弃重试，追加诚实更正兜底
@@ -208,6 +219,7 @@ def build_review_node(
                 "review_verdict": "corrected",
                 "review_issues": issues,
                 "correction": _honest_correction(result),
+                "run_state": RunState.COMPLETED.value,
             }
         # 不一致且未到上限：注入纠正指令回 agent 继续修复（attempts 累加）
         return {
