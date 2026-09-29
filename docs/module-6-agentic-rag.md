@@ -113,7 +113,7 @@ def format_subagent_constraints(recalled: RecalledMemories) -> str:
 | `runtime/rag_subagent.py` | 删 `build_rag_subgraph`，`RagSubagent` 复用主循环图 + `run(task, constraints)` |
 | `gateway.py` | `invoke_model` 加 `count_turn` 参数（默认 True） |
 | `tools.py` | 加 `QA_TOOL_NAMES`，`build_tools` 加 reviewer/runtime/verifier/security_breaker/review_max_attempts/constraint_holder，`spawn_rag` 下传约束 |
-| `graph.py` | `build_copilot_agent` 透传 `tool_names` |
+| `compose.py` | `graph_builder` 绑 `build_reactive_graph`（`tool_names` 经 `graph_builder` 透传） |
 | `run.py` | QA 分支并入主循环（`tool_names=QA_TOOL_NAMES`），删 `_run_qa` 调用；`compose.py` 建 `rt.constraints` holder |
 | `memory.py` | 加 `format_subagent_constraints` |
 | `qa_mode.py` | **删除**（QA 不再直答） |

@@ -235,7 +235,6 @@ app/agent/
   gateway_context.py        # 网关 run 期上下文注入（ContextVar：当前 tracker + run_id）
   gateway_codec.py          # 网关序列化/指纹/出站 DLP 脱敏纯函数
   snapshot.py               # 调用级快照协议 + 内存实现（Postgres 实现见 repositories/llm_snapshot.py）
-  graph.py                  # 总图装配
   tools.py                  # 17 工具闭包（组装 + 六要素描述 + 四层守卫）
   tools_helpers.py          # 工具集模块级 helper + 参数契约
   tools_registry.py         # ToolMeta 注册表（build_registry：工具名 → 元数据单一真源）
@@ -311,7 +310,7 @@ golden 数据集 + LLM-judge + 轨迹断言（调了哪些工具/顺序/次数/�
 | ① 硬边界熔断 + 独立裁决 | 四轴 `HardBudget`（turns/seconds/tokens/cost）+ `asyncio.wait_for` 硬熔断；跨 run 全局日预算 `DailyBudget`（`DailyBudgetStore` 外置 DB 持久化）；死循环指纹 + 幽灵上下文 hash（`loop_guard.py`）；「防幻觉终止」= review 节点独立裁决（Maker/Checker 分离） | `runtime/budget.py` / `runtime/loop_guard.py` / `guardrail/review.py` |
 | ② 提议-裁决分离 + 权限门禁 | 模型只 `bind_tools` 出候选，执行前 Loop 裁决：写工具 HITL `interrupt()` 审批、注入闸 `scan_tool_calls` 拦工具参数、plan 模式 `_tool_map` 未知工具抛错；「写代码的」与「查代码的」分离（agent 产出 / review 节点复核） | `runtime/reactive.py` / `runtime/config.py` / `plan_runner.py` |
 | ③ 显式状态机 + 上下文防挤压 | 手写 `StateGraph` + 可序列化 `AgentState`（无隐式 `while True`）；上下文六层分层（L0–L5，见 §4.18），压缩只打 L5 history、系统区（L0–L4）永不压缩 | `runtime/state.py` / `runtime/reactive.py` / `runtime/context.py` / `run.py` |
-| ④ 持久化可恢复 | 细粒度 checkpoint `AsyncPostgresSaver`（Windows dev 降级 `InMemorySaver`）+ append-only 事件日志 `copilot_events`（思维链可重放） | `graph.py` / `main.py` / `repositories/copilot.py` |
+| ④ 持久化可恢复 | 细粒度 checkpoint `AsyncPostgresSaver`（Windows dev 降级 `InMemorySaver`）+ append-only 事件日志 `copilot_events`（思维链可重放） | `compose.py` / `main.py` / `repositories/copilot.py` |
 | ⑤ 同步与隔离 | 写操作串行化：`_serialize` 锁串行化共享 AsyncSession 的工具访问（单用户、单进程，无多 Loop 并发踩踏） | `tools.py` |
 
 > 思考题「执行模型伪造证据骗校验模型」的解法即 §4.5 的**确定性副作用对账**——`SideEffectVerifier` 回查 DB 而非信任另一个 LLM 的判定，从根上断了「伪造证据」这条路。
