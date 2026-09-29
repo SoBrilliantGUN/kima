@@ -25,8 +25,9 @@ class SecurityBreakerTripped(DomainError):
 class SecurityBreaker:
     """安全违规计数器：达阈值即熔断，只可手动 ``reset()``，不自动恢复。"""
 
-    def __init__(self, threshold: int = 5) -> None:
+    def __init__(self, threshold: int = 5, enabled: bool = True) -> None:
         self._threshold = threshold
+        self._enabled = enabled
         self._violations = 0
         self._tripped = False
 
@@ -39,8 +40,12 @@ class SecurityBreaker:
         return self._threshold
 
     def record_violation(self) -> bool:
-        """记一次安全违规；达到阈值即置熔断态，返回本次是否触发熔断。"""
-        if self._tripped:
+        """记一次安全违规；达到阈值即置熔断态，返回本次是否触发熔断。
+
+        未启用（``enabled=False``）时在场但不计数——用字段而非 None 表达「关闭」，
+        与运行时的「安全闸恒在场」约定一致（缺失才 fail-fast）。
+        """
+        if not self._enabled or self._tripped:
             return False
         self._violations += 1
         if self._violations >= self._threshold:
