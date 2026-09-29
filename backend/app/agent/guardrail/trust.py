@@ -5,7 +5,8 @@
 - **红线**（硬注入正则）命中 → 直接阻断，不进评分、不做加权——这是唯一的一票否决。
 - **其余** → 内容/来源/行为三维度加权平均得综合分，映射五档处置：
   放行 / 观察（审计）/ 隔离（<data> 标签）/ 脱敏 / 阻断。
-- 综合分随 run 流动、**只减不增**（各节点用 min 合并）。
+- 综合分**随每一份数据块流动**（每块自描述 ``<data trust=...>`` 标记），
+  **只减不增**，唯一例外是「隔离」处置的显式可信化 +15（结构隔离提供的额外保护）。
 
 权重与阈值是**先拍的假设值**（无红队/事故/正常流量标注集、无 ROC/PR 曲线），
 留作常量便于拿到样本后校准。来源评级动态化属「持续演化」，暂不做（静态表）。
@@ -22,22 +23,22 @@ from app.agent.guardrail.sensitive import redact_sensitive
 class Disposition(StrEnum):
     """分级处置：按综合分从宽到严。"""
 
-    PASS = "pass"              # 放行
-    OBSERVE = "observe"        # 观察（完整审计，照常处理）
+    PASS = "pass"  # 放行
+    OBSERVE = "observe"  # 观察（完整审计，照常处理）
     QUARANTINE = "quarantine"  # 隔离（关进 <data> 标签，禁止执行）
-    REDACT = "redact"          # 脱敏（过滤敏感信息后处理）
-    BLOCK = "block"            # 阻断（拒绝 + 告警）
+    REDACT = "redact"  # 脱敏（过滤敏感信息后处理）
+    BLOCK = "block"  # 阻断（拒绝 + 告警）
 
 
 # —— 来源可信度：数据出处的信任基线（静态表；动态评级属持续演化，暂不做）——
 _SOURCE_TRUST = {
-    "system": 90,       # 系统提示词（内部系统生成）
-    "user": 70,         # 认证用户输入
-    "model": 60,        # 模型输出（可被诱导）
-    "kb": 60,           # 企业知识库检索 / 读文档 / 读记忆
+    "system": 90,  # 系统提示词（内部系统生成）
+    "user": 70,  # 认证用户输入
+    "model": 60,  # 模型输出（可被诱导）
+    "kb": 60,  # 企业知识库检索 / 读文档 / 读记忆
     "tool_result": 40,  # 第三方工具返回
-    "web": 20,          # 公开网页搜索（完全不可控）
-    "document": 60,     # 待入库文档（企业知识库，可能被投毒）
+    "web": 20,  # 公开网页搜索（完全不可控）
+    "document": 60,  # 待入库文档（企业知识库，可能被投毒）
 }
 _DEFAULT_SOURCE_TRUST = 40  # 未知来源按第三方处理
 
@@ -59,6 +60,9 @@ _PASS_MIN = 80
 _OBSERVE_MIN = 60
 _QUARANTINE_MIN = 40
 _REDACT_MIN = 20
+
+# —— 显式可信化：只有「隔离」处置能回升（结构隔离提供的额外保护），固定 +15 ——
+_QUARANTINE_TRUST_BOOST = 15
 
 
 def is_red_line(text: str) -> bool:
@@ -104,23 +108,35 @@ def disposition(score: float) -> Disposition:
     return Disposition.BLOCK
 
 
-def sanitize_content(content: str, source: str) -> tuple[str, float]:
-    """对一份不可信内容做红线阻断 / 隔离 / 脱敏，返回 (处置后内容, 节点信任分)。
+def block_tag(content: str, source: str, trust: float) -> str:
+    """把一份数据包成自描述数据块：可信度分随块走、可序列化、可审计。
 
-    供非 LangGraph 的执行路径（planner 工具结果）复用 reactive 里 `evaluate_tool_results`
-    的同一套处置逻辑：红线直接毙、其余按综合分五档处置、节点信任只减不增。
+    ``<data>`` 标签同时是「这是数据、不是指令」的隔离信号——分数不再折成一个 run 级
+    标量，而是跟着每一份文本流动。
+    """
+    return f'<data trust="{trust:.0f}" source="{source}">\n{content}\n</data>'
+
+
+def sanitize_content(content: str, source: str) -> str:
+    """对一份进入上下文的数据做零信任处置，返回带可信度标记的块文本。
+
+    红线直接毙（唯一一票否决）；其余按综合分五档处置。每一份数据都包成自描述
+    ``<data trust=... source=...>`` 块（放行/观察的干净数据也打标），分数随块流动、
+    可序列化、可审计。只有「隔离」处置显式可信化 +15（结构隔离提供的额外保护），
+    其余处置（脱敏/放行/观察）不回升。
     """
     if is_red_line(content):
-        return "（检测到注入内容，已阻断。）", 0.0
+        return "（检测到注入内容，已阻断。）"
     score = composite(content_trust(content), source=source_trust(source))
     disp = disposition(score)
-    if disp is Disposition.QUARANTINE:
-        return f"<data>\n{content}\n</data>", score
-    if disp is Disposition.REDACT:
-        return f"<data>\n{redact_sensitive(content)}\n</data>", score
     if disp is Disposition.BLOCK:
-        return "（检测到可疑内容，已阻断。）", score
-    return content, score
+        return "（检测到可疑内容，已阻断。）"
+    if disp is Disposition.QUARANTINE:
+        score = min(100.0, score + _QUARANTINE_TRUST_BOOST)
+        return block_tag(content, source, score)
+    if disp is Disposition.REDACT:
+        return block_tag(redact_sensitive(content), source, score)
+    return block_tag(content, source, score)  # PASS / OBSERVE：每块都打标
 
 
 @dataclass
