@@ -16,10 +16,10 @@ from app.agent.events import (
     CopilotStreamEvent,
 )
 from app.agent.run import run
+from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.router import Intent, classify_by_rules, classify_intent
 from app.agent.runtime.workflow import COMPLAINT_RESPONSE, REJECT_RESPONSE
 from app.agent.tools import _RAG_SUBAGENT_TOOL_NAMES, QA_TOOL_NAMES
-from app.agent.tuning import CopilotTuning
 from app.core.memory_store import FileMemoryStore
 from app.core.skill_store import FileSkillStore
 from app.integrations.embedding import FakeEmbeddingClient
@@ -43,6 +43,7 @@ from tests.fakes import (
     FakeMemoryClassifier,
     FakeNoteRepository,
     FakeOutputReviewer,
+    make_copilot_defaults,
     make_gateway,
 )
 
@@ -140,8 +141,7 @@ def make_service(
     return (
         build_runtime(
             model=model,
-            checkpointer=None,
-            tracer=None,
+            gateway=gateway,
             rag_retriever=retriever,
             kb_service=kb_service,
             note_service=note_service,
@@ -153,7 +153,8 @@ def make_service(
             chat_repository=chat_repo,
             event_repository=event_repo,
             reviewer=FakeOutputReviewer(),
-            tuning=CopilotTuning(max_result_chars=4000),
+            runtime=RuntimeConfig(),
+            **make_copilot_defaults(note_service, memory_service),
         ),
         event_repo,
         chat_repo,

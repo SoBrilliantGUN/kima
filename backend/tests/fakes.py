@@ -1,3 +1,4 @@
+import asyncio
 import math
 import uuid
 from collections.abc import AsyncIterator, Sequence
@@ -5,13 +6,19 @@ from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from langchain_core.callbacks import BaseCallbackHandler
+from langgraph.checkpoint.memory import InMemorySaver
+
 from app.agent.gateway import GatewayConfig, LLMGateway, run_budget
-from app.agent.guardrail.review import ReviewResult, ReviewVerdict
+from app.agent.guardrail.review import ReviewResult, ReviewVerdict, SideEffectVerifier
 from app.agent.memory_classifier import MemoryClassification
 from app.agent.pricing import PriceQuote, PricingService
 from app.agent.resilience.circuit_breaker import CircuitBreaker
 from app.agent.resilience.retry import Backoff, RetryPolicy
+from app.agent.resilience.security_breaker import SecurityBreaker
 from app.agent.runtime.budget import BudgetTracker, DailyBudget, HardBudget, Usage
+from app.agent.runtime.plan_model import Plan, PlanStep
+from app.agent.side_effect import DbSideEffectVerifier
 from app.agent.snapshot import InMemorySnapshotStore, SnapshotStore
 from app.integrations.embedding import EmbeddingClient, FakeEmbeddingClient
 from app.integrations.llm import ChatMessage, ChatResult, LLMClient
@@ -21,9 +28,14 @@ from app.models.copilot import CopilotEvent, CopilotMemory, MemoryKind
 from app.models.document import MAX_RETRIES, Document, DocumentChunk, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase
 from app.models.note import Note
+from app.repositories.approval import InMemoryApprovalStore
+from app.repositories.idempotency import InMemoryIdempotencyStore
 from app.repositories.llm_cost import CostStore, InMemoryCostStore
+from app.repositories.plan import InMemoryPlanStore
 from app.repositories.pricing import InMemoryPricingRepository
 from app.services.conflict import ConflictVerdict
+from app.services.copilot import CopilotMemoryService
+from app.services.note import NoteService
 
 
 class FakeKnowledgeBaseRepository:
@@ -507,6 +519,22 @@ class FakeOutputReviewer:
         return ReviewResult(verdict=ReviewVerdict.OK, issues=[])
 
 
+class FakePlanner:
+    """no-op 规划器：generate 返回空 Plan（退化为 reactive），replan 返回空步骤。
+
+    build_runtime 要求 planner 恒在场（非 None），多数测试不触发 PLAN 意图、不真正
+    调用规划器，故用空实现占位即可；需要真规划器行为的用例另注入 LLMPlanner。
+    """
+
+    async def generate(self, task: str, tool_names: list[str], constraints: str = "") -> Plan:
+        return Plan(steps=())
+
+    async def replan(
+        self, plan: Plan, failed_step: PlanStep, error: str, tool_names: Sequence[str]
+    ) -> list[PlanStep]:
+        return []
+
+
 class ScriptedLLM:
     """按序回放内容的自定义 LLMClient（测试自纠错循环：先错后对）。
 
@@ -564,6 +592,32 @@ class FakePricingService(PricingService):
 
     def compute_cost(self, vendor: str, usage: Usage, quote: PriceQuote) -> float:
         return 0.0
+
+
+def make_copilot_defaults(
+    note_service: NoteService,
+    memory_service: CopilotMemoryService,
+    verifier: SideEffectVerifier | None = None,
+) -> dict[str, Any]:
+    """构造 ``build_runtime`` 所需「可关闭能力」的 concrete 默认（恒在场，非 None）。
+
+    build_runtime 要求所有依赖必填：熔断器 / 安全熔断 / 幂等内存存储 / 计划检查点 /
+    审批内存存储 / 内存 checkpointer / no-op 可观测 / no-op 规划器，这里统一给默认。
+    db_lock 与 verifier 共享同一把锁；verifier 默认用 DB 回查实现，可注入 Fake 覆盖。
+    """
+    db_lock = asyncio.Lock()
+    return {
+        "db_lock": db_lock,
+        "verifier": verifier or DbSideEffectVerifier(note_service, memory_service, db_lock),
+        "checkpointer": InMemorySaver(),
+        "tracer": BaseCallbackHandler(),
+        "planner": FakePlanner(),
+        "breaker": CircuitBreaker(),
+        "security_breaker": SecurityBreaker(),
+        "plan_store": InMemoryPlanStore(),
+        "approval_store": InMemoryApprovalStore(),
+        "idempotency_store": InMemoryIdempotencyStore(),
+    }
 
 
 def make_gateway(

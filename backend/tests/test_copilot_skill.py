@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatResult
 from pydantic import Field
 
+from app.agent.runtime.context import ContextConfig
 from app.agent.runtime.reactive import _build_invoked_skills_block, build_reactive_graph
 from app.core.skill_store import FileSkillStore, _parse_skill
 from tests.fakes import FakeOutputReviewer
@@ -108,14 +109,24 @@ async def test_list_skills_paginates(tmp_path: Path) -> None:
 
 
 def test_build_invoked_skills_block_empty() -> None:
-    assert _build_invoked_skills_block({}) == ""
+    assert _build_invoked_skills_block({}, ContextConfig().skills_budget) == ""
 
 
 def test_build_invoked_skills_block_formats() -> None:
-    block = _build_invoked_skills_block({"写周报": "1. 完成\n2. 计划"})
+    skills = {"写周报": "1. 完成\n2. 计划"}
+    block = _build_invoked_skills_block(skills, ContextConfig().skills_budget)
     assert block.startswith("[INVOKED SKILLS]\n")
     assert "### Skill: 写周报" in block
     assert "1. 完成" in block
+
+
+def test_build_invoked_skills_block_truncates_to_budget() -> None:
+    """L3 超预算截断：逐条估算，塞不下的整条丢弃（文档 §2.1「超 25k 截断」）。"""
+    skills = {"skill_a": "a" * 1000, "skill_b": "b" * 1000}
+    # 极小预算只放得下第一条（含前缀/分隔符），第二条被丢弃
+    block = _build_invoked_skills_block(skills, skills_budget=50)
+    assert "### Skill: skill_a" in block
+    assert "skill_b" not in block
 
 
 class _RecordingModel(FakeMessagesListChatModel):

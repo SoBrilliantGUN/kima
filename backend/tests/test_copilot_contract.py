@@ -18,9 +18,9 @@ from app.agent.guardrail.review import (
 )
 from app.agent.plan_runner import PlanRunner
 from app.agent.runtime.budget import BudgetTracker, HardBudget
+from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.planner import LLMPlanner, Plan, PlanStep, StepStatus
 from app.agent.toolmeta import OutputContract, apply_output_contract
-from app.agent.tuning import CopilotTuning
 from app.core.memory_store import FileMemoryStore
 from app.core.skill_store import FileSkillStore
 from app.integrations.embedding import FakeEmbeddingClient
@@ -45,6 +45,7 @@ from tests.fakes import (
     FakeOutputReviewer,
     ScriptedLLM,
     gateway_run,
+    make_copilot_defaults,
     make_gateway,
 )
 
@@ -195,8 +196,7 @@ def _make_service(
     )
     return build_runtime(
         model=model,
-        checkpointer=None,
-        tracer=None,
+        gateway=gateway,
         rag_retriever=retriever,
         kb_service=kb_service,
         note_service=note_service,
@@ -207,9 +207,9 @@ def _make_service(
         skill_store=FileSkillStore(tmp_path / "skills"),
         chat_repository=FakeChatRepository(),
         event_repository=FakeCopilotEventRepository(),
-        tuning=CopilotTuning(max_result_chars=4000),
         reviewer=reviewer or FakeOutputReviewer(),
-        verifier=verifier,
+        runtime=RuntimeConfig(),
+        **make_copilot_defaults(note_service, memory_service, verifier=verifier),
     )
 
 

@@ -12,7 +12,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage
 
 from app.agent.compose import CopilotRuntime, build_runtime
-from app.agent.tuning import CopilotTuning
+from app.agent.runtime.config import RuntimeConfig
 from app.api.deps_copilot import (
     get_copilot_memory_service,
     get_copilot_runtime,
@@ -43,6 +43,7 @@ from tests.fakes import (
     FakeMemoryClassifier,
     FakeNoteRepository,
     FakeOutputReviewer,
+    make_copilot_defaults,
     make_gateway,
 )
 
@@ -129,8 +130,7 @@ def _make_copilot_service(
     memory_store = FileMemoryStore(tmp_path)
     rt = build_runtime(
         model=ScriptedAgentModel(responses=[AIMessage(content="这是回答")]),
-        checkpointer=None,
-        tracer=None,
+        gateway=gateway,
         rag_retriever=retriever,
         kb_service=kb_service,
         note_service=note_service,
@@ -142,7 +142,8 @@ def _make_copilot_service(
         chat_repository=chat_repo,
         event_repository=FakeCopilotEventRepository(),
         reviewer=FakeOutputReviewer(),
-        tuning=CopilotTuning(max_result_chars=4000),
+        runtime=RuntimeConfig(),
+        **make_copilot_defaults(note_service, memory_service),
     )
     return rt, chat_repo, memory_store, memory_service
 

@@ -15,11 +15,13 @@ from pydantic import Field
 
 from app.agent.runtime.context import (
     CompressionLevel,
+    ContextBudget,
     ContextConfig,
     ContextManager,
-    estimate_ratio,
+    Layer,
+    _estimate_ratio,
     format_state,
-    pick_level,
+    _pick_level,
 )
 from app.agent.runtime.reactive import build_reactive_graph
 from tests.fakes import FakeOutputReviewer, ScriptedLLM, gateway_run, make_gateway
@@ -40,27 +42,49 @@ def _messages_with_tool_cycles(cycles: int) -> list[BaseMessage]:
 
 
 def test_estimate_ratio() -> None:
-    assert estimate_ratio([], max_tokens=100) == 0.0
+    assert _estimate_ratio([], max_tokens=100) == 0.0
     # 全是 CJK 字符："你好" * 100 = 200 字符，ratio 在 (0, 1)
-    ratio = estimate_ratio([HumanMessage(content="你好" * 100)], max_tokens=10_000)
+    ratio = _estimate_ratio([HumanMessage(content="你好" * 100)], max_tokens=10_000)
     assert 0.0 < ratio < 1.0
     # fixed_tokens（L0-L4）计入分子
-    assert estimate_ratio([], fixed_tokens=500, max_tokens=1000) == 0.5
+    assert _estimate_ratio([], fixed_tokens=500, max_tokens=1000) == 0.5
 
 
 def test_pick_level_thresholds() -> None:
     cfg = ContextConfig()
-    assert pick_level(0.1, cfg) == CompressionLevel.NONE
-    assert pick_level(0.6, cfg) == CompressionLevel.TOOL_COMPRESS
-    assert pick_level(0.75, cfg) == CompressionLevel.HISTORY_SUMMARY
-    assert pick_level(0.88, cfg) == CompressionLevel.TOPIC_SUMMARY
-    assert pick_level(0.95, cfg) == CompressionLevel.EMERGENCY
+    assert _pick_level(0.1, cfg) == CompressionLevel.NONE
+    assert _pick_level(0.6, cfg) == CompressionLevel.TOOL_COMPRESS
+    assert _pick_level(0.75, cfg) == CompressionLevel.HISTORY_SUMMARY
+    assert _pick_level(0.88, cfg) == CompressionLevel.TOPIC_SUMMARY
+    assert _pick_level(0.95, cfg) == CompressionLevel.EMERGENCY
+
+
+def test_context_budget_layer_limits() -> None:
+    """六层预算上限：L0/L1/L2 按 ratio、L3 固定 25k、L4/L5 无预算（文档 §2.2）。"""
+    cfg = ContextConfig(max_tokens=1048576)
+    b = ContextBudget(cfg)
+    assert b.layer_budget(Layer.L0) == int(1048576 * 0.08)
+    assert b.layer_budget(Layer.L1) == int(1048576 * 0.15)
+    assert b.layer_budget(Layer.L2) == int(1048576 * 0.35)
+    assert b.layer_budget(Layer.L3) == cfg.skills_budget
+    assert b.layer_budget(Layer.L4) is None
+    assert b.layer_budget(Layer.L5) is None
+
+
+def test_context_budget_is_over() -> None:
+    """超限判定：L0 超 8% 判超；L4/L5 无预算恒不超。"""
+    b = ContextBudget(ContextConfig(max_tokens=1000))  # L0 预算 = 80
+    assert b.is_over(Layer.L0, 81) is True
+    assert b.is_over(Layer.L0, 80) is False
+    assert b.is_over(Layer.L4, 999_999) is False
+    assert b.is_over(Layer.L5, 999_999) is False
 
 
 def test_format_state_has_state_prefix() -> None:
-    block = format_state(turn_count=3, tool_failures=1, last_action="echo")
+    block = format_state(turn_count=3, tool_failures=1, last_action="echo", state="running")
     assert block.startswith("[STATE]\n")
     assert "Turn: 3" in block
+    assert "State: running" in block
     assert "Failures: 1" in block
     assert "Last action: echo" in block
 

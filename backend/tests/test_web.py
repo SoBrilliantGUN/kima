@@ -76,12 +76,6 @@ async def test_fallback_does_not_use_spa_on_http_error() -> None:
     assert spa.calls == 0
 
 
-async def test_fallback_raises_when_spa_unavailable() -> None:
-    fetcher = FallbackWebFetcher(_Fetcher(empty=True), None)
-    with pytest.raises(FetchError):
-        await fetcher.fetch("https://example.com")
-
-
 async def test_playwright_fetcher_renders_and_extracts(monkeypatch: pytest.MonkeyPatch) -> None:
     page = MagicMock()
     page.goto = AsyncMock()

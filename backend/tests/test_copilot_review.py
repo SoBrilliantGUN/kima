@@ -11,7 +11,7 @@ from app.agent.compose import CopilotRuntime, build_runtime
 from app.agent.events import CopilotReviewEvent
 from app.agent.guardrail.review import ReviewIssue, ReviewResult, ReviewVerdict
 from app.agent.run import run
-from app.agent.tuning import CopilotTuning
+from app.agent.runtime.config import RuntimeConfig
 from app.core.memory_store import FileMemoryStore
 from app.core.skill_store import FileSkillStore
 from app.integrations.embedding import FakeEmbeddingClient
@@ -36,6 +36,7 @@ from tests.fakes import (
     FakeMemoryClassifier,
     FakeNoteRepository,
     FakeOutputReviewer,
+    make_copilot_defaults,
     make_gateway,
 )
 
@@ -131,8 +132,6 @@ def make_service(
     service = build_runtime(
         model=model,
         gateway=gateway,
-        checkpointer=None,
-        tracer=None,
         rag_retriever=retriever,
         kb_service=kb_service,
         note_service=note_service,
@@ -143,8 +142,9 @@ def make_service(
         skill_store=FileSkillStore(tmp_path / "skills"),
         chat_repository=chat_repo,
         event_repository=event_repo,
-        tuning=CopilotTuning(max_result_chars=4000, review_max_attempts=review_max_attempts),
+        runtime=RuntimeConfig(review_max_attempts=review_max_attempts),
         reviewer=reviewer,
+        **make_copilot_defaults(note_service, memory_service),
     )
     return service, event_repo, chat_repo, memory_repo
 

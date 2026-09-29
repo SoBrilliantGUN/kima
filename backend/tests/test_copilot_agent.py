@@ -17,7 +17,6 @@ from app.agent.events import (
 from app.agent.run import run
 from app.agent.runtime.budget import HardBudget
 from app.agent.runtime.config import RuntimeConfig
-from app.agent.tuning import CopilotTuning
 from app.core.memory_store import FileMemoryStore
 from app.core.skill_store import FileSkillStore
 from app.integrations.embedding import FakeEmbeddingClient
@@ -41,6 +40,7 @@ from tests.fakes import (
     FakeMemoryClassifier,
     FakeNoteRepository,
     FakeOutputReviewer,
+    make_copilot_defaults,
     make_gateway,
 )
 
@@ -127,8 +127,7 @@ def make_service(
     return (
         build_runtime(
             model=model,
-            checkpointer=None,
-            tracer=None,
+            gateway=gateway,
             rag_retriever=retriever,
             kb_service=kb_service,
             note_service=note_service,
@@ -140,8 +139,8 @@ def make_service(
             chat_repository=chat_repo,
             event_repository=event_repo,
             reviewer=FakeOutputReviewer(),
-            tuning=CopilotTuning(max_result_chars=4000),
-            runtime=runtime,
+            runtime=runtime or RuntimeConfig(),
+            **make_copilot_defaults(note_service, memory_service),
         ),
         event_repo,
         chat_repo,
@@ -206,6 +205,7 @@ async def test_done_event_records_accounting_and_attribution(tmp_path: Path) -> 
     payload = done.payload
     assert payload["intent"] == "task"
     assert payload["model"] == "unknown"
+    assert payload["run_state"] == "completed"
     accounting = payload["accounting"]
     assert set(accounting) >= {
         "cost_cny",
