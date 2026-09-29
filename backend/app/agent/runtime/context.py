@@ -238,7 +238,7 @@ class ContextManager:
     不在本类里装配。
     """
 
-    def __init__(self, cfg: ContextConfig, summarizer: LLMGateway | None = None) -> None:
+    def __init__(self, cfg: ContextConfig, summarizer: LLMGateway) -> None:
         self._cfg = cfg
         self._summarizer = summarizer
 
@@ -292,8 +292,6 @@ class ContextManager:
     async def _compress_tool_result(self, content: str) -> str:
         head = content[: self._cfg.tool_result_head_chars]
         tail = content[-self._cfg.tool_result_tail_chars :]
-        if self._summarizer is None:
-            return f"{head}\n…（中间已截断）\n{tail}"
         middle = content[
             self._cfg.tool_result_head_chars : len(content) - self._cfg.tool_result_tail_chars
         ]
@@ -321,7 +319,7 @@ class ContextManager:
         return [HumanMessage(content=f"{prefix}\n{summary}"), *recent]
 
     async def _summarize_middle(self, middle: Sequence[BaseMessage]) -> str | None:
-        if self._summarizer is None or not middle:
+        if not middle:
             return None
         text = "\n".join(f"{_role(m)}: {str(m.content)[:600]}" for m in middle)
         response = await self._summarizer.complete(

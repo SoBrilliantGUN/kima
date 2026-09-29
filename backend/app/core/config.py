@@ -114,10 +114,9 @@ class Settings(BaseSettings):
     copilot_loop_window_size: int = 5
     copilot_loop_stall_threshold: int = 4
 
-    # Copilot HITL：写工具需人工确认（interrupt 挂起 + resume）。
-    # 分级审批（Policy-as-Code，见 agent/approval.py）：graded = 仅 HIGH（覆盖人设档案）审批、
-    # MEDIUM（建笔记/写记忆）自动放行 + 事后审计；strict = 所有写操作审批（旧布尔语义）。
-    copilot_require_write_approval: bool = False
+    # Copilot HITL：写工具分级审批（Policy-as-Code，见 agent/approval.py）。
+    # graded = 仅 HIGH（覆盖人设档案）审批、MEDIUM（建笔记/写记忆）自动放行 + 事后审计；
+    # strict = 所有写操作审批。审批闸恒开（无「关闭审批」选项），默认 graded。
     copilot_approval_mode: str = "graded"  # graded | strict
     copilot_approval_timeout_seconds: float = 900.0  # 审批超时 fail-close（默认 15 分钟）
 

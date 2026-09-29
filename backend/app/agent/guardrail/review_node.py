@@ -24,6 +24,7 @@ from app.agent.guardrail.review import (
     ReviewVerdict,
     SideEffectVerifier,
 )
+from app.agent.runtime.budget import BudgetTracker
 from app.agent.runtime.context import RunState
 from app.agent.runtime.state import AgentState
 
@@ -149,9 +150,9 @@ def _write_side_effects(
 def build_review_node(
     reviewer: OutputReviewer,
     review_max_attempts: int,
-    verifier: SideEffectVerifier | None = None,
+    verifier: SideEffectVerifier,
+    tracker: BudgetTracker,
     write_tool_names: frozenset[str] = frozenset(),
-    tracker: Any = None,
 ) -> Any:
     """产出图内 review 节点：确定性副作用对账 + LLM 对账，返回 verdict/issues/correction/attempts。
 
@@ -166,24 +167,20 @@ def build_review_node(
     ) -> dict[str, Any]:
         messages = state["messages"]
         result: ReviewResult | None = None
-        if verifier is not None:
-            for name, args, tool_result in _write_side_effects(messages, write_tool_names):
-                reason = await verifier.verify(name, args, tool_result)
-                if reason is not None:
-                    result = ReviewResult(
-                        verdict=ReviewVerdict.MISMATCH,
-                        issues=[
-                            ReviewIssue(claim=reason, tool=name, evidence="side_effect_missing")
-                        ],
-                    )
-                    break
+        for name, args, tool_result in _write_side_effects(messages, write_tool_names):
+            reason = await verifier.verify(name, args, tool_result)
+            if reason is not None:
+                result = ReviewResult(
+                    verdict=ReviewVerdict.MISMATCH,
+                    issues=[
+                        ReviewIssue(claim=reason, tool=name, evidence="side_effect_missing")
+                    ],
+                )
+                break
         if result is None:
             assert config is not None, (
                 "review 节点必须在 config 中携带 thread_id（=run_id）；"
                 "run_id 是快照/记账的划界键，缺它不可静默跳过"
-            )
-            assert tracker is not None, (
-                " reviewer 走网关时必须带 run context（记账/快照），不可旁路"
             )
             run_id = str(config.get("configurable", {}).get("thread_id", ""))
             with run_budget(tracker, run_id=run_id):
