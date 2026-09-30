@@ -20,6 +20,7 @@ from app.agent.runtime.context import (
     ContextManager,
     Layer,
     _estimate_ratio,
+    format_last_error,
     format_state,
     _pick_level,
 )
@@ -86,6 +87,39 @@ def test_format_state_has_state_prefix() -> None:
     assert "State: running" in block
     assert "Failures: 1" in block
     assert "Last action: echo" in block
+    assert "Last error:" not in block  # 无失败时不注入 last_error 段
+
+
+def test_format_last_error() -> None:
+    """last_error 折成「工具名 + 类别 + 原因」的一句话信号；无失败返回空串。"""
+    assert format_last_error(None) == ""
+    assert format_last_error({}) == ""
+    assert format_last_error({"kind": "permanent"}) == "permanent（永久失败，勿重试）"
+    assert format_last_error({"kind": "transient"}) == "transient（瞬态，可重试）"
+    # 带工具名 + 失败原因：三者都在场，且 message 折叠换行
+    signal = format_last_error(
+        {"tool": "read_note", "kind": "permanent", "message": "该笔记不存在\n请换 id"}
+    )
+    assert "read_note" in signal
+    assert "permanent" in signal
+    assert "该笔记不存在" in signal
+    assert "\n" not in signal
+
+
+def test_format_state_with_last_error() -> None:
+    """带 last_error 时快照末尾追加 Last error 段（软信号注入）。"""
+    block = format_state(
+        turn_count=3,
+        tool_failures=1,
+        last_action="echo",
+        state="running",
+        last_error=format_last_error(
+            {"tool": "read_note", "kind": "permanent", "message": "该笔记不存在"}
+        ),
+    )
+    assert "Last error: read_note" in block
+    assert "permanent" in block
+    assert "该笔记不存在" in block
 
 
 async def test_tool_compress_with_summarizer() -> None:

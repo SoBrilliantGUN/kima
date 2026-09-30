@@ -10,14 +10,14 @@
 import time
 from typing import cast
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 from app.agent.resilience.circuit_breaker import CircuitBreaker
 from app.agent.resilience.error_classifier import classify_error, is_retryable
 from app.agent.resilience.result import ToolFailure, ToolOutcome
 from app.agent.resilience.retry import Backoff, RetryPolicy, with_retry
 from app.agent.runtime.planner import Plan, PlanStep
-from app.agent.runtime.reactive_helpers import inject_idempotency_keys
+from app.agent.runtime.reactive_helpers import failed_tool_name, inject_idempotency_keys
 from app.agent.runtime.state import AgentState
 from app.agent.toolmeta import SideEffectLevel, ToolMeta
 from app.core.exceptions import NotFoundError
@@ -184,6 +184,40 @@ def test_classify_error_transient_vs_permanent() -> None:
     assert classify_error(ToolFailure(outcome=ToolOutcome.TRANSIENT, reason="r")) == "transient"
     assert classify_error(ToolFailure(outcome=ToolOutcome.PERMANENT, reason="r")) == "permanent"
     assert classify_error(NotFoundError("不存在")) == "permanent"
+
+
+def test_failed_tool_name() -> None:
+    """崩溃现场补工具名：从 raw result 反查失败 ToolMessage 对应的工具名。"""
+    state = cast(
+        AgentState,
+        {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"name": "read_note", "args": {}, "id": "c1"},
+                        {"name": "search_web", "args": {}, "id": "c2"},
+                    ],
+                )
+            ]
+        },
+    )
+    # 最后一个失败的是 search_web（Error: 前缀识别）
+    result = {
+        "messages": [
+            ToolMessage(content="已找到 3 条", tool_call_id="c1"),
+            ToolMessage(content="Error: timeout", tool_call_id="c2"),
+        ]
+    }
+    assert failed_tool_name(state, result) == "search_web"
+    # 全成功 → 空串
+    ok = {
+        "messages": [
+            ToolMessage(content="已找到 3 条", tool_call_id="c1"),
+            ToolMessage(content="共 1 条结果", tool_call_id="c2"),
+        ]
+    }
+    assert failed_tool_name(state, ok) == ""
 
 
 async def test_breaker_load_restores_failure_count() -> None:

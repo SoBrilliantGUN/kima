@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
+from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
@@ -90,16 +91,53 @@ class ContextConfig:
     tool_result_tail_chars: int = 200
 
 
-def format_state(*, turn_count: int, tool_failures: int, last_action: str, state: str) -> str:
+def format_last_error(last_error: dict[str, Any] | None, max_chars: int = 200) -> str:
+    """把 ``last_error`` 折成给模型的一句话信号：工具名 + 类别 + 失败原因（空 = 无失败）。
+
+    ``last_error`` 是工具层 ``with_retry`` 重试耗尽后仍失败的最终现场
+    （``{"tool","message","kind"}``），``kind`` 由 :func:`classify_error` 产出
+    （transient/permanent）。``message`` 是 ``str(exc)``——对 ToolFailure 即红绿灯文本
+    （含原因/建议），折叠换行并截断后注入 L1 快照：快照永不压缩，ToolMessage 里的红绿灯
+    文本被压缩后信号仍在场。
+    """
+    if not last_error:
+        return ""
+    kind = last_error.get("kind", "")
+    tool = str(last_error.get("tool", "")).strip()
+    message = " ".join(str(last_error.get("message", "")).split())
+    if len(message) > max_chars:
+        message = message[:max_chars] + "…"
+    if kind == "permanent":
+        label = "permanent（永久失败，勿重试）"
+    elif kind == "transient":
+        label = "transient（瞬态，可重试）"
+    else:
+        label = str(kind)
+    parts = [p for p in (tool, label, message) if p]
+    return " · ".join(parts)
+
+
+def format_state(
+    *,
+    turn_count: int,
+    tool_failures: int,
+    last_action: str,
+    state: str,
+    last_error: str = "",
+) -> str:
     """L1 状态快照（``[STATE]`` 带内标记）：轻量运行时状态，不是完整 State JSON（噪音太大）。
 
     ``state`` 是 run 的真实生命周期状态（``RunState`` 值），由调用方从图状态读出——对齐
     prodagent ``format_state`` 的 ``run.state.value``，而不是写死 ``"running"``。
+    ``last_error`` 是经 :func:`format_last_error` 映射后的失败信号（空则省略该段）。
     """
-    return (
+    line = (
         f"[STATE]\nTurn: {turn_count} | State: {state} | "
         f"Failures: {tool_failures} | Last action: {last_action or 'none'}"
     )
+    if last_error:
+        line += f" | Last error: {last_error}"
+    return line
 
 
 def _count_message(message: BaseMessage) -> int:
