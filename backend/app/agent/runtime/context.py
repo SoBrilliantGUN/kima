@@ -213,11 +213,19 @@ def _fit_within_budget(
 
 
 def _fit_budget(messages: Sequence[BaseMessage], budget: int) -> list[BaseMessage]:
-    """按 token 预算丢最老（保持 tool 配对），返回新列表。"""
+    """按 token 预算丢最老（保持 tool 配对），返回新列表。
+
+    保头：首组若是纯 user（原始提问），即便超出预算也保留——保证压缩后首条仍为 user
+    （Anthropic/DeepSeek 要求首条非 system 必须是 user），且不丢用户原始问题。
+    """
     if budget < 0:
         budget = 0
     groups = _group_tool_pairs(messages)
     kept = _fit_within_budget(groups, budget, lambda g: sum(_count_message(m) for m in g))
+    head = groups[0] if groups else None
+    if head is not None and len(head) == 1 and isinstance(head[0], HumanMessage):
+        if not kept or kept[0] is not head:
+            kept = [head, *kept]
     return [msg for group in kept for msg in group]
 
 
@@ -346,6 +354,14 @@ class ContextManager:
 
         if summary_msg is not None:
             return [summary_msg, *emergency_msgs]
+        # 无既有摘要：保头原始提问，保证首条非 system 是 user（丢头会以 assistant/tool 开头）。
+        head = messages[0] if messages else None
+        if (
+            head is not None
+            and isinstance(head, HumanMessage)
+            and (not emergency_msgs or emergency_msgs[0] is not head)
+        ):
+            emergency_msgs = [head, *emergency_msgs]
         return emergency_msgs
 
 
