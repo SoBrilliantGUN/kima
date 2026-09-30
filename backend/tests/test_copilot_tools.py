@@ -2,6 +2,7 @@
 
 import asyncio
 import uuid
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from langchain_core.tools import BaseTool
 from app.agent.resilience.circuit_breaker import CircuitBreaker
 from app.agent.resilience.result import ToolFailure
 from app.agent.resilience.security_breaker import SecurityBreaker
+from app.agent.runtime.rag_subagent import RagSubagent
 from app.agent.tools import build_tools
 from app.core.memory_store import FileMemoryStore
 from app.core.skill_store import FileSkillStore
@@ -74,6 +76,17 @@ def make_tools(tmp_path: Path) -> tuple[list[BaseTool], FakeNoteRepository]:
         recency_window_days=7,
         conflict_top_k=10,
     )
+    breaker = CircuitBreaker()
+    rag_subagent_factory = partial(
+        RagSubagent,
+        FakeMessagesListChatModel(responses=[]),
+        reviewer=FakeOutputReviewer(),
+        runtime=make_runtime_config(),
+        verifier=FakeSideEffectVerifier(),
+        breaker=breaker,
+        security_breaker=SecurityBreaker(),
+        gateway=gateway,
+    )
     tools, _registry = build_tools(
         rag_retriever=retriever,
         kb_service=kb_service,
@@ -84,15 +97,10 @@ def make_tools(tmp_path: Path) -> tuple[list[BaseTool], FakeNoteRepository]:
         memory_store=FileMemoryStore(tmp_path),
         skill_store=FileSkillStore(tmp_path / "skills"),
         max_result_chars=100,
-        model=FakeMessagesListChatModel(responses=[]),
-        gateway=gateway,
-        reviewer=FakeOutputReviewer(),
-        runtime=make_runtime_config(),
-        verifier=FakeSideEffectVerifier(),
-        security_breaker=SecurityBreaker(),
         lock=asyncio.Lock(),
-        breaker=CircuitBreaker(),
+        breaker=breaker,
         idempotency_store=InMemoryIdempotencyStore(),
+        rag_subagent_factory=rag_subagent_factory,
     )
     return tools, note_repo
 

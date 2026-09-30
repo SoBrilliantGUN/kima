@@ -7,6 +7,7 @@
 
 import asyncio
 import uuid
+from functools import partial
 from pathlib import Path
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
@@ -14,6 +15,7 @@ from langchain_core.tools import BaseTool
 
 from app.agent.resilience.circuit_breaker import CircuitBreaker
 from app.agent.resilience.security_breaker import SecurityBreaker
+from app.agent.runtime.rag_subagent import RagSubagent
 from app.agent.toolmeta import idempotency_key_for, request_hash_for
 from app.agent.tools import build_tools
 from app.core.memory_store import FileMemoryStore
@@ -166,6 +168,17 @@ def _make_tools(
         recency_window_days=7,
         conflict_top_k=10,
     )
+    breaker = CircuitBreaker()
+    rag_subagent_factory = partial(
+        RagSubagent,
+        FakeMessagesListChatModel(responses=[]),
+        reviewer=FakeOutputReviewer(),
+        runtime=make_runtime_config(),
+        verifier=FakeSideEffectVerifier(),
+        breaker=breaker,
+        security_breaker=SecurityBreaker(),
+        gateway=gateway,
+    )
     tools, _registry = build_tools(
         rag_retriever=retriever,
         kb_service=kb_service,
@@ -176,15 +189,10 @@ def _make_tools(
         memory_store=FileMemoryStore(tmp_path),
         skill_store=FileSkillStore(tmp_path / "skills"),
         max_result_chars=100,
-        model=FakeMessagesListChatModel(responses=[]),
-        gateway=gateway,
-        reviewer=FakeOutputReviewer(),
-        runtime=make_runtime_config(),
-        verifier=FakeSideEffectVerifier(),
-        security_breaker=SecurityBreaker(),
         lock=asyncio.Lock(),
-        breaker=CircuitBreaker(),
+        breaker=breaker,
         idempotency_store=store,
+        rag_subagent_factory=rag_subagent_factory,
     )
     return tools, note_repo, note_service
 

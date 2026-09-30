@@ -169,8 +169,8 @@ def _initial(**overrides: Any) -> dict[str, Any]:
     return base
 
 
-async def test_reminder_is_tail_message_every_round() -> None:
-    """L4 宪法重放每轮钉在模型输入末尾，工具结果累积后仍在尾部（不被历史压到中间）。"""
+async def test_reminder_is_in_tail_user_message_every_round() -> None:
+    """L4 宪法重放每轮并进尾部 user 消息（与 L1 状态快照合并），工具结果累积后仍在尾部。"""
 
     @tool
     async def echo(x: str) -> str:
@@ -191,16 +191,15 @@ async def test_reminder_is_tail_message_every_round() -> None:
     assert len(model.received) == 2
     for messages in model.received:
         assert isinstance(messages[-1], HumanMessage)
-        assert messages[-1].content == reminder  # 尾部是 [REMINDER]，user 角色
+        assert reminder in str(messages[-1].content)  # 尾部 user 消息含 [REMINDER]
 
 
 async def test_state_block_precedes_reminder() -> None:
-    """装配顺序：history → (memory) → state → reminder，state 在 reminder 之前。"""
+    """装配顺序：固定层合并成一条尾部 user，state 在 reminder 之前（带内标记顺序）。"""
     model = _RecordingModel(responses=[AIMessage(content="ok")])
     graph = make_reactive_graph(model, [], reviewer=FakeOutputReviewer())
     async for _ in graph.astream(_initial(reminder="[REMINDER]\n宪法正文"), config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
         pass
     assert len(model.received) == 1
-    received = model.received[0]
-    assert str(received[-1].content).startswith("[REMINDER]")
-    assert str(received[-2].content).startswith("[STATE]")
+    tail = str(model.received[0][-1].content)
+    assert tail.index("[STATE]") < tail.index("[REMINDER]")

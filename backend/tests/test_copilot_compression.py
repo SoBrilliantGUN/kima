@@ -127,14 +127,16 @@ async def test_topic_summary_uses_topic_prefix() -> None:
     assert str(out[0].content).startswith("[TOPIC SUMMARY]")
 
 
-async def test_emergency_keeps_last_two_only() -> None:
+async def test_emergency_keeps_head_question_and_last_two() -> None:
     cfg = ContextConfig()
     mgr = ContextManager(cfg, summarizer=make_gateway())
     messages = _messages_with_tool_cycles(3)
     out = await mgr.compress(messages, CompressionLevel.EMERGENCY)
-    assert len(out) == 2  # 最后 2 条（无历史摘要时）
-    assert out[0].type == "ai"
-    assert out[1].type == "tool"
+    # 无历史摘要时：原始提问（保头）+ 最近 2 条 = 3，首条必须为 user
+    assert len(out) == 3
+    assert out[0].type == "human"
+    assert out[1].type == "ai"
+    assert out[2].type == "tool"
 
 
 class _RecordingModel(FakeMessagesListChatModel):
@@ -202,9 +204,9 @@ async def test_graph_compress_node_replaces_messages() -> None:
 
     # 三轮 agent 调用都发生
     assert len(model.received) == 3
-    # 第三轮前，compress 节点把历史压到「最近 2 条 + [STATE]」= 3 条
-    assert len(model.received[2]) == 3
-    assert model.received[2][0].type == "ai"  # 最近的 tool_call 保留
+    # 第三轮前，compress 节点把历史压到「原始提问 + 最近 2 条 + [STATE]」= 4 条
+    assert len(model.received[2]) == 4
+    assert model.received[2][0].type == "human"  # 原始提问保留（首条为 user）
     assert str(model.received[2][-1].content).startswith("[STATE]")
     # observability：updates 里出现过 compression_level > 0
     compress_levels = [

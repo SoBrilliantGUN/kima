@@ -167,8 +167,8 @@ async def test_invoked_skills_block_injected_into_agent_input() -> None:
     async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
         pass
     assert len(model.received) == 1
-    contents = [str(m.content) for m in model.received[0]]
-    skills_idx = next(i for i, c in enumerate(contents) if c.startswith("[INVOKED SKILLS]"))
-    state_idx = next(i for i, c in enumerate(contents) if c.startswith("[STATE]"))
-    assert skills_idx < state_idx  # skills 在 state 之前
-    assert "写周报" in contents[skills_idx]
+    tail = str(model.received[0][-1].content)
+    assert "写周报" in tail
+    skills_idx = tail.index("[INVOKED SKILLS]")
+    state_idx = tail.index("[STATE]")
+    assert skills_idx < state_idx  # skills 在 state 之前（合并进同一条尾部 user）

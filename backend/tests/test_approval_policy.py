@@ -21,37 +21,22 @@ def _registry(name: str, level: SideEffectLevel) -> dict[str, ToolMeta]:
 
 def test_graded_policy_maps_levels() -> None:
     policy = ApprovalPolicy.graded()
-    assert policy.decide("create_note", SideEffectLevel.LOW) is ApprovalDecision.ALLOW
-    assert policy.decide("create_note", SideEffectLevel.MEDIUM) is ApprovalDecision.NOTIFY
-    assert (
-        policy.decide("update_profile", SideEffectLevel.HIGH) is ApprovalDecision.REQUIRE_APPROVAL
-    )
+    assert policy.decide(SideEffectLevel.LOW) is ApprovalDecision.ALLOW
+    assert policy.decide(SideEffectLevel.MEDIUM) is ApprovalDecision.NOTIFY
+    assert policy.decide(SideEffectLevel.HIGH) is ApprovalDecision.REQUIRE_APPROVAL
 
 
 def test_strict_policy_requires_all_writes() -> None:
     policy = ApprovalPolicy.strict()
-    assert policy.decide("create_note", SideEffectLevel.MEDIUM) is ApprovalDecision.REQUIRE_APPROVAL
-    assert (
-        policy.decide("update_profile", SideEffectLevel.HIGH) is ApprovalDecision.REQUIRE_APPROVAL
-    )
-    assert policy.decide("read_note", SideEffectLevel.LOW) is ApprovalDecision.ALLOW
-
-
-def test_policy_override_wins_over_level_map() -> None:
-    policy = ApprovalPolicy(
-        level_map={SideEffectLevel.MEDIUM: ApprovalDecision.NOTIFY},
-        overrides={"write_memory": ApprovalDecision.REQUIRE_APPROVAL},
-    )
-    assert (
-        policy.decide("write_memory", SideEffectLevel.MEDIUM) is ApprovalDecision.REQUIRE_APPROVAL
-    )
-    assert policy.decide("create_note", SideEffectLevel.MEDIUM) is ApprovalDecision.NOTIFY
+    assert policy.decide(SideEffectLevel.MEDIUM) is ApprovalDecision.REQUIRE_APPROVAL
+    assert policy.decide(SideEffectLevel.HIGH) is ApprovalDecision.REQUIRE_APPROVAL
+    assert policy.decide(SideEffectLevel.LOW) is ApprovalDecision.ALLOW
 
 
 def test_policy_unknown_level_fail_closed() -> None:
     # level_map 缺省时 fail-closed 到审批（安全优先）
     policy = ApprovalPolicy(level_map={SideEffectLevel.LOW: ApprovalDecision.ALLOW})
-    assert policy.decide("x", SideEffectLevel.HIGH) is ApprovalDecision.REQUIRE_APPROVAL
+    assert policy.decide(SideEffectLevel.HIGH) is ApprovalDecision.REQUIRE_APPROVAL
 
 
 def test_resolve_readonly_is_allow() -> None:
