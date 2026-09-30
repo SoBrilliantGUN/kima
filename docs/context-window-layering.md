@@ -61,8 +61,8 @@ kima 现在的上下文装配是「L0 system prompt + L2 记忆块 + 历史」�
 ### 2.3 消息顺序与带内标记
 
 - **L0 system prompt 单独**，不进 messages（保 Prompt Cache 前缀稳定）。
-- messages 内顺序固定：**history → memory → skills → state → reminder**。
-- 所有注入段（memory/skills/state/reminder）都是 **user 角色**，带内标记前缀。
+- messages 内顺序固定：**history → [memory + skills + state + reminder 合并为一条 user]**。
+- 所有注入段（memory/skills/state/reminder）都是 **user 角色**、带内标记前缀；四段**合并成一条 user 消息**，且若历史尾已是 user（首轮=用户问题 / review 更正提示），进一步并进历史尾。目的：满足厂商最严「user/assistant 严格交替」约束（首条非 system 必须是 user、无连续 user，Anthropic/DeepSeek 均拒连续 user）。
 - 带内标记双作用：① 给 LLM 分界；② 给代码当锚点——消息落盘/跨轮次恢复后结构化引用丢失，代码靠 `startswith("[HISTORY SUMMARY]")` 从纯文本回捞特定条目。
 
 ---
@@ -99,6 +99,8 @@ history_budget = window − L0 − L1 − L2 − L3 − L4 − safety_margin(500
 | 0.70–0.85 | HISTORY_SUMMARY | 保留最近 6 条，更早 LLM 摘要成 `[HISTORY SUMMARY]` |
 | 0.85–0.92 | TOPIC_SUMMARY | 保留最近 4 条，更早 LLM 摘要成 `[TOPIC SUMMARY]` |
 | ≥ 0.92 | EMERGENCY | 只留最后 2 条 + 最近一条摘要 |
+
+> **保头**：丢最老的 NONE / TOOL_COMPRESS（`_fit_budget`）与 EMERGENCY（无旧摘要时）会削掉历史头；两者都**无条件保留原始提问**（首条 user）——保证压缩后「首条非 system 仍是 user」，且不丢用户原始问题。
 
 ### 3.4 SubAgent RAG（LangGraph 子图）
 

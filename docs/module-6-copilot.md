@@ -477,6 +477,8 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 - **宪法文件化**：`data/constitution.md` 只装「红线 + 身份 + 行为铁律」，同一份内容拼 L0 头部 + L4 尾部重放；`_MEMORY_GUIDANCE`/`render_tool_hint` 派生的工具提示操作引导留 L0 常规、不进宪法。
 - **压缩只打 L5**：`ratio = (L0+L1+L2+L3+L4+L5 实际占用) / window`，`history_budget = window − 其余五层 − safety_margin`。五级 `<0.25 NONE / 0.25–0.70 TOOL_COMPRESS / 0.70–0.85 HISTORY_SUMMARY(6) / 0.85–0.92 TOPIC_SUMMARY(4) / ≥0.92 EMERGENCY(2)` 只作用于 `run.messages`（L5）。
 - **带内标记**：`[MEMORY]`/`[STATE]`/`[INVOKED SKILLS]`/`[REMINDER]`/`[HISTORY SUMMARY]`/`[TOPIC SUMMARY]`/`<spilled>`，全 user 角色，双作用（给 LLM 分界 + 给代码当 `startswith` 锚点）。
+- **消息装配合并 + 严格交替**：L1/L2/L3/L4 四段注入合并成一条 user 消息（不再各自独立），若历史尾是 user（首轮问题 / review 更正）则并进历史尾；`agent_node` 出口统一合并相邻 user。满足厂商最严「首条非 system 是 user、user/assistant 严格交替」约束（Anthropic/DeepSeek 均拒连续 user）。
+- **压缩保头**：丢最老（NONE/TOOL_COMPRESS）与 EMERGENCY（无旧摘要）会削历史头，两者均无条件保留原始提问（首条 user），保证压缩后首条非 system 仍是 user、不丢用户原始问题。
 - **SubAgent RAG**：`spawn_rag` 工具派 LangGraph 子图（独立窗口 + 只读检索工具集 + 独立 budget）自主多步检索，结果过契约白名单截断，只回结论进 L2，保护主 Agent 前缀。
 - **skills 渐进加载**：L0 注入 name+description 列表；`get_skill(name)` 工具命中后全文进 `_invoked` 缓存 → L3 `[INVOKED SKILLS]` 块跨轮次持久。官方 skills = Tools（走 `bind_tools` schema，不进 L3）。
 - **window = 1048576（1M）**：对齐 DeepSeek V4 `deepseek-flash` 官方上下文窗口，配置 `copilot_context_max_tokens` 由 32000 提到 1048576；各层 ratio 8%/15%/35%、L3 固定 25k、margin 500。
