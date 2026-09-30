@@ -1,4 +1,4 @@
-"""Copilot 工具集（11 个）：副作用分层（8 只读 / 3 写）+ 六要素描述 + 元数据注册。
+"""Copilot 工具集（16 个）：副作用分层（11 只读 / 5 写）+ 六要素描述 + 元数据注册。
 
 工具闭包捕获请求作用域的仓储/服务（每个请求独立 session），故在 `build_tools` 内定义。
 每个工具用 ``@copilot_tool`` 一个装饰器同时声明「四层执行守卫（熔断 → 重试 → 超时 →
@@ -57,7 +57,6 @@ from app.rag.retriever import RagRetriever
 from app.repositories.idempotency import (
     IdempotencyOutcome,
     IdempotencyStore,
-    InMemoryIdempotencyStore,
 )
 from app.services.copilot import CopilotMemoryService
 from app.services.document import DocumentService
@@ -67,6 +66,15 @@ from app.services.note import NoteService
 # 检索类工具共用上行契约：结果流向 synthesizer（父 Agent）前截到结论级长度，
 # 长正文仍可经 spill / read_tool_result 按需取回（「大体积数据只传引用」）。
 _RETRIEVAL_CONTRACT = OutputContract(max_chars=SYNTHESIS_RESULT_CHARS)
+
+# RAG 子 Agent 的候选工具集（只读检索，独立窗口多步循环，只回结论）。
+_RAG_SUBAGENT_TOOL_NAMES = frozenset(
+    {"search_knowledge_base", "read_document", "read_note", "search_web", "search_memory"}
+)
+
+# QA 主循环工具白名单（公开，service 层 QA 路由用）：只读检索五件套 + spawn_rag。
+# QA 可派子 Agent 下沉重检索，但不写、不递归（spawn_rag 不在 _RAG_SUBAGENT_TOOL_NAMES 里）。
+QA_TOOL_NAMES = _RAG_SUBAGENT_TOOL_NAMES | {"spawn_rag"}
 
 
 def build_tools(
@@ -80,24 +88,29 @@ def build_tools(
     memory_store: MemoryFileStore,
     skill_store: SkillFileStore,
     max_result_chars: int,
-    lock: asyncio.Lock | None = None,
+    invoked_skills: dict[str, str] | None = None,
+    constraint_holder: dict[str, str] | None = None,
+    lock: asyncio.Lock,
     spill_store: SpillStore | None = None,
-    breaker: CircuitBreaker | None = None,
-    idempotency_store: IdempotencyStore | None = None,
+    breaker: CircuitBreaker,
+    idempotency_store: IdempotencyStore,
+    rag_subagent_factory: Callable[[list[BaseTool], ToolRegistry], Any],
 ) -> tuple[list[BaseTool], ToolRegistry]:
     """构建工具集 + 元数据注册表（闭包捕获请求作用域服务）。
 
     `lock` 用于串行化共享 AsyncSession 的访问，须与 CopilotService 的 DB 操作共用同一把。
     `idempotency_store` 是写工具幂等去重的持久化后端（Stripe 式幂等表，见
-    ``repositories/idempotency.py``）；None 时回退内存版（测试/无 DB 场景）。
+    ``repositories/idempotency.py``）；恒在场（无 None 降级，内存版由调用方显式提供）。
+    `rag_subagent_factory` 是 RAG 子 Agent 的装配器（``readonly_tools, registry → RagSubagent``），
+    由装配层（``compose.build_runtime``）以 partial 绑死 model/reviewer/runtime 等静态原料后
+    注入；此处只按只读白名单筛工具并实例化，子 Agent 的「怎么装」不落在本模块。
     返回 ``(tools, registry)``：registry 是「工具名 → ToolMeta」的单一真源，由
     ``@copilot_tool`` 装饰器自动收集派生，Loop 据此裁决。
     """
 
-    lock = lock or asyncio.Lock()
     spill_store = spill_store or SpillStore()
-    breaker = breaker or CircuitBreaker()
-    idempotency = idempotency_store or InMemoryIdempotencyStore()
+    idempotency = idempotency_store
+    invoked_skills = invoked_skills if invoked_skills is not None else {}
 
     # 装饰器自动收集（定义处即注册处），build_tools 结束时据此派生 tools + registry。
     collected: list[tuple[BaseTool, ToolMeta]] = []
@@ -120,6 +133,7 @@ def build_tools(
 
     def copilot_tool(
         *,
+        hint: str,
         side_effect_level: SideEffectLevel,
         source: str,
         latency_ms: int,
@@ -145,6 +159,7 @@ def build_tools(
                     t,
                     ToolMeta(
                         name=t.name,
+                        hint=hint,
                         side_effect_level=side_effect_level,
                         source=source,
                         estimated_latency_ms=latency_ms,
@@ -200,6 +215,7 @@ def build_tools(
     # --- 只读：检索 / 列出 / 读取 ---
 
     @copilot_tool(
+        hint="检索知识库原文",
         side_effect_level=SideEffectLevel.LOW,
         source="kb",
         latency_ms=3000,
@@ -224,6 +240,7 @@ def build_tools(
         return _finalize(body, "search_knowledge_base")
 
     @copilot_tool(
+        hint="列出知识库",
         side_effect_level=SideEffectLevel.LOW,
         source="tool_result",
         latency_ms=500,
@@ -245,6 +262,7 @@ def build_tools(
         return _finalize(with_has_more(lines, offset, total, "知识库"), "list_knowledge_bases")
 
     @copilot_tool(
+        hint="列出笔记",
         side_effect_level=SideEffectLevel.LOW,
         source="tool_result",
         latency_ms=500,
@@ -266,6 +284,7 @@ def build_tools(
         return _finalize(with_has_more(lines, offset, total, "笔记"), "list_notes")
 
     @copilot_tool(
+        hint="读文档全文",
         side_effect_level=SideEffectLevel.LOW,
         source="kb",
         latency_ms=1500,
@@ -292,6 +311,7 @@ def build_tools(
             ) from exc
 
     @copilot_tool(
+        hint="读笔记全文",
         side_effect_level=SideEffectLevel.LOW,
         source="kb",
         latency_ms=500,
@@ -317,6 +337,7 @@ def build_tools(
             ) from exc
 
     @copilot_tool(
+        hint="联网搜索",
         side_effect_level=SideEffectLevel.LOW,
         source="web",
         latency_ms=5000,
@@ -337,6 +358,7 @@ def build_tools(
         return _finalize(body, "search_web")
 
     @copilot_tool(
+        hint="检索长期记忆",
         side_effect_level=SideEffectLevel.LOW,
         source="kb",
         latency_ms=2000,
@@ -360,7 +382,12 @@ def build_tools(
             "\n".join(f"- [{m.kind.value}] {m.content}" for m in hits), "search_memory"
         )
 
-    @copilot_tool(side_effect_level=SideEffectLevel.LOW, source="tool_result", latency_ms=100)
+    @copilot_tool(
+        hint="读落盘结果全文",
+        side_effect_level=SideEffectLevel.LOW,
+        source="tool_result",
+        latency_ms=100,
+    )
     async def read_tool_result(path: str, grep_pattern: str | None = None) -> str:
         """读取之前落盘（spill）的工具结果全文。
         【用途】当某工具返回「结果已落盘」占位符、需要查看完整内容时使用。
@@ -388,6 +415,7 @@ def build_tools(
     # --- 写：create_note / write_memory / update_profile（副作用在描述里声明） ---
 
     @copilot_tool(
+        hint="新建笔记",
         side_effect_level=SideEffectLevel.MEDIUM,
         source="tool_result",
         latency_ms=500,
@@ -425,6 +453,7 @@ def build_tools(
         return result
 
     @copilot_tool(
+        hint="写长期记忆",
         side_effect_level=SideEffectLevel.MEDIUM,
         source="tool_result",
         latency_ms=5000,
@@ -462,6 +491,7 @@ def build_tools(
         return result
 
     @copilot_tool(
+        hint="更新档案/人设",
         side_effect_level=SideEffectLevel.HIGH,
         source="tool_result",
         latency_ms=100,
@@ -480,6 +510,7 @@ def build_tools(
         return f"已更新 {kind} 档案。"
 
     @copilot_tool(
+        hint="列出 skill",
         side_effect_level=SideEffectLevel.LOW,
         source="tool_result",
         latency_ms=100,
@@ -500,27 +531,29 @@ def build_tools(
         return _finalize(with_has_more(lines, offset, total, "skill"), "list_skills")
 
     @copilot_tool(
+        hint="加载 skill 到会话",
         side_effect_level=SideEffectLevel.LOW,
         source="tool_result",
         latency_ms=100,
         resource="file",
     )
-    async def read_skill(name: str) -> str:
-        """读取某个自定义 skill 的完整内容（markdown）。
-        【用途】需要应用某个经验/技巧时，先读它的正文。
-        【区别】读的是自定义 skill 的指令/经验；读笔记用 read_note。
-        【参数】name 为 skill 名（先用 list_skills 拿名字）。
+    async def get_skill(name: str) -> str:
+        """加载某个自定义 skill 的全文到本会话（渐进式加载，跨轮次持续生效）。
+        【用途】看到系统提示里的「可用 Skills」列表后，需要应用某个经验/技巧时先加载它。
+        【区别】get_skill 把全文加载进 L3（跨轮次持久，后续每轮持续注入）。
+        【参数】name 为 skill 名（「可用 Skills」列表里有）。
         【约束】只读无副作用；名字不存在会失败（不要重试同一名字）。
-        【示例】read_skill("写周报") → skill 的正文。"""
+        【示例】get_skill("写周报") → 已加载 skill「写周报」，后续持续遵守其指引。"""
         skill = await skill_store.read_skill(name)
         if skill is None:
             raise _deny(
                 f"skill「{name}」不存在", "请先用 list_skills 拿到存在的名字。", "not_found"
             )
-        header = f"# {skill.name}" + (f"\n{skill.description}" if skill.description else "")
-        return _finalize(f"{header}\n\n{skill.content}", "read_skill")
+        invoked_skills[name] = skill.content
+        return f"已加载 skill「{name}」，本会话后续会持续遵守其指引。"
 
     @copilot_tool(
+        hint="写/覆盖 skill",
         side_effect_level=SideEffectLevel.MEDIUM,
         source="tool_result",
         latency_ms=100,
@@ -537,6 +570,7 @@ def build_tools(
         return f"已写入 skill「{name}」。"
 
     @copilot_tool(
+        hint="删除 skill",
         side_effect_level=SideEffectLevel.HIGH,
         source="tool_result",
         latency_ms=100,
@@ -555,6 +589,35 @@ def build_tools(
                 f"skill「{name}」不存在", "请先用 list_skills 拿到存在的名字。", "not_found"
             )
         return f"已删除 skill「{name}」。"
+
+    # RAG 子 Agent（SubAgent）：复用主循环图（对等完整版），独立窗口检索、只回结论。
+    # 装配原料（model/reviewer/runtime/...）由调用方经 ``rag_subagent_factory`` 提供
+    # （见 compose.build_runtime 的 partial），此处只按只读白名单筛工具并实例化。
+    readonly_tools = [
+        t for t, meta in collected if meta.is_readonly and t.name in _RAG_SUBAGENT_TOOL_NAMES
+    ]
+    readonly_registry = {
+        t.name: meta
+        for t, meta in collected
+        if meta.is_readonly and t.name in _RAG_SUBAGENT_TOOL_NAMES
+    }
+    rag_subagent = rag_subagent_factory(readonly_tools, readonly_registry)
+
+    @copilot_tool(
+        hint="派检索子 Agent，只回结论",
+        side_effect_level=SideEffectLevel.LOW,
+        source="tool_result",
+        latency_ms=30000,
+    )
+    async def spawn_rag(task: str) -> str:
+        """派一个检索子 Agent 检索知识库，只返回结论（保护主 Agent 上下文）。
+        【用途】需要检索知识库并综合成结论时使用，避免把大段原文塞进主对话。
+        【区别】spawn_rag 派子 Agent 独立检索、只回结论；直接检索用 search_knowledge_base。
+        【参数】task 为检索子任务描述（含目标与约束）。
+        【约束】只读无副作用；子 Agent 独立窗口、多轮检索，延迟较高。
+        【示例】spawn_rag("检索项目架构并总结要点") → 结论文本。"""
+        constraints = (constraint_holder or {}).get("constraints", "")
+        return await rag_subagent.run(task, constraints=constraints)
 
     tools = [t for t, _ in collected]
     registry: ToolRegistry = {t.name: meta for t, meta in collected}
