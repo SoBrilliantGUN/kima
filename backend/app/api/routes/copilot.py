@@ -1,4 +1,8 @@
-"""Copilot 端点：流式对话（SSE）+ 只读记忆面板 + 内置技能清单。"""
+"""Copilot 端点：流式对话（SSE）+ 只读记忆面板 + 内置技能清单。
+
+对话运行时入口（``run`` / ``resume``）收装配好的 ``CopilotRuntime``；只读查询
+（记忆面板 / 技能清单）不再经过对话运行时，直接依赖底层 store / service。
+"""
 
 import json
 from collections.abc import AsyncIterator
@@ -16,7 +20,14 @@ from app.agent.events import (
     CopilotStepEvent,
     CopilotStreamEvent,
 )
-from app.api.deps import CopilotServiceDep, SkillFileStoreDep
+from app.agent.resume import list_pending_approvals, resume
+from app.agent.run import run
+from app.api.deps import (
+    CopilotMemoryServiceDep,
+    CopilotRuntimeDep,
+    MemoryFileStoreDep,
+    SkillFileStoreDep,
+)
 from app.core.exceptions import DomainError
 from app.schemas.copilot import (
     CopilotApprovalList,
@@ -71,12 +82,12 @@ def _event_to_sse(event: CopilotStreamEvent) -> str:
 
 
 @router.post("/chat")
-async def copilot_chat(request: CopilotRequest, service: CopilotServiceDep) -> StreamingResponse:
+async def copilot_chat(request: CopilotRequest, rt: CopilotRuntimeDep) -> StreamingResponse:
     """Copilot 流式对话（SSE）：meta → step* → delta* → review? → done；失败发 error 事件。"""
 
     async def stream() -> AsyncIterator[str]:
         try:
-            async for event in service.run(request):
+            async for event in run(rt, request):
                 yield _event_to_sse(event)
         except DomainError as exc:
             yield _sse("error", {"code": exc.code, "message": str(exc)})
@@ -88,13 +99,14 @@ async def copilot_chat(request: CopilotRequest, service: CopilotServiceDep) -> S
 
 @router.post("/approve")
 async def copilot_approve(
-    request: CopilotApproveRequest, service: CopilotServiceDep
+    request: CopilotApproveRequest, rt: CopilotRuntimeDep
 ) -> StreamingResponse:
     """HITL 审批回执：按 run_id 续跑，approve 重放写工具 / reject 返回拒绝。"""
 
     async def stream() -> AsyncIterator[str]:
         try:
-            async for event in service.resume(
+            async for event in resume(
+                rt,
                 str(request.run_id),
                 request.decision,
                 request.conversation_id,
@@ -110,18 +122,21 @@ async def copilot_approve(
 
 
 @router.get("/approvals/pending", response_model=CopilotApprovalList)
-async def get_pending_approvals(service: CopilotServiceDep) -> CopilotApprovalList:
+async def get_pending_approvals(rt: CopilotRuntimeDep) -> CopilotApprovalList:
     """找回挂起的审批单（前端刷新/关闭后仍可据此续批）；惰性失效已过期的 pending。"""
-    approvals = await service.list_pending_approvals()
-    return CopilotApprovalList(
-        items=[CopilotApprovalRead.model_validate(a) for a in approvals]
-    )
+    approvals = await list_pending_approvals(rt)
+    return CopilotApprovalList(items=[CopilotApprovalRead.model_validate(a) for a in approvals])
 
 
 @router.get("/memory", response_model=CopilotMemoryList)
-async def get_copilot_memory(service: CopilotServiceDep) -> CopilotMemoryList:
+async def get_copilot_memory(
+    memory_store: MemoryFileStoreDep,
+    memory_service: CopilotMemoryServiceDep,
+) -> CopilotMemoryList:
     """只读记忆面板：Soul/User 全文 + 三型记忆条目。"""
-    soul, user, memories = await service.get_memory_snapshot()
+    soul = await memory_store.read("soul")
+    user = await memory_store.read("user")
+    memories = await memory_service.list_all()
     return CopilotMemoryList(
         soul=soul,
         user=user,
@@ -130,10 +145,17 @@ async def get_copilot_memory(service: CopilotServiceDep) -> CopilotMemoryList:
 
 
 @router.get("/skills", response_model=CopilotSkillsList)
-async def get_copilot_skills(service: CopilotServiceDep) -> CopilotSkillsList:
+async def get_copilot_skills(rt: CopilotRuntimeDep) -> CopilotSkillsList:
     """内置技能清单（名称 + 描述 + 是否写）。"""
-    skills = service.list_skills()
-    return CopilotSkillsList(items=[CopilotSkillRead.model_validate(s) for s in skills])
+    items = [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "has_side_effect": tool.name in rt.write_tool_names,
+        }
+        for tool in rt.tools
+    ]
+    return CopilotSkillsList(items=[CopilotSkillRead.model_validate(s) for s in items])
 
 
 @router.get("/custom-skills", response_model=CopilotCustomSkillList)
