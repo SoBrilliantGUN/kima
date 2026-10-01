@@ -31,7 +31,9 @@ def _rt(event_repo: FakeCopilotEventRepository | None = None) -> SimpleNamespace
 class _ScriptedGraph:
     """按给定 (mode, payload) 序列回放 astream，或直接抛异常。"""
 
-    def __init__(self, payloads: list[tuple[str, dict]] | None = None, exc: Exception | None = None):
+    def __init__(
+        self, payloads: list[tuple[str, dict]] | None = None, exc: Exception | None = None
+    ):
         self._payloads = payloads or []
         self._exc = exc
 
@@ -70,14 +72,23 @@ async def test_stream_graph_marks_suspended_on_interrupt() -> None:
                 {
                     "__interrupt__": [
                         SimpleNamespace(
-                            value={"tool": "create_note", "args": {}, "summary": "", "level": "high"}
+                            value={
+                                "tool": "create_note",
+                                "args": {},
+                                "summary": "",
+                                "level": "high",
+                            }
                         )
                     ]
                 },
             )
         ]
     )
-    events = [e async for e in stream_graph(_rt(), graph, {}, uuid.uuid4(), {}, session, uuid.uuid4(), uuid.uuid4())]
+    events = [
+        e async for e in stream_graph(
+            _rt(), graph, {}, uuid.uuid4(), {}, session, uuid.uuid4(), uuid.uuid4()
+        )
+    ]
     assert session.run_state == RunState.SUSPENDED.value
     assert len(events) == 1  # 只 yield approval 事件
 
@@ -87,7 +98,11 @@ async def test_stream_graph_marks_completed_on_review_terminal() -> None:
     graph = _ScriptedGraph(
         payloads=[("updates", {"review": {"review_verdict": "ok", "review_issues": []}})]
     )
-    events = [e async for e in stream_graph(_rt(), graph, {}, uuid.uuid4(), {}, session, uuid.uuid4(), uuid.uuid4())]
+    events = [
+        e async for e in stream_graph(
+            _rt(), graph, {}, uuid.uuid4(), {}, session, uuid.uuid4(), uuid.uuid4()
+        )
+    ]
     assert session.run_state == RunState.COMPLETED.value
     assert len(events) == 1  # review 事件
 
@@ -97,7 +112,11 @@ async def test_stream_graph_marks_failed_on_exception() -> None:
     rt = _rt()
     graph = _ScriptedGraph(exc=RuntimeError("boom"))
     with pytest.raises(RuntimeError, match="boom"):
-        _ = [e async for e in stream_graph(rt, graph, {}, uuid.uuid4(), {}, session, uuid.uuid4(), uuid.uuid4())]
+        _ = [
+            e async for e in stream_graph(
+                rt, graph, {}, uuid.uuid4(), {}, session, uuid.uuid4(), uuid.uuid4()
+            )
+        ]
     assert session.run_state == RunState.FAILED.value
     # 错误事件落库时携带 run_state
     assert rt.event_repository.events[-1].type == "error"

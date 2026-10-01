@@ -265,7 +265,11 @@ async def test_injection_guard_blocks_tool_args() -> None:
         "correction": "",
     }
     try:
-        async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
+        async for _ in graph.astream(
+            initial,
+            config={"configurable": {"thread_id": "t1"}},
+            stream_mode="updates",
+        ):
             pass
     except PromptInjectionDetected:
         pass

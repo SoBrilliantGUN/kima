@@ -78,7 +78,11 @@ async def test_loop_guard_terminates_graph() -> None:
         "correction": "",
     }
     try:
-        async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
+        async for _ in graph.astream(
+            initial,
+            config={"configurable": {"thread_id": "t1"}},
+            stream_mode="updates",
+        ):
             pass
     except InfiniteLoopDetected as exc:
         assert "死循环" in str(exc)

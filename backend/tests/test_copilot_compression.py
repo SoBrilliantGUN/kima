@@ -20,11 +20,17 @@ from app.agent.runtime.context import (
     ContextManager,
     Layer,
     _estimate_ratio,
+    _pick_level,
     format_last_error,
     format_state,
-    _pick_level,
 )
-from tests.fakes import FakeOutputReviewer, ScriptedLLM, gateway_run, make_gateway, make_reactive_graph
+from tests.fakes import (
+    FakeOutputReviewer,
+    ScriptedLLM,
+    gateway_run,
+    make_gateway,
+    make_reactive_graph,
+)
 
 
 def _messages_with_tool_cycles(cycles: int) -> list[BaseMessage]:

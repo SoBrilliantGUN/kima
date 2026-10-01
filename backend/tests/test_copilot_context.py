@@ -185,7 +185,11 @@ async def test_reminder_is_in_tail_user_message_every_round() -> None:
         ]
     )
     graph = make_reactive_graph(model, [echo], reviewer=FakeOutputReviewer())
-    async for _ in graph.astream(_initial(reminder=reminder), config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
+    async for _ in graph.astream(
+        _initial(reminder=reminder),
+        config={"configurable": {"thread_id": "t1"}},
+        stream_mode="updates",
+    ):
         pass
 
     assert len(model.received) == 2
@@ -198,7 +202,11 @@ async def test_state_block_precedes_reminder() -> None:
     """装配顺序：固定层合并成一条尾部 user，state 在 reminder 之前（带内标记顺序）。"""
     model = _RecordingModel(responses=[AIMessage(content="ok")])
     graph = make_reactive_graph(model, [], reviewer=FakeOutputReviewer())
-    async for _ in graph.astream(_initial(reminder="[REMINDER]\n宪法正文"), config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
+    async for _ in graph.astream(
+        _initial(reminder="[REMINDER]\n宪法正文"),
+        config={"configurable": {"thread_id": "t1"}},
+        stream_mode="updates",
+    ):
         pass
     assert len(model.received) == 1
     tail = str(model.received[0][-1].content)

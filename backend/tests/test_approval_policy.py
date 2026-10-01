@@ -86,11 +86,11 @@ async def test_approval_store_create_get_decide() -> None:
         )
     )
     pending = await store.get_pending(run_id)
-    assert pending is not None and pending.id == approval.id
+    assert pending and pending[0].id == approval.id
 
     now = datetime.now(UTC)
     await store.decide(approval.id, "approve", now)
-    assert await store.get_pending(run_id) is None  # 已裁决，不再是 pending
+    assert await store.get_pending(run_id) == []  # 已裁决，不再是 pending
 
 
 async def test_approval_store_expiry_fail_close() -> None:

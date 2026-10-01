@@ -1,11 +1,8 @@
 """LLM Planner：DAG 解析 + 拓扑执行 + 失败增量重规划 + 计划状态机（Plan-as-Data）。"""
 
-import uuid
-from typing import Any
 
 import pytest
 
-from app.agent.runtime.executor import PlanExecutionError, execute_plan
 from app.agent.runtime.planner import (
     LLMPlanner,
     Plan,
@@ -14,7 +11,6 @@ from app.agent.runtime.planner import (
     parse_plan,
     validate_plan,
 )
-from app.repositories.plan import InMemoryPlanStore
 from tests.fakes import ScriptedLLM, gateway_run, make_gateway
 
 
@@ -193,150 +189,3 @@ async def test_replan_rejects_hallucinated_tool() -> None:
     async with gateway_run():
         result = await planner.replan(plan, failed, "boom", ["transfer"])
     assert result == []
-
-
-async def test_execute_plan_runs_in_order() -> None:
-    plan = Plan(
-        steps=(
-            PlanStep(step_id="1", action="search", params={"q": "x"}),
-            PlanStep(step_id="2", action="read", params={"id": "y"}, depends_on=("1",)),
-        )
-    )
-    calls: list[tuple[str, dict[str, Any]]] = []
-
-    async def run_tool(name: str, params: dict[str, Any]) -> str:
-        calls.append((name, params))
-        return f"{name}-ok"
-
-    async def replan(plan: Plan, step: PlanStep, error: str, tool_names: Any) -> list[PlanStep]:
-        return []
-
-    results = await execute_plan(plan, run_tool, replan)
-    assert calls == [("search", {"q": "x"}), ("read", {"id": "y"})]
-    assert results == {"1": "search-ok", "2": "read-ok"}
-
-
-async def test_execute_plan_replans_on_failure() -> None:
-    plan = Plan(steps=(PlanStep(step_id="1", action="fail", params={}),))
-
-    async def run_tool(name: str, params: dict[str, Any]) -> str:
-        if name == "fail":
-            raise ValueError("boom")
-        return "ok"
-
-    async def replan(plan: Plan, step: PlanStep, error: str, tool_names: Any) -> list[PlanStep]:
-        return [PlanStep(step_id="1r", action="succeed", params={})]
-
-    results = await execute_plan(plan, run_tool, replan)
-    assert results == {"1r": "ok"}
-
-
-async def test_execute_plan_fails_when_no_replan() -> None:
-    plan = Plan(steps=(PlanStep(step_id="1", action="fail", params={}),))
-
-    async def run_tool(name: str, params: dict[str, Any]) -> str:
-        raise ValueError("boom")
-
-    async def replan(plan: Plan, step: PlanStep, error: str, tool_names: Any) -> list[PlanStep]:
-        return []
-
-    try:
-        await execute_plan(plan, run_tool, replan)
-    except PlanExecutionError:
-        pass
-    else:
-        raise AssertionError("应抛 PlanExecutionError")
-
-
-async def test_execute_plan_replaces_downstream_not_orphaned() -> None:
-    """核心 bug 修复：失败步骤下游不再孤儿化，替换步骤带 replaces + 完整依赖继续走。"""
-    plan = Plan(
-        steps=(
-            PlanStep(step_id="1", action="dump", params={}),
-            PlanStep(step_id="2", action="transfer", params={}, depends_on=("1",)),
-            PlanStep(step_id="3", action="verify", params={}, depends_on=("2",)),
-        )
-    )
-    calls: list[str] = []
-
-    async def run_tool(name: str, params: dict[str, Any]) -> str:
-        calls.append(name)
-        if name == "transfer":
-            raise ValueError("firewall blocked")
-        return f"{name}-ok"
-
-    async def replan(plan: Plan, step: PlanStep, error: str, tool_names: Any) -> list[PlanStep]:
-        assert step.step_id == "2"
-        return [
-            PlanStep(
-                step_id="2r",
-                action="scp",
-                params={},
-                depends_on=("1",),
-                replaces_step_id="2",
-            ),
-            PlanStep(
-                step_id="3r",
-                action="verify",
-                params={},
-                depends_on=("2r",),
-                replaces_step_id="3",
-            ),
-        ]
-
-    results = await execute_plan(plan, run_tool, replan)
-    # S1 只 dump 一次（不重复副作用）；S2 失败被 S2' 替换；S3 作废被 S3' 替换
-    assert calls == ["dump", "transfer", "scp", "verify"]
-    assert results == {"1": "dump-ok", "2r": "scp-ok", "3r": "verify-ok"}
-
-
-async def test_execute_plan_resumes_from_checkpoint() -> None:
-    """崩溃恢复：从序列化快照恢复后跳过已完成步骤，只跑 PENDING。"""
-    plan = Plan(
-        steps=(
-            PlanStep(
-                step_id="1",
-                action="dump",
-                params={},
-                status=StepStatus.COMPLETED,
-                output_ref="dump-ok",
-            ),
-            PlanStep(step_id="2", action="verify", params={}, depends_on=("1",)),
-        )
-    )
-    restored = Plan.from_dict(plan.to_dict())  # 模拟 checkpoint 落库 + 恢复
-    calls: list[str] = []
-
-    async def run_tool(name: str, params: dict[str, Any]) -> str:
-        calls.append(name)
-        return f"{name}-ok"
-
-    async def replan(plan: Plan, step: PlanStep, error: str, tool_names: Any) -> list[PlanStep]:
-        return []
-
-    results = await execute_plan(restored, run_tool, replan)
-    assert calls == ["verify"]  # S1 已 COMPLETED，不重跑
-    assert results == {"2": "verify-ok"}
-
-
-async def test_plan_store_save_load_roundtrip() -> None:
-    """检查点存储的扁平结构 {task, version, steps} 存取往返。"""
-    store = InMemoryPlanStore()
-    run_id = uuid.uuid4()
-    plan = Plan(
-        steps=(
-            PlanStep(
-                step_id="1",
-                action="a",
-                params={},
-                status=StepStatus.COMPLETED,
-                output_ref="r1",
-            ),
-        )
-    )
-    await store.save(run_id, {"task": "任务", **plan.to_dict()})
-    loaded = await store.load(run_id)
-    assert loaded is not None and loaded["task"] == "任务"
-    restored = Plan.from_dict(loaded)
-    s1 = restored.get_step("1")
-    assert s1 is not None and s1.status == StepStatus.COMPLETED and s1.output_ref == "r1"

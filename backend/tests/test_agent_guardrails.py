@@ -13,7 +13,7 @@ from app.agent.guardrail.review import (
     ReviewResult,
     ReviewVerdict,
 )
-from app.agent.guardrail.review_node import build_review_node, trace_from_messages
+from app.agent.guardrail.review_node import build_review_node, format_trace
 from app.agent.runtime.budget import (
     BudgetExceeded,
     BudgetTracker,
@@ -21,6 +21,7 @@ from app.agent.runtime.budget import (
     HardBudget,
     Usage,
 )
+from app.agent.runtime.reactive_helpers import collect_trace
 from app.agent.side_effect import DbSideEffectVerifier
 from app.integrations.embedding import FakeEmbeddingClient
 from app.integrations.llm import loads_json_repair
@@ -47,7 +48,7 @@ class _FailingVerifier:
 
 
 def _write_state() -> dict[str, Any]:
-    """构造一次「写笔记 + 成功返回 + 最终回答」的消息流，供 review 节点测试。"""
+    """构造一次「写笔记 + 成功返回 + 最终回答」的状态，供 review 节点测试。"""
     return {
         "messages": [
             HumanMessage(content="写个笔记"),
@@ -63,6 +64,16 @@ def _write_state() -> dict[str, Any]:
             ),
             AIMessage(content="写好了。"),
         ],
+        # 统一轨迹（执行时由 collect_trace 收集），review 据此对账
+        "trace": [
+            {
+                "tool": "create_note",
+                "args": {"title": "t", "content": "c"},
+                "result": "已创建笔记 00000000-0000-0000-0000-000000000001（标题：t）",
+                "ok": True,
+            }
+        ],
+        "final_answer": "写好了。",
         "attempts": 0,
         "review_verdict": "",
         "review_issues": [],
@@ -234,67 +245,42 @@ async def test_reviewer_propagates_budget_exceeded() -> None:
     assert len(llm.calls) == 0  # 预检即中止，根本没调 LLM
 
 
-def testtrace_from_messages_pairs_calls_with_results_by_id() -> None:
-    """同名工具多次调用时，返回必须按 tool_call_id 配到对应调用，而非按位置对齐。"""
-    messages = [
-        AIMessage(
-            content="",
-            tool_calls=[
-                {"name": "create_note", "args": {"title": "A"}, "id": "c1"},
-                {"name": "create_note", "args": {"title": "B"}, "id": "c2"},
-            ],
-        ),
-        # 故意打乱返回顺序：位置对齐会把「创建失败」误配给 A
-        ToolMessage(content="创建失败", tool_call_id="c2"),
-        ToolMessage(content="创建成功", tool_call_id="c1"),
+def test_collect_trace_pairs_calls_with_results_by_id() -> None:
+    """同名工具多次调用时，返回按 tool_call_id 配到对应调用，而非按位置对齐。"""
+    tool_calls = [
+        {"name": "create_note", "args": {"title": "A"}, "id": "c1"},
+        {"name": "create_note", "args": {"title": "B"}, "id": "c2"},
     ]
-    trace = trace_from_messages(messages)
+    # 故意打乱返回顺序：位置对齐会把「创建失败」误配给 A
+    result = {
+        "messages": [
+            ToolMessage(content="创建失败", tool_call_id="c2"),
+            ToolMessage(content="创建成功", tool_call_id="c1"),
+        ]
+    }
+    trace = format_trace(collect_trace(tool_calls, result))
     assert 'create_note({"title": "A"}) → 创建成功' in trace
     assert 'create_note({"title": "B"}) → 创建失败' in trace
 
 
-def testtrace_from_messages_marks_missing_result() -> None:
+def test_collect_trace_marks_missing_result() -> None:
     """某次调用没回 ToolMessage（如中断）时，应显式标「未返回」而非静默错位。"""
-    messages = [
-        AIMessage(
-            content="",
-            tool_calls=[{"name": "create_note", "args": {"title": "A"}, "id": "c1"}],
-        ),
-    ]
-    trace = trace_from_messages(messages)
+    tool_calls = [{"name": "create_note", "args": {"title": "A"}, "id": "c1"}]
+    trace = format_trace(collect_trace(tool_calls, {"messages": []}))
     assert 'create_note({"title": "A"}) → （未返回）' in trace
 
 
-def testtrace_from_messages_keeps_orphan_results_in_stream_order() -> None:
-    """配不上任何调用的孤儿返回，应夹在它在流中的位置，而非甩到末尾。"""
-    messages = [
-        AIMessage(
-            content="",
-            tool_calls=[{"name": "create_note", "args": {"title": "A"}, "id": "c1"}],
-        ),
-        ToolMessage(content="无主返回", tool_call_id="missing"),  # id 配不到任何调用
-        AIMessage(
-            content="",
-            tool_calls=[{"name": "create_note", "args": {"title": "B"}, "id": "c2"}],
-        ),
-        ToolMessage(content="已创建 B", tool_call_id="c2"),
-        ToolMessage(content="已创建 A", tool_call_id="c1"),
-    ]
-    lines = trace_from_messages(messages).splitlines()
-    assert lines[0] == "工具轨迹："
-    assert lines[1].startswith('- create_note({"title": "A"})')
-    assert lines[2] == "- unknown → 无主返回"
-    assert lines[3].startswith('- create_note({"title": "B"})')
-
-
-def testtrace_from_messages_keeps_nameless_call_paired() -> None:
-    """无名调用不跳过，渲染为 unknown(args) 并按 id 配对。"""
-    messages = [
-        AIMessage(content="", tool_calls=[{"name": "", "args": {"title": "X"}, "id": "c1"}]),
-        ToolMessage(content="已创建 X", tool_call_id="c1"),
-    ]
-    trace = trace_from_messages(messages)
+def test_collect_trace_keeps_nameless_call_paired() -> None:
+    """无名调用归一为 unknown 并按 id 配对。"""
+    tool_calls = [{"name": "", "args": {"title": "X"}, "id": "c1"}]
+    result = {"messages": [ToolMessage(content="已创建 X", tool_call_id="c1")]}
+    trace = format_trace(collect_trace(tool_calls, result))
     assert 'unknown({"title": "X"}) → 已创建 X' in trace
+
+
+def test_format_trace_empty() -> None:
+    """空轨迹应返回「本轮未调用任何工具」。"""
+    assert format_trace([]) == "（本轮未调用任何工具）"
 
 
 async def test_review_node_verifier_forces_mismatch() -> None:

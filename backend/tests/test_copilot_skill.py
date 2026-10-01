@@ -164,7 +164,11 @@ async def test_invoked_skills_block_injected_into_agent_input() -> None:
         "review_issues": [],
         "correction": "",
     }
-    async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
+    async for _ in graph.astream(
+        initial,
+        config={"configurable": {"thread_id": "t1"}},
+        stream_mode="updates",
+    ):
         pass
     assert len(model.received) == 1
     tail = str(model.received[0][-1].content)

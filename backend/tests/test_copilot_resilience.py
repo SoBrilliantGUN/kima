@@ -229,7 +229,10 @@ def test_failed_tool_call() -> None:
 
 
 def test_blocked_permanent_calls() -> None:
-    """崩溃恢复/防死循环：permanent 且同工具+同参数（fingerprint 匹配）才拦截；换参数/transient/混合放行。"""
+    """崩溃恢复/防死循环：permanent 且同工具+同参数（fingerprint 匹配）才拦截。
+
+    换参数/transient/混合放行。
+    """
     calls = [{"name": "read_note", "args": {"document_id": "d1"}, "id": "c1"}]
     permanent = cast(
         AgentState,
@@ -280,7 +283,10 @@ def test_blocked_permanent_calls() -> None:
     assert blocked_permanent_calls(permanent, mixed) == []
 
     # 无 last_error → 放行
-    assert blocked_permanent_calls(cast(AgentState, {"messages": permanent["messages"]}), calls) == []
+    assert (
+        blocked_permanent_calls(cast(AgentState, {"messages": permanent["messages"]}), calls)
+        == []
+    )
 
 
 async def test_breaker_load_restores_failure_count() -> None:

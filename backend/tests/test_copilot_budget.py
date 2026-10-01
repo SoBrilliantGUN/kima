@@ -133,7 +133,11 @@ async def test_budget_terminates_graph() -> None:
         "correction": "",
     }
     try:
-        async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
+        async for _ in graph.astream(
+            initial,
+            config={"configurable": {"thread_id": "t1"}},
+            stream_mode="updates",
+        ):
             pass
     except BudgetExceeded as exc:
         assert "turns" in str(exc)

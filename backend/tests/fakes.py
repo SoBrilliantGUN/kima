@@ -12,7 +12,12 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.gateway import GatewayConfig, LLMGateway, run_budget
-from app.agent.guardrail.review import OutputReviewer, ReviewResult, ReviewVerdict, SideEffectVerifier
+from app.agent.guardrail.review import (
+    OutputReviewer,
+    ReviewResult,
+    ReviewVerdict,
+    SideEffectVerifier,
+)
 from app.agent.memory_classifier import MemoryClassification
 from app.agent.pricing import PriceQuote, PricingService
 from app.agent.resilience.circuit_breaker import CircuitBreaker
@@ -36,7 +41,6 @@ from app.models.note import Note
 from app.repositories.approval import InMemoryApprovalStore
 from app.repositories.idempotency import InMemoryIdempotencyStore
 from app.repositories.llm_cost import CostStore, InMemoryCostStore
-from app.repositories.plan import InMemoryPlanStore
 from app.repositories.pricing import InMemoryPricingRepository
 from app.services.conflict import ConflictVerdict
 from app.services.copilot import CopilotMemoryService
@@ -619,7 +623,6 @@ def make_copilot_defaults(
         "planner": FakePlanner(),
         "breaker": CircuitBreaker(),
         "security_breaker": SecurityBreaker(),
-        "plan_store": InMemoryPlanStore(),
         "approval_store": InMemoryApprovalStore(),
         "idempotency_store": InMemoryIdempotencyStore(),
     }
@@ -659,7 +662,10 @@ def make_gateway(
 
 
 class FakeSideEffectVerifier:
-    """no-op 副作用对账器：恒返回 None（不强制 mismatch）。需要失败场景的用例另注入 _FailingVerifier。"""
+    """no-op 副作用对账器：恒返回 None（不强制 mismatch）。
+
+    需要失败场景的用例另注入 _FailingVerifier。
+    """
 
     async def verify(self, tool_name: str, args: dict[str, Any], result: str) -> str | None:
         return None

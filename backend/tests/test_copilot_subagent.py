@@ -12,7 +12,12 @@ from pydantic import Field
 from app.agent.resilience.circuit_breaker import CircuitBreaker
 from app.agent.resilience.security_breaker import SecurityBreaker
 from app.agent.runtime.rag_subagent import RagSubagent
-from tests.fakes import FakeOutputReviewer, FakeSideEffectVerifier, make_gateway, make_runtime_config
+from tests.fakes import (
+    FakeOutputReviewer,
+    FakeSideEffectVerifier,
+    make_gateway,
+    make_runtime_config,
+)
 
 
 class _RecordingModel(FakeMessagesListChatModel):

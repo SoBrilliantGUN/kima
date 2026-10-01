@@ -203,7 +203,9 @@ async def test_graph_rejects_invalid_param_and_runs_valid() -> None:
         "review_issues": [],
         "correction": "",
     }
-    async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
+    async for _ in graph.astream(
+    initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"
+):
         pass
     # 非法 limit=1000 被拒收，只执行了合法 limit=10
     assert calls == [10]
@@ -243,7 +245,9 @@ async def test_graph_security_breaker_freezes_on_repeated_violations() -> None:
         "correction": "",
     }
     with pytest.raises(SecurityBreakerTripped):
-        async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
+        async for _ in graph.astream(
+    initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"
+):
             pass
     assert calls == []  # 熔断前所有违规调用都被拒收，工具从未真正执行
 
@@ -284,6 +288,8 @@ async def test_graph_tool_call_budget_terminates() -> None:
         "correction": "",
     }
     with pytest.raises(BudgetExceeded):
-        async for _ in graph.astream(initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"):
+        async for _ in graph.astream(
+    initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"
+):
             pass
     assert calls == [10]  # 只执行了第一次，第二次被第五轴预算拦截
