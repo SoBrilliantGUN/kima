@@ -54,9 +54,11 @@ from app.agent.runtime.context import (
     format_last_error,
     format_state,
 )
+from app.agent.runtime.loop_guard import fingerprint
 from app.agent.runtime.reactive_helpers import (
+    blocked_permanent_calls,
     evaluate_tool_results,
-    failed_tool_name,
+    failed_tool_call,
     format_tool_error,
     inject_idempotency_keys,
 )
@@ -347,21 +349,33 @@ def build_reactive_graph(
 
         # 执行契约：给强制幂等的写工具注入「业务意图」幂等键（内容派生，跨重试复用同键）
         state = inject_idempotency_keys(state, run_id, registry)
+        # 防线：崩溃恢复/防死循环——last_error 永久失败的同工具+同参数不再重放（transient 放行重试）。
+        # 在幂等键注入后比较 fingerprint，与 last_error 写入时的 fingerprint 同源（写工具注入的
+        # idempotency_key 内容派生、跨重试稳定，注入前比较会因缺少该键而判不匹配）。
+        injected_calls = (
+            state["messages"][-1].tool_calls
+            if isinstance(state["messages"][-1], AIMessage)
+            else tool_calls
+        )
+        if (blocked := blocked_permanent_calls(state, injected_calls)):
+            return {"messages": blocked}
         # 工具执行可能调网关（如 search_knowledge_base 走 retriever 的 embed/rerank），
         # 必须带 run context 才能记账/快照（不可旁路）。
         with run_budget(tracker, run_id=run_id):
             result = await raw_tool_node.ainvoke(state)
-        # 必须在 evaluate 之前反查失败工具名：sanitize 会改 content，且失败文本特征据此识别。
-        failed_tool = failed_tool_name(state, result)
+        # 必须在 evaluate 之前反查失败工具：sanitize 会改 content，且失败文本特征据此识别。
+        failed_tc = failed_tool_call(state, result)
         result = evaluate_tool_results(state, result, registry)
 
         update: dict[str, Any] = {"messages": result["messages"]}
         # 本轮若有工具失败，把分类后的崩溃现场写进 last_error（sticky：无失败不覆盖，保留上一次）
         if error_holder:
+            failed_name = failed_tc.get("name", "") if failed_tc else ""
             update["last_error"] = {
                 "message": error_holder["message"],
                 "kind": error_holder["kind"],
-                "tool": failed_tool,
+                "tool": failed_name,
+                "fingerprint": fingerprint(failed_name, failed_tc.get("args")) if failed_tc else "",
             }
             update["tool_failures"] = state.get("tool_failures", 0) + 1
             error_holder.clear()

@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from app.agent.guardrail.trust import is_red_line, sanitize_content
 from app.agent.helpers import tool_source
 from app.agent.resilience.result import ToolFailure
+from app.agent.runtime.loop_guard import fingerprint
 from app.agent.runtime.state import AgentState
 from app.agent.toolmeta import ToolRegistry, idempotency_key_for
 
@@ -52,35 +53,63 @@ def inject_idempotency_keys(
     return {**state, "messages": messages}
 
 
-def _tool_name_by_id(state: AgentState) -> dict[str, str]:
-    """从 state 的 AIMessage tool_calls 构建 ``tool_call_id → 工具名`` 映射。"""
-    name_by_id: dict[str, str] = {}
+def _tool_call_by_id(state: AgentState) -> dict[str, Any]:
+    """从 state 的 AIMessage tool_calls 构建 ``tool_call_id → tool_call`` 映射（含 name/args）。"""
+    by_id: dict[str, Any] = {}
     for msg in state["messages"]:
         if isinstance(msg, AIMessage):
             for tc in msg.tool_calls or []:
                 call_id = tc.get("id")
                 if call_id:
-                    name_by_id[call_id] = tc.get("name", "")
-    return name_by_id
+                    by_id[call_id] = tc
+    return by_id
 
 
-def failed_tool_name(state: AgentState, result: dict[str, Any]) -> str:
-    """返回本轮最后一次工具失败的工具名（无失败返回空串）。
+def _tool_name_by_id(state: AgentState) -> dict[str, str]:
+    """从 state 的 AIMessage tool_calls 构建 ``tool_call_id → 工具名`` 映射。"""
+    return {cid: tc.get("name", "") for cid, tc in _tool_call_by_id(state).items()}
+
+
+def failed_tool_call(state: AgentState, result: dict[str, Any]) -> dict[str, Any] | None:
+    """返回本轮最后一次工具失败的 tool_call（``{name, args, id}``，无失败返回 None）。
 
     ToolNode 用 ``handle_tool_errors`` 把异常格式化成失败文本（``format_tool_error`` 产出
     ``Error: ...`` / ``⚠️ ...`` / ``❌ ...``），成功结果不会以这些前缀开头。据此从 raw
-    result 反查失败 ToolMessage，再经 ``_tool_name_by_id`` 取工具名。必须在
-    ``evaluate_tool_results`` 之前调用（sanitize 会改 content）。
+    result 反查失败 ToolMessage，再经 ``_tool_call_by_id`` 取完整 tool_call（含 args，供
+    幂等拦截算 fingerprint）。必须在 ``evaluate_tool_results`` 之前调用（sanitize 会改 content）。
     """
-    name_by_id = _tool_name_by_id(state)
-    failed = ""
+    by_id = _tool_call_by_id(state)
+    failed: dict[str, Any] | None = None
     for msg in result.get("messages", []):
         if not isinstance(msg, ToolMessage):
             continue
         content = str(msg.content)
         if content.startswith("Error:") or content.startswith("⚠️") or content.startswith("❌"):
-            failed = name_by_id.get(msg.tool_call_id, "")
+            failed = by_id.get(msg.tool_call_id)
     return failed
+
+
+def blocked_permanent_calls(state: AgentState, tool_calls: list[Any]) -> list[ToolMessage]:
+    """崩溃恢复/防死循环裁决：读 last_error，permanent 且本轮仅重试「同工具+同参数」→ 拦截。
+
+    返回非空 = 整轮拦截（每个 tool_call 一条「已永久失败」消息）；空 = 放行。transient 不拦
+    （放行重试，``with_retry`` 再试）。用 fingerprint（同工具+同参数的稳定哈希，剔除 limit/
+    offset 等易变键）精确匹配——换参数重试同名工具是合理行为，不拦。覆盖两条路径：① 崩溃
+    恢复重放 tool_node（state 带上次 permanent 失败的 last_error，重放同参数调用时跳过，不再
+    空转调用）；② 正常循环模型反复调同一个 permanent 失败操作（早于 LoopGuard 的 5 次阈值止损）。
+    """
+    last_err = state.get("last_error")
+    if not last_err or last_err.get("kind") != "permanent":
+        return []
+    fp = last_err.get("fingerprint", "")
+    if not fp or not tool_calls:
+        return []
+    if not all(fingerprint(tc.get("name"), tc.get("args")) == fp for tc in tool_calls):
+        return []  # 含不同操作（换参数/换工具）→ 不整轮拦截，交给正常执行
+    return [
+        ToolMessage(content="该操作已永久失败，请勿重复重试。", tool_call_id=tc.get("id") or "")
+        for tc in tool_calls
+    ]
 
 
 def evaluate_tool_results(

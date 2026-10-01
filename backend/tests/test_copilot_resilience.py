@@ -16,8 +16,13 @@ from app.agent.resilience.circuit_breaker import CircuitBreaker
 from app.agent.resilience.error_classifier import classify_error, is_retryable
 from app.agent.resilience.result import ToolFailure, ToolOutcome
 from app.agent.resilience.retry import Backoff, RetryPolicy, with_retry
+from app.agent.runtime.loop_guard import fingerprint
 from app.agent.runtime.planner import Plan, PlanStep
-from app.agent.runtime.reactive_helpers import failed_tool_name, inject_idempotency_keys
+from app.agent.runtime.reactive_helpers import (
+    blocked_permanent_calls,
+    failed_tool_call,
+    inject_idempotency_keys,
+)
 from app.agent.runtime.state import AgentState
 from app.agent.toolmeta import SideEffectLevel, ToolMeta
 from app.core.exceptions import NotFoundError
@@ -170,11 +175,11 @@ def test_idempotency_keys_content_derived_stable() -> None:
 
 
 def test_plan_roundtrip_preserves_last_error() -> None:
-    """P0-2：plan 检查点序列化往返保留 last_error（崩溃现场）。"""
+    """P0-2：plan 检查点序列化往返保留 last_error（崩溃现场，含工具名）。"""
     plan = Plan(steps=(PlanStep(step_id="1", action="create_note", params={}),))
-    plan.last_error = {"message": "boom", "kind": "permanent"}
+    plan.last_error = {"tool": "create_note", "message": "boom", "kind": "permanent"}
     restored = Plan.from_dict(plan.to_dict())
-    assert restored.last_error == {"message": "boom", "kind": "permanent"}
+    assert restored.last_error == {"tool": "create_note", "message": "boom", "kind": "permanent"}
 
 
 def test_classify_error_transient_vs_permanent() -> None:
@@ -186,8 +191,8 @@ def test_classify_error_transient_vs_permanent() -> None:
     assert classify_error(NotFoundError("不存在")) == "permanent"
 
 
-def test_failed_tool_name() -> None:
-    """崩溃现场补工具名：从 raw result 反查失败 ToolMessage 对应的工具名。"""
+def test_failed_tool_call() -> None:
+    """崩溃现场补失败 tool_call（含 name/args）：从 raw result 反查失败 ToolMessage。"""
     state = cast(
         AgentState,
         {
@@ -195,8 +200,8 @@ def test_failed_tool_name() -> None:
                 AIMessage(
                     content="",
                     tool_calls=[
-                        {"name": "read_note", "args": {}, "id": "c1"},
-                        {"name": "search_web", "args": {}, "id": "c2"},
+                        {"name": "read_note", "args": {"document_id": "d1"}, "id": "c1"},
+                        {"name": "search_web", "args": {"query": "x"}, "id": "c2"},
                     ],
                 )
             ]
@@ -209,15 +214,73 @@ def test_failed_tool_name() -> None:
             ToolMessage(content="Error: timeout", tool_call_id="c2"),
         ]
     }
-    assert failed_tool_name(state, result) == "search_web"
-    # 全成功 → 空串
+    failed = failed_tool_call(state, result)
+    assert failed is not None
+    assert failed["name"] == "search_web"
+    assert failed["args"] == {"query": "x"}
+    # 全成功 → None
     ok = {
         "messages": [
             ToolMessage(content="已找到 3 条", tool_call_id="c1"),
             ToolMessage(content="共 1 条结果", tool_call_id="c2"),
         ]
     }
-    assert failed_tool_name(state, ok) == ""
+    assert failed_tool_call(state, ok) is None
+
+
+def test_blocked_permanent_calls() -> None:
+    """崩溃恢复/防死循环：permanent 且同工具+同参数（fingerprint 匹配）才拦截；换参数/transient/混合放行。"""
+    calls = [{"name": "read_note", "args": {"document_id": "d1"}, "id": "c1"}]
+    permanent = cast(
+        AgentState,
+        {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "read_note", "args": {"document_id": "d1"}, "id": "c1"}],
+                )
+            ],
+            "last_error": {
+                "tool": "read_note",
+                "kind": "permanent",
+                "message": "不存在",
+                "fingerprint": fingerprint("read_note", {"document_id": "d1"}),
+            },
+        },
+    )
+    blocked = blocked_permanent_calls(permanent, calls)
+    assert len(blocked) == 1
+    assert blocked[0].tool_call_id == "c1"
+    assert "请勿重复重试" in str(blocked[0].content)
+
+    # 换参数（同工具不同 id）→ 放行（合理重试，不误伤）
+    changed = [{"name": "read_note", "args": {"document_id": "d2"}, "id": "c2"}]
+    assert blocked_permanent_calls(permanent, changed) == []
+
+    # transient → 放行（重试）
+    transient = cast(
+        AgentState,
+        {
+            "messages": permanent["messages"],
+            "last_error": {
+                "tool": "read_note",
+                "kind": "transient",
+                "message": "超时",
+                "fingerprint": fingerprint("read_note", {"document_id": "d1"}),
+            },
+        },
+    )
+    assert blocked_permanent_calls(transient, calls) == []
+
+    # 混合场景（本轮含其他工具）→ 不整轮拦截
+    mixed = [
+        {"name": "read_note", "args": {"document_id": "d1"}, "id": "c1"},
+        {"name": "search_web", "args": {"query": "x"}, "id": "c2"},
+    ]
+    assert blocked_permanent_calls(permanent, mixed) == []
+
+    # 无 last_error → 放行
+    assert blocked_permanent_calls(cast(AgentState, {"messages": permanent["messages"]}), calls) == []
 
 
 async def test_breaker_load_restores_failure_count() -> None:
