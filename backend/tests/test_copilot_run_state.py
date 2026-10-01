@@ -132,7 +132,7 @@ async def test_resume_refuses_terminal_run() -> None:
     events = [
         e
         async for e in resume(
-            rt, str(run_id), "approve", uuid.uuid4(), uuid.uuid4()
+            rt, str(run_id), [], uuid.uuid4(), uuid.uuid4()
         )
     ]
     # 短路：只推一段 delta，无 done 事件、无二次副作用
