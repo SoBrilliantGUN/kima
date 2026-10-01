@@ -617,7 +617,7 @@ def build_tools(
         【约束】只读无副作用；子 Agent 独立窗口、多轮检索，延迟较高。
         【示例】spawn_rag("检索项目架构并总结要点") → 结论文本。"""
         constraints = (constraint_holder or {}).get("constraints", "")
-        return await rag_subagent.run(task, constraints=constraints)
+        return str(await rag_subagent.run(task, constraints=constraints))
 
     tools = [t for t, _ in collected]
     registry: ToolRegistry = {t.name: meta for t, meta in collected}

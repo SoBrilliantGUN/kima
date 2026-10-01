@@ -26,11 +26,14 @@ class RuntimeConfig:
     """
 
     # —— 安全闸（行为对象，下传 graph/tools）——
-    daily_budget: DailyBudget  # 跨 run 全局日预算（成本/token 上限；store 必填，见 daily_budget.py）
+    # 跨 run 全局日预算（成本/token 上限；store 必填，见 daily_budget.py）
+    daily_budget: DailyBudget
     budget: HardBudget = HardBudget()  # 四轴硬上限（恒有界，默认 20turns/120s/100k/¥1）
     loop_guard: LoopGuard = field(default_factory=LoopGuard)  # 防循环（恒在场，默认 5/5/4）
     injection_policy: InjectionPolicy = field(default_factory=lambda: DEFAULT_INJECTION_POLICY)
-    approval_policy: ApprovalPolicy = field(default_factory=ApprovalPolicy.graded)  # 分级审批（恒开）
+    approval_policy: ApprovalPolicy = field(
+        default_factory=ApprovalPolicy.graded
+    )  # 分级审批（恒开）
     approval_timeout_seconds: float = 900.0  # HITL 审批单超时 fail-close
 
     # —— 数值旋钮（service 层）——
