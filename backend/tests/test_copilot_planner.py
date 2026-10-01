@@ -118,17 +118,77 @@ def test_merge_defensively_obsoletes_replaced_step() -> None:
     s1 = plan.get_step("1")
     assert s1 is not None
     s1.status = StepStatus.COMPLETED
-    plan.merge([PlanStep(step_id="1r", action="redump", params={}, replaces_step_id="1")])
+    plan.merge([PlanStep(step_id="1r", action="redump", params={}, replaces_step_id="1")], ["dump", "redump"])
     assert s1.status == StepStatus.OBSOLETE
     assert plan.version == 2
     nr = plan.get_step("1r")
     assert nr is not None and nr.status == StepStatus.PENDING and nr.version_created == 2
 
 
+def test_merge_same_id_reuse_gets_renamed_not_overwritten() -> None:
+    """同名复用（id == replaces）不再覆盖旧步骤：旧步骤保持 OBSOLETE，新步骤改名 #2。
+
+    这是「节点被替换多次也能区分」的关键：同名替换走系统改名，旧版本条目仍在。
+    """
+    plan = Plan(steps=(PlanStep(step_id="1", action="dump", params={"x": 1}),))
+    old = plan.get_step("1")
+    assert old is not None
+    old.status = StepStatus.COMPLETED
+    plan.merge([PlanStep(step_id="1", action="redump", params={"x": 2}, replaces_step_id="1")], ["dump", "redump"])
+    assert plan.version == 2
+    # 旧步骤仍在，只是作废（未被覆盖）
+    assert old is not None and old.status == StepStatus.OBSOLETE
+    assert old.action == "dump" and old.params == {"x": 1}
+    # 新步骤拿到系统分配的独立 id
+    renamed = plan.get_step("1#2")
+    assert renamed is not None
+    assert renamed.action == "redump" and renamed.replaces_step_id == "1"
+    assert renamed.version_created == 2
+
+
+def test_merge_multiple_replacements_are_distinguishable() -> None:
+    """同一节点连续替换多次：每次都是独立条目，靠 replaces_step_id 串成链。"""
+    plan = Plan(steps=(PlanStep(step_id="1", action="a"),))
+    plan.merge([PlanStep(step_id="2", action="b", replaces_step_id="1")], ["a", "b"])
+    plan.merge([PlanStep(step_id="3", action="c", replaces_step_id="2")], ["a", "b", "c"])
+    ids = {s.step_id for s in plan.steps}
+    assert ids == {"1", "2", "3"}
+    assert plan.get_step("1").status == StepStatus.OBSOLETE
+    assert plan.get_step("2").status == StepStatus.OBSOLETE
+    c = plan.get_step("3")
+    assert c is not None and c.replaces_step_id == "2" and c.status == StepStatus.PENDING
+    # 三次合并分别落在 version 2/3/4
+    assert {s.version_created for s in plan.steps} == {1, 2, 3}
+
+
+def test_merge_renames_collision_with_unrelated_step() -> None:
+    """新步骤 id 撞上已有步骤（且非替换它）时改名，而不是报错丢弃整批。"""
+    plan = Plan(steps=(PlanStep(step_id="1", action="a"), PlanStep(step_id="2", action="b")))
+    plan.merge([PlanStep(step_id="2", action="c", depends_on=("1",))], ["a", "b", "c"])
+    assert {s.step_id for s in plan.steps} == {"1", "2", "2#2"}
+    renamed = plan.get_step("2#2")
+    assert renamed is not None and renamed.depends_on == ("1",)
+
+
+def test_merge_renames_intrabatch_dep_follows() -> None:
+    """批内 depends_on 引用被改名的步骤时，引用应跟随新 id。"""
+    plan = Plan(steps=(PlanStep(step_id="1", action="a"),))
+    plan.merge(
+        [
+            PlanStep(step_id="1", action="b", replaces_step_id="1"),
+            PlanStep(step_id="2", action="c", depends_on=("1",)),
+        ],
+        ["a", "b", "c"],
+    )
+    # 批内 "1" 被改名为 "1#2"，依赖它的 "2" 应指向 "1#2" 而非旧 "1"
+    c = plan.get_step("2")
+    assert c is not None and c.depends_on == ("1#2",)
+
+
 def test_merge_rejects_missing_dep() -> None:
     plan = Plan(steps=(PlanStep(step_id="1", action="a"),))
     with pytest.raises(ValueError):
-        plan.merge([PlanStep(step_id="2", action="b", depends_on=("9",))])
+        plan.merge([PlanStep(step_id="2", action="b", depends_on=("9",))], ["a", "b"])
 
 
 def test_merge_rejects_cycle() -> None:
@@ -138,7 +198,8 @@ def test_merge_rejects_cycle() -> None:
             [
                 PlanStep(step_id="2", action="b", depends_on=("3",)),
                 PlanStep(step_id="3", action="c", depends_on=("2",)),
-            ]
+            ],
+            ["a", "b", "c"],
         )
 
 
@@ -177,10 +238,11 @@ async def test_planner_fail_closed_on_hallucinated_tool() -> None:
     async with gateway_run():
         plan = await planner.generate("查点东西", ["search", "read"])
     assert plan.steps == ()
-    assert len(llm.calls) == 1
+    assert len(llm.calls) == 3
 
 
-async def test_replan_rejects_hallucinated_tool() -> None:
+async def test_replan_passes_tool_validation_to_merge() -> None:
+    """幻觉工具不再由 replan 拦截，而是由 merge 在并入边界抛 ValueError。"""
     llm = ScriptedLLM(['{"steps":[{"id":"2r","action":"nope","params":{}}]}'])
     planner = LLMPlanner(make_gateway(llm=llm))
     plan = Plan(steps=(PlanStep(step_id="2", action="transfer", params={}),))
@@ -188,4 +250,26 @@ async def test_replan_rejects_hallucinated_tool() -> None:
     assert failed is not None
     async with gateway_run():
         result = await planner.replan(plan, failed, "boom", ["transfer"])
-    assert result == []
+    # replan 只做结构解析，幻觉工具放行
+    assert len(result) == 1 and result[0].action == "nope"
+    # 并入边界（merge）拦截
+    with pytest.raises(ValueError):
+        plan.merge(result, ["transfer"])
+
+
+async def test_planner_self_corrects_after_feedback() -> None:
+    """解析/语义失败时把精确错误回喂，第二次生成成功（自纠错链路生效）。"""
+    llm = ScriptedLLM(
+        [
+            '{"steps":[{"id":"1","action":"nope","params":{}}]}',  # 幻觉工具 → 回喂
+            '{"steps":[{"id":"1","action":"search","params":{}}]}',  # 修正后合法
+        ]
+    )
+    planner = LLMPlanner(make_gateway(llm=llm))
+    async with gateway_run():
+        plan = await planner.generate("查点东西", ["search", "read"])
+    assert len(plan.steps) == 1
+    assert plan.steps[0].action == "search"
+    assert len(llm.calls) == 2
+    # 第二次调用把第一次的精确错误回喂进了 prompt
+    assert "nope" in "".join(m.content for m in llm.calls[1])
