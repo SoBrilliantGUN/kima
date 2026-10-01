@@ -42,7 +42,6 @@ from app.repositories.approval import ApprovalStore
 from app.repositories.chat import ChatRepository
 from app.repositories.copilot import CopilotEventRepository
 from app.repositories.idempotency import IdempotencyStore
-from app.repositories.plan import PlanStore
 from app.services.copilot import CopilotMemoryService
 from app.services.document import DocumentService
 from app.services.knowledge_base import KnowledgeBaseService
@@ -66,7 +65,6 @@ class CopilotRuntime:
     memory_store: MemoryFileStore
     skill_store: SkillFileStore
     planner: Planner
-    plan_store: PlanStore
     approval_store: ApprovalStore
     reviewer: OutputReviewer
     verifier: SideEffectVerifier
@@ -112,7 +110,6 @@ def build_runtime(
     breaker: CircuitBreaker,
     security_breaker: SecurityBreaker,
     verifier: SideEffectVerifier,
-    plan_store: PlanStore,
     approval_store: ApprovalStore,
     idempotency_store: IdempotencyStore,
     db_lock: asyncio.Lock,
@@ -145,7 +142,6 @@ def build_runtime(
         "breaker": breaker,
         "security_breaker": security_breaker,
         "verifier": verifier,
-        "plan_store": plan_store,
         "approval_store": approval_store,
         "idempotency_store": idempotency_store,
         "db_lock": db_lock,
@@ -229,7 +225,6 @@ def build_runtime(
         memory_store=memory_store,
         skill_store=skill_store,
         planner=planner,
-        plan_store=plan_store,
         approval_store=approval_store,
         reviewer=reviewer,
         verifier=verifier,

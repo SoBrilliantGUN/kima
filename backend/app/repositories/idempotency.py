@@ -76,7 +76,7 @@ def _resolve(record: CopilotIdempotency, request_hash: str) -> IdempotencyClaim:
 
 
 class SqlAlchemyIdempotencyStore:
-    """SQLAlchemy 实现：持有 session factory，每次操作独立会话（与 plan_store 同构）。"""
+    """SQLAlchemy 实现：持有 session factory，每次操作独立会话。"""
 
     def __init__(
         self,

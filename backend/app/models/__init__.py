@@ -8,7 +8,6 @@ from app.models.copilot import (
     CopilotIdempotency,
     CopilotLLMSnapshot,
     CopilotMemory,
-    CopilotPlan,
     IdempotencyStatus,
     MemoryKind,
 )
@@ -37,7 +36,6 @@ __all__ = [
     "CopilotEvent",
     "CopilotDailyBudget",
     "CopilotLLMSnapshot",
-    "CopilotPlan",
     "CopilotApproval",
     "ApprovalStatus",
     "CopilotIdempotency",

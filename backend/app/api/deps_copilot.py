@@ -52,7 +52,6 @@ from app.repositories.copilot import (
     SqlAlchemyCopilotMemoryRepository,
 )
 from app.repositories.idempotency import IdempotencyStore, SqlAlchemyIdempotencyStore
-from app.repositories.plan import PlanStore, SqlAlchemyPlanStore
 from app.services.conflict import LLMConflictJudge
 from app.services.copilot import CopilotMemoryService
 from app.services.document import DocumentService
@@ -74,11 +73,6 @@ def get_copilot_event_repository(
     return SqlAlchemyCopilotEventRepository(session)
 
 
-def get_plan_store() -> PlanStore:
-    """planner 计划检查点仓库（崩溃恢复，独立会话工厂，跨请求持久）。"""
-    return SqlAlchemyPlanStore(async_session_factory)
-
-
 def get_approval_store() -> ApprovalStore:
     """HITL 审批单仓库（独立会话工厂，跨请求持久，支撑「找回挂起审批」+ 超时 fail-close）。"""
     return SqlAlchemyApprovalStore(async_session_factory)
@@ -94,7 +88,10 @@ def get_idempotency_store(
 
 
 def _approval_policy_for(settings: Settings) -> ApprovalPolicy:
-    """把审批模式翻译成策略（审批闸恒开，无「关闭」选项）：graded → 仅 HIGH 审批；strict → 全写审批。"""
+    """把审批模式翻译成策略（审批闸恒开，无「关闭」选项）。
+
+    graded → 仅 HIGH 审批；strict → 全写审批。
+    """
     if settings.copilot_approval_mode == "strict":
         return ApprovalPolicy.strict()
     return ApprovalPolicy.graded()
@@ -217,7 +214,6 @@ def get_copilot_runtime(
     reviewer: Annotated[LLMOutputReviewer, Depends(get_output_reviewer)],
     planner: Annotated[LLMPlanner, Depends(get_planner)],
     gateway: Annotated[LLMGateway, Depends(get_llm_gateway)],
-    plan_store: Annotated[PlanStore, Depends(get_plan_store)],
     approval_store: Annotated[ApprovalStore, Depends(get_approval_store)],
     idempotency_store: Annotated[IdempotencyStore, Depends(get_idempotency_store)],
     security_breaker: Annotated[SecurityBreaker, Depends(get_security_breaker)],
@@ -276,7 +272,6 @@ def get_copilot_runtime(
         breaker=request.app.state.copilot_breaker,
         security_breaker=security_breaker,
         verifier=verifier,
-        plan_store=plan_store,
         approval_store=approval_store,
         idempotency_store=idempotency_store,
         db_lock=db_lock,
