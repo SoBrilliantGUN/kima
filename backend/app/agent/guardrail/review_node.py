@@ -1,18 +1,17 @@
 """输出审查（guardrail）的图内节点层：review 节点 + 路由。
 
 内容层（reviewer 协议 / LLM 实现 / 判定契约）见 `review.py`。本模块是节点层，负责：
-- 从消息流还原「最终回答 vs 工具轨迹」（`_last_answer` / `trace_from_messages`）、
-  提取写工具副作用（`_write_side_effects`）供确定性对账；
+- 从统一轨迹（`state["trace"]`，执行时由 `collect_trace` 收集）还原「最终回答 vs 工具轨迹」、
+  提取写工具副作用（`write_side_effects_from_trace`）供确定性对账；
 - `build_review_node` 产出图内 review 节点——先跑确定性 `verifier` 回查副作用，
   再跑 `reviewer` 的 LLM 判定，不一致则注入纠正指令回环（有界），超限则诚实更正；
 - `route_after_review` 决定 mismatch 回 agent 继续修复，否则结束。
 """
 
 import json
-from collections.abc import Sequence
 from typing import Any
 
-from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END
 
@@ -31,60 +30,35 @@ from app.agent.runtime.state import AgentState
 _TRACE_RESULT_CHARS = 2000
 
 
-def _last_answer(messages: list[AnyMessage]) -> str:
-    """取最后一条非空 assistant 回答文本（review 时的最终回答）。"""
-    for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and msg.content:
-            return str(msg.content)
-    return ""
+def format_trace(trace: list[dict[str, Any]]) -> str:
+    """把统一轨迹序列化为「工具轨迹」文本，供审查器对账。
 
-
-def trace_from_messages(messages: Sequence[BaseMessage]) -> str:
-    """从消息流还原工具轨迹（工具调用 + 工具返回），供审查器对账。
-
-    按 ``tool_call_id`` 显式把「调用」与「返回」配成对，而非分成两段列表——审查器的
-    任务就是核对「声称的调用 → 返回是否成功」，配对正是它要的证据；同名工具多次调用、
-    并行调用、或某次返回缺失时，按位置对齐会错配。配不上任何调用的孤儿返回按其在
-    消息流中的位置插入（而非甩到末尾）；无名调用保留为 ``unknown(args)`` 继续按 id 配对。
+    trace 由 ``collect_trace`` 在执行时收集（不再从 messages 事后还原），本函数只负责
+    序列化：result 超长截断到 ``_TRACE_RESULT_CHARS``，无返回补「（未返回）」。
     """
-    # ("call", {...}) | ("orphan", {"content": ...})，按消息流顺序，保证孤儿保序
-    events: list[tuple[str, dict[str, Any]]] = []
-    call_by_id: dict[str, dict[str, Any]] = {}
-    result_by_id: dict[str, str] = {}
-    for msg in messages:
-        if isinstance(msg, AIMessage):
-            for tc in msg.tool_calls or []:
-                call_id = tc.get("id")
-                call = {
-                    "id": call_id,
-                    "name": tc.get("name") or "unknown",
-                    "args": tc.get("args") or {},
-                }
-                events.append(("call", call))
-                if call_id:
-                    call_by_id[call_id] = call
-        elif isinstance(msg, ToolMessage):
-            content = str(msg.content)
-            if len(content) > _TRACE_RESULT_CHARS:
-                content = content[:_TRACE_RESULT_CHARS] + "…"
-            if msg.tool_call_id and msg.tool_call_id in call_by_id:
-                result_by_id[msg.tool_call_id] = content
-            else:
-                events.append(("orphan", {"content": content}))
-    if not events:
+    if not trace:
         return "（本轮未调用任何工具）"
     lines = ["工具轨迹："]
-    for kind, payload in events:
-        if kind == "call":
-            text = f"- {payload['name']}({json.dumps(payload['args'], ensure_ascii=False)})"
-            if payload["id"] in result_by_id:
-                text += f" → {result_by_id.pop(payload['id'])}"
-            else:
-                text += " → （未返回）"
-        else:
-            text = f"- unknown → {payload['content']}"
+    for t in trace:
+        content = str(t.get("result", ""))
+        if len(content) > _TRACE_RESULT_CHARS:
+            content = content[:_TRACE_RESULT_CHARS] + "…"
+        text = f"- {t['tool']}({json.dumps(t.get('args') or {}, ensure_ascii=False)})"
+        text += f" → {content}" if content else " → （未返回）"
         lines.append(text)
     return "\n".join(lines)
+
+
+def write_side_effects_from_trace(
+    trace: list[dict[str, Any]],
+    write_tool_names: frozenset[str],
+) -> list[tuple[str, dict[str, Any], str]]:
+    """从统一轨迹提取写工具的 (工具名, 参数, 返回内容)，供确定性副作用对账。"""
+    return [
+        (t["tool"], t.get("args") or {}, str(t.get("result", "")))
+        for t in trace
+        if t["tool"] in write_tool_names
+    ]
 
 
 def _issues_to_dicts(issues: list[ReviewIssue]) -> list[dict[str, str]]:
@@ -126,27 +100,6 @@ def _unverified_note() -> str:
     return "\n\n> ⚠️ 自检未完成：本次回答未能完成完整性审查，请以实际执行结果为准。"
 
 
-def _write_side_effects(
-    messages: list[AnyMessage],
-    write_tool_names: frozenset[str],
-) -> list[tuple[str, dict[str, Any], str]]:
-    """从消息流提取写工具的 (工具名, 参数, 返回内容)，供确定性副作用对账。"""
-    calls: dict[str, tuple[str, dict[str, Any]]] = {}
-    effects: list[tuple[str, dict[str, Any], str]] = []
-    for msg in messages:
-        if isinstance(msg, AIMessage):
-            for tc in msg.tool_calls or []:
-                name = tc.get("name", "")
-                call_id = tc.get("id")
-                if call_id and name in write_tool_names:
-                    calls[call_id] = (name, tc.get("args") or {})
-        elif isinstance(msg, ToolMessage):
-            if msg.tool_call_id in calls:
-                name, args = calls[msg.tool_call_id]
-                effects.append((name, args, str(msg.content)))
-    return effects
-
-
 def build_review_node(
     reviewer: OutputReviewer,
     review_max_attempts: int,
@@ -165,9 +118,10 @@ def build_review_node(
     async def review_node(
         state: AgentState, config: RunnableConfig | None = None
     ) -> dict[str, Any]:
-        messages = state["messages"]
+        trace = state.get("trace", [])
+        final_answer = state.get("final_answer", "")
         result: ReviewResult | None = None
-        for name, args, tool_result in _write_side_effects(messages, write_tool_names):
+        for name, args, tool_result in write_side_effects_from_trace(trace, write_tool_names):
             reason = await verifier.verify(name, args, tool_result)
             if reason is not None:
                 result = ReviewResult(
@@ -184,9 +138,7 @@ def build_review_node(
             )
             run_id = str(config.get("configurable", {}).get("thread_id", ""))
             with run_budget(tracker, run_id=run_id):
-                result = await reviewer.review(
-                    _last_answer(messages), trace_from_messages(messages)
-                )
+                result = await reviewer.review(final_answer, format_trace(trace))
 
         attempts = state.get("attempts", 0)
         if result.verdict is ReviewVerdict.UNVERIFIED:
