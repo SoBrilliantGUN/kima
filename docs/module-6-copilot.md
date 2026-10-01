@@ -3,6 +3,7 @@
 > 日期：2026-09-20（v1 实现完成 2026-09-21；v2 生产级运行时 2026-09-21 起）
 > 状态：v1 已实现；**v2（生产级运行时重构）已实现**（见 §4，含 Loop 五宪法加固 §4.9）；**六大契约工具层加固已实现**（见 §5.1）；**分路召回架构已实现**（见 §2.5：约束硬召回 + 混合召回 + 写入分类器，2026-09-22）；**遗忘三动作已实现**（见 §2.4：召回写回 + 跨型冲突 + 软删除复活，2026-09-22）；**LLM 网关已实现**（见 §4.11：统一门禁/记账/调用级快照/json_repair，2026-09-23）；**遗忘收尾已实现**（见 §2.4：duplicate 去重不写 + 窗口过期硬清理 + 复活加激活门槛 + 删死字段 importance，2026-09-23）；**契约交互已实现**（见 §4.13：约束显式携带 + 上行 OutputContract + planner 输出自检，2026-09-23）；**Agent 权限系统四道防线已实现**（见 §4.14：参数契约 + 工具调用量第五轴 + 出站 DLP 脱敏 + 安全熔断，2026-09-23）；**Agent 容错收尾已实现**（见 §4.16：幂等键稳定序号 + 熔断持久化/级联 + last_error 崩溃现场 + reactive 崩溃恢复端点，2026-09-23）；**LLM 网关「全量无裸调用」加固已实现**（见 §4.11：run_budget tracker+run_id 双必填 / current() fail-fast / 历史摘要·记忆 embedding·模块5 检索·worker 全经网关、删除裸 embedder 回退，2026-09-25）
 > 上游基线：`docs/requirements.md`（决策 #2/#3）· `docs/module-5-ai-qa.md`（RagService / 检索层 / SSE）· `docs/module-4-documents.md`（文档/笔记向量化 + worker）
+> **Planner supervisor-worker 重构已实现（2026-10-01）**：planner 已迁入 LangGraph supervisor-worker 引擎（静态图 + `Send` 扇出并行 + HITL interrupt + 计划审查 `ChainOptimizer`）；`plan_runner`/`executor` 三处手写逻辑已删除、`plan_store` 已退役、崩溃恢复统一走 LangGraph checkpointer、审批单改并行多 pending。全文见 `docs/planner-supervisor-refactor.md`。
 
 本模块交付「**Copilot 知识 Agent**」：把模块 5 的单次被动问答（`RagService.answer()`：改写 → 检索 → 生成）升级为 **LLM 自主调用工具的多步 Agentic 循环**，配**四型记忆**（约束/事实/偏好/情节）与**全局浮窗**形态。核心区别于问答：Copilot 能「办事」（检索/读/写/联网），而不只是「回答」。并在工程上做到四件事：**工具描述工程 + 副作用分层 + 幂等写**、**纯函数式状态落盘（含思维链，宕机可从状态恢复）**、**四型记忆的分路召回（约束硬召回 + 混合召回）/ 激活衰减遗忘 / LLM 冲突判定**、**可观测性（LangFuse trace）**。
 
@@ -161,7 +162,7 @@
 
 > **迁移 `0007_drop_importance`**（2026-09-23）：`copilot_memories` 删 `importance`（`Float`）——写入恒 0.5、全库无消费的死字段（未接入 activation，纯占位）。迁移链追加 `→ 0007_drop_importance`。
 
-> **迁移 `0008_copilot_plan`**（2026-09-23）：新增 `copilot_plans` 表——planner 计划检查点（Plan-as-Data 第三道防线，见 §4.12）。字段：`run_id`(Uuid PK) + `version`(Integer) + `state`(JSONB，`{task, version, steps[]}` 完整计划状态) + `created_at`/`updated_at`。迁移链追加 `→ 0008_copilot_plan`。
+> **迁移 `0008_copilot_plan`**（2026-09-23）：新增 `copilot_plans` 表——planner 计划检查点（Plan-as-Data 第三道防线，见 §4.12）。字段：`run_id`(Uuid PK) + `version`(Integer) + `state`(JSONB，`{task, version, steps[]}` 完整计划状态) + `created_at`/`updated_at`。迁移链追加 `→ 0008_copilot_plan`。（该检查点表已于 2026-10-01 supervisor-worker 重构中退役，崩溃恢复统一走 LangGraph checkpointer，见 §4.12/§7）
 
 > **迁移 `0010_copilot_approval`**（2026-09-23，down_revision=`0009_concurrency`）：新增 `copilot_approvals` 表——HITL 审批单第一类实体（见 §4.15）。字段：`id`(Uuid PK) + `run_id`(Uuid 索引) + `tool`(String64) + `args`(JSONB) + `summary`(Text，人话摘要) + `level`(String16) + `status`(String16，pending/approved/rejected/expired) + `decision`(String16 可空) + `decided_at`/`expires_at`(DateTime(tz) 可空) + `created_at`/`updated_at`。`run_id` 建普通索引 `ix_copilot_approvals_run_id`。
 
@@ -213,7 +214,9 @@ app/agent/
     reactive_helpers.py     # reactive 模块级纯函数（业务意图幂等键注入 / 工具结果零信任 / 错误格式化）
     planner.py              # LLMPlanner：DAG 生成 + replan（真实实现）
     plan_model.py           # Plan-as-Data 数据模型（PlanStep/Plan 版本化状态机 + parse/validate）
-    executor.py             # DAG 执行器：拓扑执行 + 增量重规划（局部作废 + merge）
+    planner_state.py        # PlannerState 状态 schema（plan dict + trace + final_answer + verdict）
+    plan_graph.py           # supervisor-worker 五节点图装配（plan/supervisor/worker/synthesize/review，Send 扇出）
+    chain_optimizer.py      # 计划审查层（关键路径 + 四维报告 + 分级熔断 Safe/Warn/Emergency）
     workflow.py             # 确定性手写流程（complaint）
     router.py               # 意图路由（supervisor）
   guardrail/
@@ -246,8 +249,7 @@ app/agent/
   compose.py                # CopilotRuntime 聚合依赖 + build_runtime 装配收敛（工具/图装配成品，入口只收成品）
   orchestrate.py            # 共用编排纯函数（stream_graph / commit_assistant / assemble_context / finalize_answer / log / reject_run）
   run.py                    # 对话运行时主入口 run()（意图路由 → 上下文组装 → plan/reactive 分支）
-  resume.py                 # HITL 恢复 / 崩溃恢复入口 resume() / resume_after_crash() + list_pending_approvals
-  plan_runner.py            # planner 执行模式（PlanRunner 组合类：DAG 规划 → 拓扑执行 → 合成 + 输出自检）
+  resume.py                 # HITL 恢复 / 崩溃恢复入口 resume() / resume_after_crash() + list_pending_approvals（planner/reactive 统一，原 `resume_plan` 并入）
 
 backend/eval/agent/         # 评测闭环
   dataset.py / trajectory.py / runner.py
@@ -255,14 +257,14 @@ backend/eval/agent/         # 评测闭环
 
 「内容 vs 框架」边界：四型记忆（`services/copilot.py`，召回/写入拆为 `copilot_recall.py`/`copilot_write.py` mixin、共享常量/融合在 `copilot_common.py`；分类器 `memory_classifier.py`）、17 工具、review 的对账逻辑、事件日志、checkpoint 是**内容**，原样组装；新写的是 runtime/guardrail/resilience/evaluation 四层骨架 + 装配。
 
-> **2026-09-29 重构：去 God 类 + 去 mixin（组合化）**。原 `CopilotService`（`service.py`，24 参构造函数）+ 三个 mixin（`plan_mode.py` / `plan_answer.py` / `service_resume.py`）拆解为纯函数 + 组合，消除 mixin 靠 `NotImplementedError` 反向声明依赖的耦合：`compose.py`（`CopilotRuntime` 聚合依赖 + `build_runtime` 装配收敛，工具/图装配成品只出现一次）、`orchestrate.py`（共用编排纯函数）、`run.py` / `resume.py`（三条入口函数 `run`/`resume`/`resume_after_crash`）、`plan_runner.py`（`PlanRunner` 组合类，合并原 plan 执行 + 合成 + 自检）。`qa_mode.py` 已并入 reactive 主循环（限只读工具集 `QA_TOOL_NAMES`）。下文历史决策（v1/v2）中提到的 `service.py` / `plan_mode.py` / `plan_answer.py` / `service_resume.py` / `CopilotService` 均为拆分前的历史文件名，对应关系：`service.py` → `run.py` + `orchestrate.py` + `compose.py`；`service_resume.py` → `resume.py`；`plan_mode.py` + `plan_answer.py` → `plan_runner.py`。只读查询（技能清单 / 记忆快照）从对话运行时搬出，`routes/copilot.py` 直接依赖底层 store/service。
+> **2026-09-29 重构：去 God 类 + 去 mixin（组合化）**。原 `CopilotService`（`service.py`，24 参构造函数）+ 三个 mixin（`plan_mode.py` / `plan_answer.py` / `service_resume.py`）拆解为纯函数 + 组合，消除 mixin 靠 `NotImplementedError` 反向声明依赖的耦合：`compose.py`（`CopilotRuntime` 聚合依赖 + `build_runtime` 装配收敛，工具/图装配成品只出现一次）、`orchestrate.py`（共用编排纯函数）、`run.py` / `resume.py`（三条入口函数 `run`/`resume`/`resume_after_crash`）、`plan_runner.py`（`PlanRunner` 组合类，合并原 plan 执行 + 合成 + 自检）。`qa_mode.py` 已并入 reactive 主循环（限只读工具集 `QA_TOOL_NAMES`）。下文历史决策（v1/v2）中提到的 `service.py` / `plan_mode.py` / `plan_answer.py` / `service_resume.py` / `CopilotService` 均为拆分前的历史文件名，对应关系：`service.py` → `run.py` + `orchestrate.py` + `compose.py`；`service_resume.py` → `resume.py`；`plan_mode.py` + `plan_answer.py` → `plan_runner.py`。只读查询（技能清单 / 记忆快照）从对话运行时搬出，`routes/copilot.py` 直接依赖底层 store/service。**`plan_runner.py` 于 2026-10-01 supervisor-worker 重构中删除，plan 执行迁入 `runtime/plan_graph.py` + `runtime/planner_state.py` + `runtime/chain_optimizer.py`（见 `docs/planner-supervisor-refactor.md`）。**
 
 ### 4.3 三个执行模式
 
 | 模式 | 触发 | 实现 |
 |---|---|---|
 | reactive | 短任务（几轮内搞定） | agent ⇄ tools 循环 + review 节点 + 预算/防循环 |
-| planner | 开放式长任务 | LLM 产出带依赖 DAG → executor 逐步执行 → 失败 replan |
+| planner | 开放式长任务 | LLM 产出带依赖 DAG → supervisor-worker 引擎（静态图 + `Send` 扇出并行 + HITL interrupt + 计划审查，`runtime/plan_graph.py`） |
 | workflow | 确定性流程（complaint） | 手写图，不碰工具/不写记忆，安抚 + 记录 + 升级 |
 
 ### 4.4 意图路由（supervisor）
@@ -308,7 +310,7 @@ golden 数据集 + LLM-judge + 轨迹断言（调了哪些工具/顺序/次数/�
 | 宪法 | 落地（kima） | 代码位置 |
 |---|---|---|
 | ① 硬边界熔断 + 独立裁决 | 四轴 `HardBudget`（turns/seconds/tokens/cost）+ `asyncio.wait_for` 硬熔断；跨 run 全局日预算 `DailyBudget`（`DailyBudgetStore` 外置 DB 持久化）；死循环指纹 + 幽灵上下文 hash（`loop_guard.py`）；「防幻觉终止」= review 节点独立裁决（Maker/Checker 分离） | `runtime/budget.py` / `runtime/loop_guard.py` / `guardrail/review.py` |
-| ② 提议-裁决分离 + 权限门禁 | 模型只 `bind_tools` 出候选，执行前 Loop 裁决：写工具 HITL `interrupt()` 审批、注入闸 `scan_tool_calls` 拦工具参数、plan 模式 `_tool_map` 未知工具抛错；「写代码的」与「查代码的」分离（agent 产出 / review 节点复核） | `runtime/reactive.py` / `runtime/config.py` / `plan_runner.py` |
+| ② 提议-裁决分离 + 权限门禁 | 模型只 `bind_tools` 出候选，执行前 Loop 裁决：写工具 HITL `interrupt()` 审批、注入闸 `scan_tool_calls` 拦工具参数、plan 模式 supervisor 确定性路由、未知工具抛错；「写代码的」与「查代码的」分离（agent 产出 / review 节点复核） | `runtime/reactive.py` / `runtime/config.py` / `runtime/plan_graph.py` |
 | ③ 显式状态机 + 上下文防挤压 | 手写 `StateGraph` + 可序列化 `AgentState`（无隐式 `while True`）；上下文六层分层（L0–L5，见 §4.18），压缩只打 L5 history、系统区（L0–L4）永不压缩 | `runtime/state.py` / `runtime/reactive.py` / `runtime/context.py` / `run.py` |
 | ④ 持久化可恢复 | 细粒度 checkpoint `AsyncPostgresSaver`（Windows dev 降级 `InMemorySaver`）+ append-only 事件日志 `copilot_events`（思维链可重放） | `compose.py` / `main.py` / `repositories/copilot.py` |
 | ⑤ 同步与隔离 | 写操作串行化：`_serialize` 锁串行化共享 AsyncSession 的工具访问（单用户、单进程，无多 Loop 并发踩踏） | `tools.py` |
@@ -357,21 +359,25 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 
 **第一道：计划数据化（`runtime/plan_model.py`）**——`PlanStep` 从 frozen 变为带运行时状态的可寻址对象：`step_id/action/params/depends_on/is_terminal`（LLM 生成）+ `status`(PENDING/RUNNING/COMPLETED/FAILED/OBSOLETE)/`output_ref`/`error`/`version_created`/`replaces_step_id`（系统填写）。`Plan` 从 `tuple` 变为**版本化状态机**：`_steps`(id→step) + `_dependents`(反向邻接)，`get_parallel_ready()` 按拓扑序取就绪步骤（执行由数据结构驱动，模型退化为只出蓝图）。`output_ref` 让下游步骤引用上游产物，不必重跑；`replaces_step_id` 是重规划新步骤的「替代身份证」。`validate_plan` 增环检测（Kahn）；`_parse_plan_strict` 在构造 Plan（dict 去重）之前拦截空/重复 id。
 
-**第二道：增量重规划（`runtime/executor.py`）**——失败时不再推倒重来：失败步骤标 `FAILED`（审计信号）→ `mark_downstream_obsolete()` 顺反向邻接把下游标 `OBSOLETE`（已完成步骤保留、其产物 `output_ref` 仍可复用）→ replan 产出带 `replaces` + 完整 `depends_on` 的替换步骤 → `merge()` 防御性合并（依赖校验 + 环检测 + 撞 id 校验 + 对被替换旧步骤强制打 OBSOLETE 双保险 + `version++`）。**修复了「失败步骤下游孤儿化」的核心 bug**：旧实现 replan 提示「depends_on 留空」+ 不标下游，导致依赖失败步骤的下游永远无法就绪、必然误报「循环依赖」。replan 输出在 `LLMPlanner.replan` 做工具名合法性拦截（幻觉工具边界拒收，不白烧一次执行），依赖/环/撞 id 交 `merge` 校验（失败重试 replan、超限抛 `PlanExecutionError`）。
+**第二道：增量重规划（`runtime/plan_graph.py` 的 supervisor_node）**——失败时不再推倒重来：失败步骤标 `FAILED`（审计信号）→ `mark_downstream_obsolete()` 顺反向邻接把下游标 `OBSOLETE`（已完成步骤保留、其产物 `output_ref` 仍可复用）→ replan 产出带 `replaces` + 完整 `depends_on` 的替换步骤 → `merge()` 防御性合并（依赖校验 + 环检测 + 撞 id 校验 + 对被替换旧步骤强制打 OBSOLETE 双保险 + `version++`）。**修复了「失败步骤下游孤儿化」的核心 bug**：旧实现 replan 提示「depends_on 留空」+ 不标下游，导致依赖失败步骤的下游永远无法就绪、必然误报「循环依赖」。replan 输出在 `LLMPlanner.replan` 做工具名合法性拦截（幻觉工具边界拒收，不白烧一次执行），依赖/环/撞 id 交 `merge` 校验（失败重试 replan、超限抛 `PlanExecutionError`）。
 
-**第三道：事件溯源 + 检查点**——①**事件溯源**：plan 状态迁移落 append-only `copilot_events`——`plan_created`/`step_started`/`step_completed`/`step_failed`/`plan_replanned`（带 `version`），与既有 `tool_call`/`tool_result` 互补，整条计划 V1→V2 变迁可回放；②**检查点**：`copilot_plans` 表（迁移 `0008`）在每次状态迁移后落 `{task, version, steps[]}` 快照，`Plan.to_dict`/`from_dict` 序列化。planner 路径跑在 graph 外、无 LangGraph checkpointer，靠此快照崩溃后 `resume_plan(run_id)` 加载续跑——已 `COMPLETED` 步骤不重跑、从首个 `PENDING` 断点续（`POST /api/copilot/plan/resume`）。检查点落库 best-effort（失败不阻断本轮执行）。与 §7 的 LangGraph checkpoint（reactive 图级）与 `copilot_llm_snapshots`（LLM 调用级）三层互补：checkpoint 决定「从哪续」、快照决定「调用是否真发」、plan 快照决定「planner 路径从哪续」。
+**第三道：事件溯源 + 检查点**——①**事件溯源**：plan 状态迁移落 append-only `copilot_events`——`plan_created`/`step_started`/`step_completed`/`step_failed`/`plan_replanned`（带 `version`），与既有 `tool_call`/`tool_result` 互补，整条计划 V1→V2 变迁可回放；②**检查点**：planner 迁入 LangGraph 后（2026-10-01，决策 D10），原「`copilot_plans` 计划检查点表 + `plan_store` + `resume_plan`」**退役**——崩溃恢复统一走 LangGraph checkpointer（`AsyncPostgresSaver`，与 reactive 同一条），`resume_plan` 并入 `resume_after_crash`；`plan` 状态以 **dict**（`Plan.to_dict()`）跨节点边界 `from_dict`/`to_dict` 转换，避免可变对象破坏 checkpoint 值语义。与 `copilot_llm_snapshots`（LLM 调用级）两层互补：checkpoint 决定「从哪续」、快照决定「调用是否真发」。
 
 > **边界修订**：决策 #28 曾写「不做 event sourcing」。此处是**planner 路径的轻量事件溯源**（复用既有 `copilot_events` 追加日志 + 一张检查点表），不是全量 CQRS/事件存储重构——不推翻 #28 对 reactive/reactive 全态的边界，仅补上「长程 DAG 任务可回溯可恢复」这一块。
 
+> **2026-10-01 迁图（supervisor-worker）**：执行宿主从 `executor.py` 串行迭代改为 `plan_graph.py` 五节点图（supervisor `Send` 扇出并行）+ HITL interrupt + 计划审查 `ChainOptimizer`；`copilot_events` 事件溯源保留、计划检查点退役（统一 LangGraph checkpointer）。完整方案见 `docs/planner-supervisor-refactor.md`。
+
 ### 4.13 契约交互（约束显式携带 + 上行契约 + planner 输出自检，2026-09-23）
 
-> 对照《09｜Agent 之间的信息传递：从互相投毒到契约交互》一讲。核心命题：多 Agent 系统里「信息跨过边界」这一动作（下发/回传/转交）就是故障源——噪音、幻觉、约束、错误结论都在过境时流动。kima 是单 Agent，但三种执行模式之间同样有「信息过境」：路由层（service）把任务下发 planner、executor 把工具结果回传给 synthesizer。三条补丁把「过境」这道关收口。**明确不做多 Agent 的统一 Crossing/Port 抽象、message_id 全局去重、分布式服务端强制边界**——单 Agent 用不上，属过度设计（对齐决策 #28）。
+> 对照《09｜Agent 之间的信息传递：从互相投毒到契约交互》一讲。核心命题：多 Agent 系统里「信息跨过边界」这一动作（下发/回传/转交）就是故障源——噪音、幻觉、约束、错误结论都在过境时流动。kima 是单 Agent，但三种执行模式之间同样有「信息过境」：路由层（service）把任务下发 planner、`worker_node` 把工具结果回传给 synthesizer。三条补丁把「过境」这道关收口。**明确不做多 Agent 的统一 Crossing/Port 抽象、message_id 全局去重、分布式服务端强制边界**——单 Agent 用不上，属过度设计（对齐决策 #28）。
 
-**① 约束显式携带（文档 failure #3「约束蒸发」）**——此前「绝不能删除数据」这类约束只写在 reactive 的 system prompt 里，planner/qa 分支在召回之前就 `return`，CONSTRAINT 硬召回被整条旁路，约束在交接中蒸发。修复：`_assemble_context(question, run_id)` 把「读 soul/user + `recall()` + 组装 system_prompt/memory_block」抽成单一入口、上移到意图路由之后、三种执行模式**之前**；`_run_plan`/`_run_qa`/`_synthesize_plan_answer`/`resume_plan` 都显式携带 `system_prompt` + `memory_block`；`LLMPlanner.generate` 加 `constraints=""` 参数——规划器下行任务包带约束（对齐文档 `HandoffPacket(constraints=[...])`）。
+**① 约束显式携带（文档 failure #3「约束蒸发」）**——此前「绝不能删除数据」这类约束只写在 reactive 的 system prompt 里，planner/qa 分支在召回之前就 `return`，CONSTRAINT 硬召回被整条旁路，约束在交接中蒸发。修复：`assemble_context(question, run_id)` 把「读 soul/user + `recall()` + 组装 system_prompt/memory_block」抽成单一入口、上移到意图路由之后、三种执行模式**之前**；planner 各节点（`PlannerState.system_prompt`/`memory_block`）、qa 分支、`resume_after_crash` 都显式携带 `system_prompt` + `memory_block`；`LLMPlanner.generate` 加 `constraints=""` 参数——规划器下行任务包带约束（对齐文档 `HandoffPacket(constraints=[...])`）。
 
 **② 上行契约（文档 failure #2「8000 token 执行史」）**——工具结果流向 synthesizer（父 Agent）前过一道契约关。`toolmeta.OutputContract(max_chars / required / optional)` + `apply_output_contract()`：只验形状不看内容（`required` 字段缺失/类型不符 → 拒收占位符；`optional` 之外未声明字段 → 白名单剥离；`max_chars` → 结构裁剪）。`ToolMeta` 加 `output_contract` 字段；检索类工具（`search_knowledge_base`/`read_document`/`read_note`/`search_web`/`search_memory`）声明 `max_chars=SYNTHESIS_RESULT_CHARS(2000)`，结果截到结论级、长正文走 spill/`read_tool_result`（「大体积数据只传引用」）。`required`/`optional` 结构化分支已实现并单测，当前无工具声明（工具都返回字符串）、生产走 `max_chars` 分支，是未来结构化工具的接缝。
 
-**③ planner 输出自检（补 `agent-output-review` 铁律在 planner 旁路的缺口）**——`plan_answer._review_plan_answer`：先跑**确定性副作用对账**（写工具步骤回查 DB、`SideEffectVerifier`，防「伪造证据骗校验器」，与 reactive 的 verifier 同源），再跑 `reviewer` 的 LLM 判定（合成回答 vs 计划执行轨迹，每步 action + 状态 + 结果），mismatch 追加诚实更正、unverified fail-closed（复用 `self._reviewer`/`self._verifier`，与 reactive review 同语义）。此前 planner 合成后直接 `_finalize_answer`、无对账，合成 LLM 可能「声称完成某步但该步实际失败/没执行」。
+**③ planner 输出自检（补 `agent-output-review` 铁律在 planner 旁路的缺口）**——`review_node`（**整节点复用** `build_review_node`，与 reactive 同节点）：先跑**确定性副作用对账**（写工具步骤回查 DB、`SideEffectVerifier`，防「伪造证据骗校验器」，与 reactive 的 verifier 同源），再跑 `reviewer` 的 LLM 判定（合成回答 vs 计划执行轨迹，读 `trace` + `final_answer`），mismatch 追加诚实更正、unverified fail-closed。此前 planner 合成后直接 `_finalize_answer`、无对账，合成 LLM 可能「声称完成某步但该步实际失败/没执行」。
+
+> **已实现（2026-10-01，决策 D7）**：`_review_plan_answer` 手写复制已删除——`review_node` 改读 `trace` + `final_answer`；删 `review_node.py` 的 `trace_from_messages`/`_last_answer`（统一执行轨迹 `{"tool","args","result","ok"}`，reactive 与 planner 两种模式零适配）。
 
 ### 4.14 Agent 权限系统（四道防线，2026-09-23）
 
@@ -406,13 +412,13 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 | 证据包（高信噪比） | `CopilotApprovalEvent` 载荷带 `summary`（`approval_summary` 确定性人话摘要）+ `level` + `args`；前端审批卡展示风险徽章 + 摘要 + 可展开参数 | **已实现** |
 | 找回挂起审批 | `GET /copilot/approvals/pending` 列出待审单（前端刷新/关闭后仍可续批） | **已实现** |
 
-**分级裁决是共享单一路径**：`resolve_approval_decision(name, registry, runtime)` 同时供 reactive 工具门禁（`tool_node`）与 planner 候选集剔除（`_plan_tool_names`）消费，避免规则漂移。reactive 里 `REQUIRE_APPROVAL` → `interrupt()`；`NOTIFY`/`ALLOW` → 自动执行（`NOTIFY` 的写仍走 review 节点确定性副作用对账 + `copilot_events` 事件日志，即「事后审计」）。planner 无 interrupt/resume 机制，故只剔除 `REQUIRE_APPROVAL` 工具、`NOTIFY`/`ALLOW` 照常自动执行 + 审计。
+**分级裁决是共享单一路径**：`resolve_approval_decision(name, registry, runtime)` 同时供 reactive 工具门禁（`tool_node`）与 planner `worker_node` 消费，避免规则漂移。reactive 里 `REQUIRE_APPROVAL` → `interrupt()`；`NOTIFY`/`ALLOW` → 自动执行（`NOTIFY` 的写仍走 review 节点确定性副作用对账 + `copilot_events` 事件日志，即「事后审计」）。planner 迁图后（2026-10-01，决策 D8）同样走 `interrupt()` 暂停审批——approve 继续、deny → 步骤 `FAILED` → replan 换降级步骤（**不再剔除工具**，`_plan_tool_names` 静默剔除已删）。审批单支持一个 run 多张并行 pending（决策 D11），前端审批框错开叠放。
 
 **超时 fail-close 的语义**：`interrupt()` 挂起时写操作本就没执行，超时只需让审批单**失效**（不再可批）——「没人批 = 阻断」是 interrupt 设计的固有性质，故无需后台 worker 主动回放拒绝（那是单用户应用外的过度设计）。`resume` 收到过期单的续批请求时，强制 `expire` 并按拒绝处理，兜住「过期后仍被点通过」的竞态。
 
 **配置**：`copilot_require_write_approval`（总开关，默认 `False`）、`copilot_approval_mode`（`graded` 默认 / `strict`）、`copilot_approval_timeout_seconds`（默认 900）。`deps.py` 的 `_approval_policy_for` 把开关翻译成策略；`get_approval_store` 注入 `SqlAlchemyApprovalStore`。
 
-**代码位置**：`agent/approval.py`（新：`ApprovalDecision`/`ApprovalPolicy`/`resolve_approval_decision`/`approval_summary`）、`agent/tools.py`（`update_profile` → HIGH）、`agent/runtime/config.py`（`approval_policy` 字段）、`agent/runtime/reactive.py`（分级门禁 + 证据载荷 + checkpointer 守卫）、`agent/plan_mode.py`（`_plan_tool_names` 共享裁决）、`agent/events.py`（`CopilotApprovalEvent` 带 summary/level）、`agent/service_resume.py`（`_record_approval`/`list_pending_approvals`/`resume` 超时 fail-close）、`models/copilot.py`（`CopilotApproval` + `ApprovalStatus`）、`repositories/approval.py`（新：`ApprovalStore` + SQLAlchemy + InMemory）、`schemas/copilot.py`（`CopilotApprovalRead/List`）、`api/routes/copilot.py`（`GET /approvals/pending`）、`api/deps.py`（`get_approval_store` + `_approval_policy_for`）。迁移 `0010_copilot_approval`。测试：`tests/test_approval_policy.py`（13 用例）+ `tests/test_copilot_approval.py`（分级 MEDIUM 自动执行 / HIGH 证据载荷）。
+**代码位置**：`agent/approval.py`（新：`ApprovalDecision`/`ApprovalPolicy`/`resolve_approval_decision`/`approval_summary`）、`agent/tools.py`（`update_profile` → HIGH）、`agent/runtime/config.py`（`approval_policy` 字段）、`agent/runtime/reactive.py`（分级门禁 + 证据载荷 + checkpointer 守卫）、`agent/runtime/plan_graph.py`（`worker_node` 共享裁决）、`agent/events.py`（`CopilotApprovalEvent` 带 summary/level）、`agent/resume.py`（`_record_approval`/`list_pending_approvals`/`resume` 超时 fail-close + 按审批单 id 裁决，D11）、`models/copilot.py`（`CopilotApproval` + `ApprovalStatus`）、`repositories/approval.py`（新：`ApprovalStore` + SQLAlchemy + InMemory）、`schemas/copilot.py`（`CopilotApprovalRead/List`）、`api/routes/copilot.py`（`GET /approvals/pending`）、`api/deps.py`（`get_approval_store` + `_approval_policy_for`）。迁移 `0010_copilot_approval`。测试：`tests/test_approval_policy.py`（13 用例）+ `tests/test_copilot_approval.py`（分级 MEDIUM 自动执行 / HIGH 证据载荷）。
 
 ### 4.16 Agent 容错（状态外置 + exactly-once 幂等键 + 级联熔断，2026-09-23）
 
@@ -422,12 +428,12 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 
 | 层 | 含义 | kima 落地 |
 |---|---|---|
-| ① 推理轨迹 | LLM 的记忆（messages/tool_history） | LangGraph checkpoint（reactive）+ `copilot_plans`（planner）+ `copilot_events`（事件日志） |
+| ① 推理轨迹 | LLM 的记忆（messages/tool_history） | LangGraph checkpoint（reactive + planner）+ `copilot_events`（事件日志） |
 | ② 会计账本 | 烧了多少钱（turn/token/cost） | `BudgetTracker`（run 内）+ `DailyBudget`（跨 run 落库，重启续读） |
 | ③ 动作指纹 | 熔断防线（调用计数） | **本次新增**：`CircuitBreaker` + `copilot_breakers` 持久化（`BreakerStore`），失败计数跨崩溃不归零 |
 | ④ 待审批动作 | 暂停键的位置 | `copilot_approvals`（§4.15） |
 | ⑤ 崩溃现场 | 判决书（last_error 分类） | **本次新增**：`AgentState.last_error`（reactive）/ `Plan.last_error`（planner），带 transient/permanent 分类 |
-| ⑥ 计划锚点 | Plan-DAG + 稳定幂等序号 | `copilot_plans` + **本次修正**：`idempotency_seq` 随检查点持久化 |
+| ⑥ 计划锚点 | Plan-DAG + 稳定幂等序号 | LangGraph checkpoint（plan 状态 dict，`Plan.to_dict()`）+ **本次修正**：`idempotency_seq` 随检查点持久化 |
 
 **本次改的三件事**
 
@@ -437,7 +443,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 
 **明确不做**：降级切备用模型（主模型限流 → 备用，本期不做）；②层 per-run 账本持久化（`BudgetTracker` 仍内存闭包，跨 run 的 `DailyBudget` 已落库，崩溃续跑单 run 预算重置可接受）；③层 LoopGuard 死循环指纹仍 run 内闭包（崩溃后 messages 从 checkpoint 恢复、模型可见调用史，损失较小）；幂等 registry 仍内存态（跨崩溃 exactly-once 靠工具自身幂等 create_note content_hash / write_memory 冲突判定 + 稳定键，不额外落 registry）。
 
-**代码位置**：`runtime/state.py`（`idempotency_seq`/`last_error`）、`runtime/reactive_helpers.py`（`_inject_idempotency_keys` 单调序号）+ `runtime/reactive.py`（`_format_tool_error_tracked` 追踪 last_error）、`runtime/plan_model.py`（`Plan.idempotency_seq`/`last_error` 序列化）、`plan_mode.py`（`plan.idempotency_seq` 断点续增 + `plan.last_error`）、`resilience/circuit_breaker.py`（store + 墙钟 + resource 级联）、`resilience/error_classifier.py`（`classify_error`）、`repositories/breaker.py`（新：`BreakerStore` + `SqlAlchemyBreakerStore` + `InMemoryBreakerStore`）、`models/copilot.py`（`CopilotBreaker`）、`api/routes/copilot.py`（`POST /resume`）。迁移 `0011_breaker_state`。测试：`tests/test_copilot_resilience.py`（+5 用例：幂等键单调不碰撞 / plan 序列化往返 / classify_error / breaker 持久化 / 级联）。
+**代码位置**：`runtime/state.py`（`idempotency_seq`/`last_error`）、`runtime/reactive_helpers.py`（`_inject_idempotency_keys` 单调序号）+ `runtime/reactive.py`（`_format_tool_error_tracked` 追踪 last_error）、`runtime/plan_model.py`（`Plan.idempotency_seq`/`last_error` 序列化）、`resilience/circuit_breaker.py`（store + 墙钟 + resource 级联）、`resilience/error_classifier.py`（`classify_error`）、`repositories/breaker.py`（新：`BreakerStore` + `SqlAlchemyBreakerStore` + `InMemoryBreakerStore`）、`models/copilot.py`（`CopilotBreaker`）、`api/routes/copilot.py`（`POST /resume`）。迁移 `0011_breaker_state`。测试：`tests/test_copilot_resilience.py`（+5 用例：幂等键单调不碰撞 / plan 序列化往返 / classify_error / breaker 持久化 / 级联）。
 
 ---
 
@@ -451,7 +457,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 2. **持久化幂等表 `copilot_idempotency`**（迁移 `0013`）。主键 `(tool_name, idem_key)` 原子抢占：`INSERT ON CONFLICT DO NOTHING` 插 `processing` → 成功后转 `succeeded` 落结果缓存、永久失败转 `failed_final` 落错误。`request_hash`（完整参数指纹）做同键不同参数冲突检测（§5.4 拒绝而非静默返回旧结果）；`expires_at` 做 processing 残留 TTL 回收（崩溃在 claim 后 succeed 前留下的孤儿）。§4.16 的「幂等 registry 仍内存态」在此升级。
 3. **三态简化**。文章四态里的 `failed_retryable` 由工具层 `with_retry` 在内存兜底（瞬态错误不落表），幂等表只记 `processing/succeeded/failed_final`。
 
-**代码位置**：`repositories/idempotency.py`（`IdempotencyStore` Protocol + `SqlAlchemyIdempotencyStore` + `InMemoryIdempotencyStore` + `IdempotencyClaim`）、`models/copilot.py`（`CopilotIdempotency`/`IdempotencyStatus`）、`toolmeta.py`（`idempotency_key_fields` + `idempotency_key_for`/`request_hash_for`，删 `IdempotencyRegistry`）、`tools.py`（`build_tools` 注入 `idempotency_store` + 两写工具 claim/succeed/fail 三步法）、`reactive_helpers.py`/`plan_mode.py`（内容派生键注入，删 `idempotency_seq`）、`deps_copilot.py`（`get_idempotency_store`）。配置 `copilot_idempotency_ttl_seconds`（默认 86400）。测试 `tests/test_copilot_idempotency.py`（+7）。
+**代码位置**：`repositories/idempotency.py`（`IdempotencyStore` Protocol + `SqlAlchemyIdempotencyStore` + `InMemoryIdempotencyStore` + `IdempotencyClaim`）、`models/copilot.py`（`CopilotIdempotency`/`IdempotencyStatus`）、`toolmeta.py`（`idempotency_key_fields` + `idempotency_key_for`/`request_hash_for`，删 `IdempotencyRegistry`）、`tools.py`（`build_tools` 注入 `idempotency_store` + 两写工具 claim/succeed/fail 三步法）、`reactive_helpers.py`/`plan_graph.py`（`worker_node` 内容派生键注入，删 `idempotency_seq`）、`deps_copilot.py`（`get_idempotency_store`）。配置 `copilot_idempotency_ttl_seconds`（默认 86400）。测试 `tests/test_copilot_idempotency.py`（+7）。
 
 **明确不做**：`failed_retryable` 独立状态、TTL 后台 sweep（惰性回收，对齐 approval 惰性失效）、tenant_id（单用户，键含 run_id 划界）、Outbox/Saga、乐观锁版本号（当前无删改/转账类工具，`update_profile` 覆盖写天然幂等）。
 
@@ -523,7 +529,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 | ⑤ 反馈契约（超时 + 红绿灯） | `ToolFailure`（`ToolOutcome` OK/TRANSIENT/PERMANENT + reason/hint/code）；工具 DomainError **抛 ToolFailure 而非返回错误串**；`with_timeout`（超时 = estimated_latency_ms × 3，超时抛黄灯）；`is_retryable` 只重试黄灯、`circuit_breaker` 只对可重试（基础设施）异常记失败；`ToolNode(handle_tool_errors=...)` 把红/黄灯格式化成给模型的文本 | `resilience/result.py` / `resilience/timeout.py` / `runtime/reactive.py` |
 | ⑥ 资源契约（Token 经济） | 结果 spill（保留全文 + 占位符）不变；`list_knowledge_bases`/`list_notes` 增 `limit`/`offset` + `has_more` 提示行，不再静默截断 | `tools.py` |
 
-> **上行契约（2026-09-23）**：`ToolMeta` 增 `output_contract`（`OutputContract(max_chars/required/optional)`），工具结果流向 synthesizer 前在 `plan_runner.py`（`PlanRunner._execute_plan` 的 `run_tool`）过契约关（结构裁剪/形状校验/白名单剥离）——见 §4.13②。与拦截契约互补：拦截契约管「工具是什么性质」（安全指纹），上行契约管「工具交回什么形状」（交货标准）。
+> **上行契约（2026-09-23）**：`ToolMeta` 增 `output_contract`（`OutputContract(max_chars/required/optional)`），工具结果流向 synthesizer 前在 `worker_node`（`runtime/plan_graph.py`）过契约关（结构裁剪/形状校验/白名单剥离）——见 §4.13②。与拦截契约互补：拦截契约管「工具是什么性质」（安全指纹），上行契约管「工具交回什么形状」（交货标准）。
 
 > 报告/汇总不单列工具（= Agent 最终结构化长文回答）；「导入文档进知识库」不在 Agent 工具集内。
 
@@ -533,7 +539,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 
 - **构建期硬上限**：`toolmeta.MAX_VISIBLE_TOOLS = 20`，`build_tools` 返回前 `raise ValueError`（让「第 21 个工具」在启动/测试即炸，而非静默降智）。
 - **分层埋点**：`ToolMeta.tier`（`l1` 常驻 / `l2` 角色注入 / `l3` 冷检索），当前全 `l1`、无人消费，为未来 L1/L2/L3 懒加载留挂载点。**暂不上**多维加权检索 / 角色路由——需工具涨到 ~20 或出现第二个角色域才值得，避免过度设计。
-- **熔断候选集剔除**：`CircuitBreaker.available(names)` 返回未熔断工具子集；`build_reactive_graph` 在 `bind_tools` 前过滤、`service._run_plan` 在传 planner 前过滤——熔断工具从候选集**剔除**（模型/planner 根本看不到它），而非等模型调用后返回「暂时不可用」字符串空转 tool_call token。`with_circuit_breaker` 装饰器保留作 run 内中途故障的兜底。
+- **熔断候选集剔除**：`CircuitBreaker.available(names)` 返回未熔断工具子集；`build_reactive_graph` 在 `bind_tools` 前过滤、`plan_node`/`supervisor_node` 在传 planner 前过滤——熔断工具从候选集**剔除**（模型/planner 根本看不到它），而非等模型调用后返回「暂时不可用」字符串空转 tool_call token。`with_circuit_breaker` 装饰器保留作 run 内中途故障的兜底。
 - **六要素补齐**：`read_tool_result` 补全 docstring 六要素（用途/区别/参数/约束/示例）+「区别」互斥声明，与其余 10 个工具一致。
 
 ---
@@ -560,10 +566,9 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 | GET | `/api/copilot/memory` | `{soul, user, memories:[...]}`（按 kind 分组，面板只读） |
 | GET | `/api/copilot/skills` | 内置工具清单（17 工具 name/description/副作用） |
 | GET | `/api/copilot/custom-skills` | 自定义 Skill 清单 `{items:[{name, description, content}]}`（技能层，见 §2.6） |
-| GET | `/api/copilot/approvals/pending` | 待审审批单列表（找回挂起审批；惰性失效已过期单） |
-| POST | `/api/copilot/approve` | HITL 审批回执：`{run_id, decision, conversation_id, assistant_message_id}` 续跑 |
-| POST | `/api/copilot/plan/resume` | planner 崩溃恢复：`{run_id, conversation_id, assistant_message_id}` 从计划检查点续跑未完成步骤 |
-| POST | `/api/copilot/resume` | reactive 崩溃恢复：按 run_id 从 checkpoint 续跑（无待审批 interrupt 的宕机恢复，见 §4.16） |
+| GET | `/api/copilot/approvals/pending` | 待审审批单列表（找回挂起审批；惰性失效已过期单；一个 run 多张并行 pending，D11） |
+| POST | `/api/copilot/approve` | HITL 审批回执：`{approval_id, decision, conversation_id, assistant_message_id}` 续跑（按审批单 id 裁决，D11） |
+| POST | `/api/copilot/resume` | 崩溃恢复（planner/reactive 统一）：按 run_id 从 checkpoint 续跑（无待审批 interrupt 的宕机恢复，见 §4.16；原 `/plan/resume` 已并入，D10） |
 
 ### 6.3 会话
 
@@ -577,7 +582,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 
 - **Checkpoint（状态恢复）**：接 LangGraph 官方 `langgraph-checkpoint-postgres` 的 `AsyncPostgresSaver`，graph 每个 superstep 自动落库（`checkpoints`/`checkpoint_writes` 表，同库）。`thread_id` = `run_id`（每 run 唯一；多轮上下文靠「注入会话历史」而非 checkpoint 续跑）。进程崩溃 / SSE 中断后，用同一 `thread_id` 重放 `graph.astream`，从最近 checkpoint 续跑，**不重执行已完成的工具调用**。这是 LangGraph 的生产级原语，天然实现「把 Agent 当纯函数、宕机只靠状态恢复」。
 - **调用级快照（LLM 调用不重跑，2026-09-23）**：checkpoint 是**节点级**——宕机在节点内时，该节点会整体重跑（重发那次 LLM 调用 = 重付一次钱）。网关的 `copilot_llm_snapshots`（§4.11/§3 迁移 `0006`）把每次 LLM 调用当纯函数：以「node + 规范化输入」内容哈希为键，成功后落 output，恢复时命中缓存直接复用、**不重跑已完成的 LLM 调用**。与 checkpoint 互补：checkpoint 决定「从哪个节点续跑」，快照决定「节点内的调用是否真发」。`resume_after_crash(run_id)` 提供崩溃续跑入口（重放语义 at-least-once）。
-- **计划检查点（planner 路径崩溃恢复，2026-09-23）**：planner 路径跑在 graph 外、无 LangGraph checkpointer，靠 `copilot_plans`（§4.12/§3 迁移 `0008`）在每次步骤状态迁移后落「版本化 DAG + 运行时状态」快照；`resume_plan(run_id)` 加载续跑、跳过已完成步骤（`POST /api/copilot/plan/resume`）。与上面两层互补：plan 快照决定「planner 路径从哪个步骤续」。
+- **计划检查点（planner 路径崩溃恢复，2026-10-01 起与 reactive 统一）**：planner 迁入 LangGraph 后，崩溃恢复统一走 LangGraph checkpointer（`AsyncPostgresSaver`）——不再靠 `copilot_plans`（§4.12/§3 迁移 `0008`）的「graph 外快照 + `resume_plan` + `POST /api/copilot/plan/resume`」，`plan_store` 退役、`resume_plan` 并入 `resume_after_crash`（统一走 `POST /api/copilot/resume`）。
 - **事件日志（思维链可观测）**：append-only `copilot_events` 表 `{seq, run_id, type, payload, created_at}`，`type ∈ {tool_call, tool_result, llm_delta, done, error}`，单调 `seq` 可重放。这是不可变的完整思维链，喂前端工具链 UI 与调试/审计。
 - **幂等写**：Loop 给写工具注入**业务意图幂等键** `idempotency_key = "{run_id}:{tool_name}:sha256(key_fields)"`（内容派生，见 §4.17），工具执行层走持久化幂等表 `copilot_idempotency` 去重（原子抢占 processing→succeeded，命中缓存不重放副作用，同键不同参数拒绝）；`create_note` 另以 content hash 唯一索引兜底、`write_memory` 走冲突判定去重。崩溃重放不重复产生副作用。
 - **`chat_messages`**：存 user/assistant 最终消息（会话历史）+ `steps`（工具轨迹，事件日志的轻量投影，供前端快读）；完整思维链以事件日志 + checkpoint 为准。
@@ -740,11 +745,11 @@ Fakes 增补：`FakeCopilotMemoryRepository`、脚本化 agent 模型、fake 计
 
 **v2 决策（Plan-as-Data，2026-09-23，对照《蒙眼狂奔的 ReAct》）**
 
-46. **planner 三道防线**：planner 路径补上 Plan-as-Data 三件事（§4.12）。① `PlanStep`/`Plan` 改为版本化状态机（`status/output_ref/error/version_created/replaces_step_id` + `get_parallel_ready`/`mark_downstream_obsolete`/`merge`），运行时状态从 executor 局部变量迁入 plan 数据；② 失败增量重规划——`mark_downstream_obsolete` + 带 `replaces`/完整 `depends_on` 的替换步骤 + 防御性 `merge`（依赖/环/撞 id 校验 + 被替换旧步骤强制 OBSOLETE），修复「失败步骤下游孤儿化 → 误报循环依赖」的核心 bug；③ 事件溯源 + 检查点——`plan_created/step_*` 事件落 `copilot_events` + `copilot_plans`（迁移 `0008`）快照，`resume_plan`/`POST /api/copilot/plan/resume` 崩溃续跑（跳过已完成步骤）。修订决策 #28 的「不做 event sourcing」边界为「仅 planner 路径做轻量事件溯源（复用既有事件日志 + 单张检查点表），非全量 CQRS」。`is_terminal` 复活为真消费：`_synthesize_plan_answer` 让 terminal 步骤产物优先。
+46. **planner 三道防线**：planner 路径补上 Plan-as-Data 三件事（§4.12）。① `PlanStep`/`Plan` 改为版本化状态机（`status/output_ref/error/version_created/replaces_step_id` + `get_parallel_ready`/`mark_downstream_obsolete`/`merge`），运行时状态从 executor 局部变量迁入 plan 数据；② 失败增量重规划——`mark_downstream_obsolete` + 带 `replaces`/完整 `depends_on` 的替换步骤 + 防御性 `merge`（依赖/环/撞 id 校验 + 被替换旧步骤强制 OBSOLETE），修复「失败步骤下游孤儿化 → 误报循环依赖」的核心 bug；③ 事件溯源 + 检查点——`plan_created/step_*` 事件落 `copilot_events` + `copilot_plans`（迁移 `0008`）快照，`resume_plan`/`POST /api/copilot/plan/resume` 崩溃续跑（跳过已完成步骤）。修订决策 #28 的「不做 event sourcing」边界为「仅 planner 路径做轻量事件溯源（复用既有事件日志 + 单张检查点表），非全量 CQRS」。`is_terminal` 复活为真消费：`_synthesize_plan_answer` 让 terminal 步骤产物优先。→ ③ 的 `copilot_plans` 检查点 + `resume_plan` 已由决策 #60 的 LangGraph checkpointer 取代（2026-10-01）；①② 保留。
 
 **v2 决策（契约交互，2026-09-23，对照《09｜Agent 之间的信息传递》）**
 
-47. **契约交互三补丁（§4.13）**：① **约束显式携带**——`_assemble_context` 上移到意图路由之后、三种执行模式之前，`system_prompt`+`memory_block` 随任务显式带到 planner/synthesizer/qa（修复「约束蒸发」）；② **上行契约**——`ToolMeta.output_contract`（`OutputContract(max_chars/required/optional)`）+ `apply_output_contract()`，工具结果过 synthesizer 前做结构裁剪/形状校验/白名单剥离（修复「8000 token 执行史」）；③ **planner 输出自检**——`_review_plan_answer` 先确定性副作用对账（写工具步骤回查 DB）再 LLM 判定，mismatch 诚实更正、unverified fail-closed。**明确不做**统一 Crossing/Port 抽象、message_id 全局去重、分布式服务端强制边界——单 Agent 用不上（对齐决策 #28 的边界判断）。
+47. **契约交互三补丁（§4.13）**：① **约束显式携带**——`_assemble_context` 上移到意图路由之后、三种执行模式之前，`system_prompt`+`memory_block` 随任务显式带到 planner/synthesizer/qa（修复「约束蒸发」）；② **上行契约**——`ToolMeta.output_contract`（`OutputContract(max_chars/required/optional)`）+ `apply_output_contract()`，工具结果过 synthesizer 前做结构裁剪/形状校验/白名单剥离（修复「8000 token 执行史」）；③ **planner 输出自检**——`_review_plan_answer` 先确定性副作用对账（写工具步骤回查 DB）再 LLM 判定，mismatch 诚实更正、unverified fail-closed（→ 2026-10-01 已由决策 #60 的 `review_node` 读 `trace`+`final_answer` 取代）。**明确不做**统一 Crossing/Port 抽象、message_id 全局去重、分布式服务端强制边界——单 Agent 用不上（对齐决策 #28 的边界判断）。
 
 **v2 决策（结构化输出统一 schema，2026-09-23）**
 
@@ -775,3 +780,11 @@ Fakes 增补：`FakeCopilotMemoryRepository`、脚本化 agent 模型、fake 计
 58. **记忆四型改名（2026-09-26）**：`MemoryKind` 枚举 `PROCEDURAL→PREFERENCE`、`SEMANTIC→FACT`，对齐文章原生机制词汇 `constraint/fact/preference/episodic`。原「程序记忆」装「偏好」是术语错位（脑科学 procedural=「怎么做/技能」，不是「偏好」）；「语义记忆」实为「事实/状态」。主轴 = **机制驱动**（按怎么召回/遗忘分），不是脑科学认知词、不是 ima 产品词。`kind` 列存字符串值（`native_enum=False`），改名需 Alembic 数据迁移（`procedural→preference`、`semantic→fact`）。
 
 59. **自定义 Skill（技能层，2026-09-26）**：程序性知识（「怎么做」的经验技巧，对应 ima AGENT.md）独立成**自定义 Skill**，一个 skill = 一个 MD 文件（`data/skills/*.md`，frontmatter `name`/`description` + 正文）。**暂不做**模板/程序/沙箱。与内置工具清单（`/api/copilot/skills`）区分：工具是「能调的能力」、skill 是「沉淀的可复用经验」。记忆分三类：身份（Soul/User）+ 积累（四型）+ 技能（Skill）。
+
+**v2 决策（Planner supervisor-worker 重构，2026-10-01，全文见 `docs/planner-supervisor-refactor.md`）**
+
+60. **planner 迁入 LangGraph supervisor-worker 引擎（D1–D6）**：静态图 + 动态 `Plan` 状态——`START → plan_node → supervisor_node ⇄ worker_node（`Send` 扇出）→ synthesize_node → review_node → END`。补齐五处真实差距：并行扇出（`get_parallel_ready()` 被真正利用，不再只取 `ready[0]`）、HITL 暂停审批（拒绝 → replan 降级，不再剔除工具）、计划审查（`ChainOptimizer` 关键路径 + 四维报告 + 分级熔断）、缩短链路（最长串行链 ≤4 + 强制并行）、宿主迁 graph。`plan` 状态用 **dict**（节点边界 `from_dict`/`to_dict` 转换，避免可变对象破坏 checkpoint 值语义）；`trace` 用 `list[dict]`；`final_answer` 用 `str`。
+61. **复用 reactive 防线纯函数（D4/D7）**：`worker_node` 与 reactive `tool_node` 共用 `validate_param_contract`/`inject_idempotency_keys`/`evaluate_tool_results`/`_resolve_approvals`（从 `reactive.py` 抽纯函数）；执行时统一收集 `trace`（`{"tool","args","result","ok"}`），`review_node` 改读 `trace`+`final_answer`，删 `trace_from_messages`/`_last_answer`。
+62. **审查层 `ChainOptimizer`（D5）**：`analyse_plan(plan)` 产出关键路径长度（DAG 最长路径）+ 四维分 + verdict（critical<50 / warn 50–75 / ok>75）；分级熔断三档全实现——`ok`→Safe 正常执行、`warn`→强制加检查点 + 关键写步骤人工确认、`emergency`（用户强制）→每步审计钩子 + 全链路人工确认。设计层 `planner._SYSTEM` 加五条约束（最长串行链 ≤4 / 无依赖只读 `depends_on=[]` / 写前校验写后补偿 / 幂等键 / 不可逆前 `human_approval`）。
+63. **并发与崩溃恢复（D9/D10）**：按「多 worker 真并发安全」写（状态隔离、`depends_on` 保证拓扑不打架），当前实际串行、未来解锁；崩溃恢复统一走 LangGraph checkpointer，`plan_store` 退役、`copilot_events` 事件溯源保留。
+64. **并行审批（D11）**：支持一个 run 多张并行 pending 审批单，`approval_store.get_pending` 单张→多张、`resume` 按审批单 id 裁决，前端审批框错开叠放。

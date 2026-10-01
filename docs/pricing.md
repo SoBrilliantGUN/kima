@@ -47,7 +47,7 @@
 | 路径 | 文件 | 说明 |
 |---|---|---|
 | **网关路径**（主） | `agent/gateway.py::_record` | 所有 agent 主循环/review/classifier/embed/rerank 走这里，`tracker.record(usage)` |
-| **`_bounded_call` 路径** | `agent/helpers.py:49` | planner 执行模式（`plan_runner.py`）跑在 graph 外，`tracker.record(usage_fn(result))` |
+| **`_bounded_call` 路径** | `agent/helpers.py:49` | ~~planner 执行模式（`plan_runner.py`）跑在 graph 外~~ → planner 已于 2026-10-01 迁 LangGraph supervisor-worker、改走网关路径；此路径只剩非 LLM awaitable（工具/检索），`tracker.record(usage_fn(result))` |
 
 两条路径最终都进 `BudgetTracker.record` → 内部 `compute_cost(usage, self._pricing)`；`DailyBudget.record` 再各自用 `self._pricing` 算一遍（**成本被算两次**）。
 
@@ -253,7 +253,7 @@ class PricingService:
 ### 4.4 调用级成本明细（审计主档）
 
 - 新增 `CostStore` 协议 + `SqlAlchemyCostStore` + `InMemoryCostStore`（测试用），`put(run_id, call_key, ..., cost_cny, price_snapshot)` 幂等 upsert。
-- 写入点：`gateway._invoke` 在 `_record` 之后、与快照写同处；`_bounded_call` 路径暂只累加预算、**不写明细**（planner/qa 跑在 graph 外、无 run_id/call_key 语义，作为开放点 §8）。
+- 写入点：`gateway._invoke` 在 `_record` 之后、与快照写同处；`_bounded_call` 路径暂只累加预算、**不写明细**（qa 跑在 graph 外、无 run_id/call_key 语义，作为开放点 §8；planner 已于 2026-10-01 迁 LangGraph supervisor-worker、改走网关路径，此项对 planner 已关闭）。
 
 ### 4.5 启动校验 + 运行时兜底
 
@@ -326,7 +326,7 @@ copilot_daily_max_cost_cny: float = 10.0  # 原 copilot_daily_max_cost_usd
 - `app/agent/gateway.py` —— 注入 `PricingService` + 三组 `(vendor, model)`；`_invoke` 算成本、写明细
 - `app/agent/helpers.py` —— `_bounded_call` 只包非 LLM awaitable，`record` 成本记 0
 - `app/agent/qa_mode.py` —— `qa.generate` 改走网关（补 run 身份）
-- `app/agent/plan_runner.py` / `runtime/reactive.py` —— 降级兜底 `record` 成本记 0
+- `runtime/reactive.py` —— 降级兜底 `record` 成本记 0（`plan_runner.py` 已于 2026-10-01 planner 迁图后删除）
 - `app/agent/orchestrate.py` —— `RunAccounting`/`flush` 的 `cny` 适配
 - `app/repositories/daily_budget.py` —— `cost_usd`→`cost_cny`
 - `app/models/copilot.py` —— `CopilotDailyBudget.cost_cny`
