@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from typing import Any
 
 from langchain_core.messages import BaseMessage
 
 from app.agent.compose import CopilotRuntime
 from app.agent.events import CopilotMetaEvent, CopilotStreamEvent
-from app.agent.guardrail.trust import is_red_line
 from app.agent.orchestrate import (
     assemble_context,
     build_input_messages,
@@ -28,8 +28,8 @@ from app.agent.orchestrate import (
     reject_run,
     stream_graph,
 )
-from app.agent.plan_runner import PlanRunner
 from app.agent.runtime.context import RunState
+from app.agent.runtime.plan_graph import build_plan_graph, stream_plan_graph
 from app.agent.runtime.router import Intent, classify_intent
 from app.agent.runtime.workflow import COMPLAINT_RESPONSE, REJECT_RESPONSE
 from app.agent.session import RunSession
@@ -74,13 +74,30 @@ async def run(rt: CopilotRuntime, request: CopilotRequest) -> AsyncIterator[Copi
     )
 
     if intent == Intent.PLAN:
-        async for event in PlanRunner(rt).run(
-            request,
-            conversation,
-            assistant_message_id,
+        graph = build_plan_graph(rt, tracker)
+        config = make_config(rt, run_id, conversation.id, request.question)
+        plan_state: dict[str, Any] = {
+            "task": request.question,
+            "system_prompt": system_prompt,
+            "memory_block": memory_block,
+            "plan": {},
+            "results": {},
+            "failures": {},
+            "trace": [],
+            "completed_steps": [],
+            "final_answer": "",
+            "plan_error": "",
+            "step_id": "",
+            "last_error": None,
+        }
+        async for event in stream_plan_graph(
+            rt,
+            graph,
+            config,
             run_id,
-            system_prompt,
-            memory_block,
+            plan_state,
+            conversation.id,
+            assistant_message_id,
             tracker,
         ):
             yield event
