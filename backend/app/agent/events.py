@@ -39,11 +39,13 @@ class CopilotReviewEvent:
 class CopilotApprovalEvent:
     """写工具需人工确认：run_id 供 resume 重放；tool/args/summary/level 构成证据包。
 
-    ``summary`` 是人话操作摘要（动的是什么）、``level`` 是风险等级（low/medium/high）、
-    ``args`` 是原始参数（供展开审计）。前端据此渲染「决策依据」而非甩一个裸 JSON——
-    对应《正确设计 HITL 审批系统》的高信噪比证据包。
+    ``approval_id`` 是这张审批单的持久化主键——前端据此「逐单」回传裁决（一张单一个
+    decision，不再一刀切）；``summary`` 是人话操作摘要（动的是什么）、``level`` 是风险
+    等级（low/medium/high）、``args`` 是原始参数（供展开审计）。前端据此渲染「决策依据」
+    而非甩一个裸 JSON——对应《正确设计 HITL 审批系统》的高信噪比证据包。
     """
 
+    approval_id: uuid.UUID
     run_id: str
     tool: str
     args: dict[str, Any]

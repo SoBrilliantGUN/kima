@@ -69,6 +69,7 @@ def _event_to_sse(event: CopilotStreamEvent) -> str:
         return _sse(
             "approval",
             {
+                "approval_id": str(event.approval_id),
                 "run_id": event.run_id,
                 "tool": event.tool,
                 "args": event.args,
@@ -105,10 +106,14 @@ async def copilot_approve(
 
     async def stream() -> AsyncIterator[str]:
         try:
+            decisions = [
+                {"approval_id": d.approval_id, "decision": d.decision}
+                for d in request.decisions
+            ]
             async for event in resume(
                 rt,
                 str(request.run_id),
-                request.decision,
+                decisions,
                 request.conversation_id,
                 request.assistant_message_id,
             ):

@@ -6,6 +6,7 @@ reactive 的 tool_node 与 planner 的 worker 共用同一批防线纯函数，�
 """
 
 import logging
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -171,11 +172,15 @@ def resolve_approvals(
             continue
         # 高风险同步审批：interrupt 挂起，等人裁决。证据包带 level + 人话摘要，
         # 前端据此渲染「动的是什么、风险多高」，而非甩一个裸 JSON 让人猜。
+        # approval_id 在此生成、随载荷一起挂起：前端拿它逐单回传裁决，落库也以它为主键，
+        # 保证「事件里报的 id」与「审批单持久化的 id」一致，续批可精确对账。
         meta = registry.get(name)
         level = meta.side_effect_level if meta is not None else SideEffectLevel.HIGH
+        approval_id = str(uuid.uuid4())
         verdict = interrupt(
             {
                 "type": "approval",
+                "approval_id": approval_id,
                 "tool": name,
                 "args": tc.get("args") or {},
                 "level": level.value,
