@@ -18,6 +18,7 @@ export type CopilotSseEvent =
   | { type: 'review'; verdict: string; issues: CopilotReviewIssue[] }
   | {
       type: 'approval'
+      approvalId: string
       runId: string
       tool: string
       args: Record<string, unknown>
@@ -62,6 +63,7 @@ function parseSseBlock(block: string): CopilotSseEvent | null {
     case 'approval':
       return {
         type: 'approval',
+        approvalId: String(payload.approval_id ?? ''),
         runId: String(payload.run_id),
         tool: String(payload.tool),
         args: (payload.args ?? {}) as Record<string, unknown>,
@@ -117,9 +119,14 @@ export function streamCopilot(request: CopilotRequest, signal?: AbortSignal) {
   return streamSse('/api/copilot/chat', request, signal)
 }
 
+export interface CopilotDecision {
+  approval_id: string
+  decision: 'approve' | 'reject'
+}
+
 export interface CopilotApproveRequest {
   run_id: string
-  decision: 'approve' | 'reject'
+  decisions: CopilotDecision[]
   conversation_id: string
   assistant_message_id: string
 }

@@ -3,20 +3,12 @@ import remarkGfm from 'remark-gfm'
 
 import { ChatInput } from '@/components/chat/ChatInput'
 import { TOOL_LABELS } from '@/api/copilot'
-import type { ChatMessage } from '@/api/types'
+import type { ChatMessage, CopilotPendingApproval } from '@/api/types'
 import { useAutoScroll } from '@/hooks/useAutoScroll'
 import { CopilotSteps } from '../CopilotSteps'
 import { CopilotTrace } from '../CopilotTrace'
 
 import styles from './index.module.scss'
-
-interface PendingApproval {
-  runId: string
-  tool: string
-  args: Record<string, unknown>
-  summary: string
-  level: string
-}
 
 function levelLabel(level: string): string {
   if (level === 'medium') return '中风险'
@@ -28,17 +20,17 @@ interface Props {
   messages: ChatMessage[]
   streaming: boolean
   error: string | null
-  pendingApproval: PendingApproval | null
+  pendingApprovals: CopilotPendingApproval[]
   onSend: (text: string) => void
   onStop: () => void
-  onApprove: (decision: 'approve' | 'reject') => void
+  onApprove: (approvalId: string, decision: 'approve' | 'reject') => void
 }
 
 export function CopilotChat({
   messages,
   streaming,
   error,
-  pendingApproval,
+  pendingApprovals,
   onSend,
   onStop,
   onApprove,
@@ -89,41 +81,47 @@ export function CopilotChat({
         {error ? <div className={styles.error}>{error}</div> : null}
       </div>
 
-      {pendingApproval ? (
-        <div className={styles.approval}>
+      {pendingApprovals.map((approval) => (
+        <div key={approval.approvalId} className={styles.approval}>
           <div className={styles.approvalHeader}>
             <span
               className={`${styles.approvalBadge} ${
-                pendingApproval.level === 'medium'
+                approval.level === 'medium'
                   ? styles.approvalBadgeMedium
                   : styles.approvalBadgeHigh
               }`}
             >
-              {levelLabel(pendingApproval.level)}
+              {levelLabel(approval.level)}
             </span>
             <span className={styles.approvalText}>
-              {pendingApproval.summary ||
-                `Copilot 想执行「${TOOL_LABELS[pendingApproval.tool] ?? pendingApproval.tool}」`}
+              {approval.summary ||
+                `Copilot 想执行「${TOOL_LABELS[approval.tool] ?? approval.tool}」`}
             </span>
           </div>
-          {Object.keys(pendingApproval.args).length > 0 ? (
+          {Object.keys(approval.args).length > 0 ? (
             <details className={styles.approvalArgs}>
               <summary className={styles.approvalArgsSummary}>查看操作参数</summary>
               <pre className={styles.approvalArgsBody}>
-                {JSON.stringify(pendingApproval.args, null, 2)}
+                {JSON.stringify(approval.args, null, 2)}
               </pre>
             </details>
           ) : null}
           <div className={styles.approvalActions}>
-            <button className={styles.approveBtn} onClick={() => onApprove('approve')}>
+            <button
+              className={styles.approveBtn}
+              onClick={() => onApprove(approval.approvalId, 'approve')}
+            >
               确认
             </button>
-            <button className={styles.rejectBtn} onClick={() => onApprove('reject')}>
+            <button
+              className={styles.rejectBtn}
+              onClick={() => onApprove(approval.approvalId, 'reject')}
+            >
               拒绝
             </button>
           </div>
         </div>
-      ) : null}
+      ))}
 
       <div className={styles.inputArea}>
         <ChatInput

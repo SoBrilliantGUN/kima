@@ -42,10 +42,10 @@ export function CopilotPane() {
         messages={main.messages}
         streaming={main.streaming}
         error={main.error}
-        pendingApproval={main.pendingApproval}
+        pendingApprovals={main.pendingApprovals}
         onSend={(text) => void main.send(text)}
         onStop={main.stop}
-        onApprove={(d) => void main.approve(d)}
+        onApprove={(id, d) => void main.approve(id, d)}
       />
 
       {settingsOpen ? <CopilotSettingsModal onClose={() => setSettingsOpen(false)} /> : null}

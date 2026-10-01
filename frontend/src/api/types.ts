@@ -220,3 +220,15 @@ export interface CopilotApproval {
 export interface CopilotApprovalList {
   items: CopilotApproval[]
 }
+
+/** 前端待审审批卡（live SSE 事件 + 找回挂起审批共用）。 */
+export interface CopilotPendingApproval {
+  approvalId: string
+  runId: string
+  tool: string
+  args: Record<string, unknown>
+  summary: string
+  level: string
+  conversationId: string
+  assistantMessageId: string
+}

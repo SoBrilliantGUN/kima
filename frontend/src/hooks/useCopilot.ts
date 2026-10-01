@@ -9,7 +9,7 @@ import {
   streamCopilot,
 } from '@/api/copilot'
 import type { CopilotSseEvent } from '@/api/copilot'
-import type { ChatMessage, CopilotStep } from '@/api/types'
+import type { ChatMessage, CopilotPendingApproval, CopilotStep } from '@/api/types'
 
 let tempIdCounter = 0
 
@@ -59,15 +59,10 @@ export function useCopilot() {
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const queryClient = useQueryClient()
-  const [pendingApproval, setPendingApproval] = useState<{
-    runId: string
-    tool: string
-    args: Record<string, unknown>
-    summary: string
-    level: string
-    conversationId: string
-    assistantMessageId: string
-  } | null>(null)
+  // 待审审批单队列：并行多 interrupt 时一次可挂多张，逐张各自裁决（不再一刀切）。
+  const [pendingApprovals, setPendingApprovals] = useState<CopilotPendingApproval[]>([])
+  // 逐单裁决的累加器：全部裁完才一次性 resume（LangGraph 多 interrupt 需原子续跑）。
+  const decisionsRef = useRef<Map<string, 'approve' | 'reject'>>(new Map())
   const resumeContextRef = useRef<{
     conversationId: string
     assistantMessageId: string
@@ -98,14 +93,21 @@ export function useCopilot() {
         )
         break
       case 'approval':
-        setPendingApproval({
-          runId: event.runId,
-          tool: event.tool,
-          args: event.args,
-          summary: event.summary,
-          level: event.level,
-          conversationId: resumeContextRef.current?.conversationId ?? '',
-          assistantMessageId: resumeContextRef.current?.assistantMessageId ?? '',
+        setPendingApprovals((prev) => {
+          if (prev.some((a) => a.approvalId === event.approvalId)) return prev
+          return [
+            ...prev,
+            {
+              approvalId: event.approvalId,
+              runId: event.runId,
+              tool: event.tool,
+              args: event.args,
+              summary: event.summary,
+              level: event.level,
+              conversationId: resumeContextRef.current?.conversationId ?? '',
+              assistantMessageId: resumeContextRef.current?.assistantMessageId ?? '',
+            },
+          ]
         })
         break
       case 'error':
@@ -154,17 +156,27 @@ export function useCopilot() {
   )
 
   const approve = useCallback(
-    async (decision: 'approve' | 'reject') => {
-      const approval = pendingApproval
-      if (!approval) return
-      setPendingApproval(null)
+    async (approvalId: string, decision: 'approve' | 'reject') => {
+      const target = pendingApprovals.find((a) => a.approvalId === approvalId)
+      if (!target) return
+      decisionsRef.current.set(approvalId, decision)
+      const remaining = pendingApprovals.filter((a) => a.approvalId !== approvalId)
+      setPendingApprovals(remaining)
+      // 还有待裁决的单：先记下裁决，等全部裁完再一次性 resume（多 interrupt 需原子续跑）。
+      if (remaining.length > 0) return
+
+      const decisions = Array.from(decisionsRef.current.entries()).map(([id, d]) => ({
+        approval_id: id,
+        decision: d,
+      }))
+      decisionsRef.current.clear()
       setStreaming(true)
       setError(null)
 
       // 确定 assistant 占位：live 审批沿用活动占位；刷新后找回的审批单没有占位，则新建一个
       let assistantId = activeAssistantIdRef.current
       if (!assistantId) {
-        const assistantMsg = createTempMessage('assistant', '', approval.conversationId)
+        const assistantMsg = createTempMessage('assistant', '', target.conversationId)
         assistantId = assistantMsg.id
         activeAssistantIdRef.current = assistantId
         setMessages((prev) => [...prev, assistantMsg])
@@ -175,10 +187,10 @@ export function useCopilot() {
       try {
         for await (const event of approveCopilot(
           {
-            run_id: approval.runId,
-            decision,
-            conversation_id: approval.conversationId,
-            assistant_message_id: approval.assistantMessageId,
+            run_id: target.runId,
+            decisions,
+            conversation_id: target.conversationId,
+            assistant_message_id: target.assistantMessageId,
           },
           controller.signal,
         )) {
@@ -193,7 +205,7 @@ export function useCopilot() {
         abortRef.current = null
       }
     },
-    [pendingApproval, applyEvent],
+    [pendingApprovals, applyEvent],
   )
 
   const stop = useCallback(() => {
@@ -205,20 +217,21 @@ export function useCopilot() {
   const restoreApprovals = useCallback(async (convId: string) => {
     try {
       const { items } = await getPendingApprovals()
-      const match = items.find((a) => a.conversation_id === convId)
-      if (match?.conversation_id && match.assistant_message_id) {
-        setPendingApproval({
-          runId: match.run_id,
-          tool: match.tool,
-          args: match.args,
-          summary: match.summary,
-          level: match.level,
-          conversationId: match.conversation_id,
-          assistantMessageId: match.assistant_message_id,
-        })
-      } else {
-        setPendingApproval(null)
-      }
+      const matches = items.filter(
+        (a) => a.conversation_id === convId && a.assistant_message_id,
+      )
+      setPendingApprovals(
+        matches.map((a) => ({
+          approvalId: a.id,
+          runId: a.run_id,
+          tool: a.tool,
+          args: a.args,
+          summary: a.summary,
+          level: a.level,
+          conversationId: a.conversation_id ?? '',
+          assistantMessageId: a.assistant_message_id ?? '',
+        })),
+      )
     } catch {
       // 找回失败静默降级：不阻断会话加载，仅不展示挂起审批卡
     }
@@ -232,7 +245,8 @@ export function useCopilot() {
       setStreaming(false)
       setConversationId(id)
       setError(null)
-      setPendingApproval(null)
+      setPendingApprovals([])
+      decisionsRef.current.clear()
       activeAssistantIdRef.current = null
       resumeContextRef.current = null
       try {
@@ -253,7 +267,8 @@ export function useCopilot() {
     setMessages([])
     setError(null)
     setStreaming(false)
-    setPendingApproval(null)
+    setPendingApprovals([])
+    decisionsRef.current.clear()
     activeAssistantIdRef.current = null
     resumeContextRef.current = null
   }, [])
@@ -265,7 +280,8 @@ export function useCopilot() {
     setMessages([])
     setError(null)
     setStreaming(false)
-    setPendingApproval(null)
+    setPendingApprovals([])
+    decisionsRef.current.clear()
     activeAssistantIdRef.current = null
     resumeContextRef.current = null
   }, [])
@@ -278,7 +294,8 @@ export function useCopilot() {
       setMessages(msgs)
       setError(null)
       setStreaming(false)
-      setPendingApproval(null)
+      setPendingApprovals([])
+      decisionsRef.current.clear()
       activeAssistantIdRef.current = null
       resumeContextRef.current = null
       if (id) void restoreApprovals(id)
@@ -291,7 +308,7 @@ export function useCopilot() {
     messages,
     streaming,
     error,
-    pendingApproval,
+    pendingApprovals,
     send,
     approve,
     stop,
