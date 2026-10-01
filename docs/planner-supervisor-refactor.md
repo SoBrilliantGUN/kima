@@ -157,5 +157,5 @@ analyse_plan(plan) -> PlanReport   # 关键路径长度（DAG 最长路径，缓
 ## 9. 风险与已知限制
 
 1. **并发副作用竞态**：当前工具实际串行，无真实竞态；实现按并发安全写，`depends_on` 保证拓扑隔离。跨步骤共享状态（「A 改配置 / B 读旧配置重启」类）登记为已知限制，未来引入真并发时再补锁/版本校验。
-2. **并行 interrupt 的多审批并发**（已实现 D11）：`approval_store.get_pending` 返回多张、`stream_plan_graph` 遍历全部 `__interrupt__` 落多张审批单、`resume` 用 `Command(resume=[decision] * n)` 原子 resume。已知限制：本端点一次一个 `decision` **统一裁决**所有 pending（非逐张独立裁决）；逐张独立裁决需改 `/approve` 接收 `[{approval_id, decision}]` 列表 + 前端累积裁决后再批量发。
+2. **并行 interrupt 的多审批并发**（已实现 D11）：`approval_store.get_pending` 返回多张、`stream_plan_graph` 遍历全部 `__interrupt__` 落多张审批单。逐张独立裁决已落地：`resolve_approvals` 在 interrupt 载荷里生成 `approval_id`、`record_approval` 固化 LangGraph `interrupt_id`，`resume` 按 `interrupt_id` 用 ID 键 resume map 精确路由（LangGraph 1.x 多 interrupt 要求，替代原先会被拒绝的 `Command(resume=[decision] * n)` 列表）；`/approve` 接收 `decisions: [{approval_id, decision}]` 列表，前端逐单 approve/reject 后累积全部裁决一次性提交。
 3. **`plan` 状态序列化**：dict 方案已规避可变对象问题，P2 仍需验证 checkpointer 对 `Plan.to_dict()` 产物的 msgpack/JSON 兼容性。

@@ -407,18 +407,18 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 | 挂起/恢复（Agent 框架角色） | LangGraph `interrupt()` + checkpoint + `Command(resume=)` 重放同一调用（不重问 LLM） | **已实现（此前）** |
 | 规则化分级（重建稀缺性） | `app/agent/approval.py` 的 `ApprovalPolicy`（Policy-as-Code）：`SideEffectLevel` → 三档处置 `ALLOW`/`NOTIFY`/`REQUIRE_APPROVAL`；`graded()` 工厂 = LOW 放行 / MEDIUM 通知 / HIGH 审批，`strict()` = 全写审批（旧布尔语义） | **已实现** |
 | 分级赋值 | `update_profile` 定为 `HIGH`（覆盖人设档案：不可逆、无版本历史）；`create_note`/`write_memory` 保持 `MEDIUM`（幂等/去重的增量写） | **已实现** |
-| 审批单第一类实体 | `copilot_approvals` 表（`id`/`run_id` 索引/`tool`/`args`/`summary`/`level`/`status`(pending/approved/rejected/expired)/`decided_at`/`expires_at`）；把「等审批」从 checkpoint（dev 是内存版、前端刷新即丢）解耦成可查询/可恢复状态 | **已实现** |
+| 审批单第一类实体 | `copilot_approvals` 表（`id`/`run_id` 索引/`interrupt_id`/`tool`/`args`/`summary`/`level`/`status`(pending/approved/rejected/expired)/`decided_at`/`expires_at`）；把「等审批」从 checkpoint（dev 是内存版、前端刷新即丢）解耦成可查询/可恢复状态 | **已实现** |
 | 超时阻断（fail-close） | `expires_at` + `copilot_approval_timeout_seconds`（默认 900s）；`resume` 前检查，过期即 `expire` 并按拒绝处理（写不执行）；`list_pending` 惰性翻转过期单 | **已实现** |
-| 证据包（高信噪比） | `CopilotApprovalEvent` 载荷带 `summary`（`approval_summary` 确定性人话摘要）+ `level` + `args`；前端审批卡展示风险徽章 + 摘要 + 可展开参数 | **已实现** |
+| 证据包（高信噪比） | `CopilotApprovalEvent` 载荷带 `approval_id`（审批单持久化主键，前端逐单回传裁决用）+ `summary`（`approval_summary` 确定性人话摘要）+ `level` + `args`；前端审批卡展示风险徽章 + 摘要 + 可展开参数 | **已实现** |
 | 找回挂起审批 | `GET /copilot/approvals/pending` 列出待审单（前端刷新/关闭后仍可续批） | **已实现** |
 
-**分级裁决是共享单一路径**：`resolve_approval_decision(name, registry, runtime)` 同时供 reactive 工具门禁（`tool_node`）与 planner `worker_node` 消费，避免规则漂移。reactive 里 `REQUIRE_APPROVAL` → `interrupt()`；`NOTIFY`/`ALLOW` → 自动执行（`NOTIFY` 的写仍走 review 节点确定性副作用对账 + `copilot_events` 事件日志，即「事后审计」）。planner 迁图后（2026-10-01，决策 D8）同样走 `interrupt()` 暂停审批——approve 继续、deny → 步骤 `FAILED` → replan 换降级步骤（**不再剔除工具**，`_plan_tool_names` 静默剔除已删）。审批单支持一个 run 多张并行 pending（决策 D11），前端审批框错开叠放。
+**分级裁决是共享单一路径**：`resolve_approval_decision(name, registry, runtime)` 同时供 reactive 工具门禁（`tool_node`）与 planner `worker_node` 消费，避免规则漂移。reactive 里 `REQUIRE_APPROVAL` → `interrupt()`；`NOTIFY`/`ALLOW` → 自动执行（`NOTIFY` 的写仍走 review 节点确定性副作用对账 + `copilot_events` 事件日志，即「事后审计」）。planner 迁图后（2026-10-01，决策 D8）同样走 `interrupt()` 暂停审批——approve 继续、deny → 步骤 `FAILED` → replan 换降级步骤（**不再剔除工具**，`_plan_tool_names` 静默剔除已删）。审批单支持一个 run 多张并行 pending（决策 D11），前端审批框错开叠放、**每张单独立裁决**（逐单 approve/reject，不再一刀切）：`resolve_approvals` 在挂起时给 interrupt 载荷生成 `approval_id`，`resume` 按 `interrupt_id`（LangGraph 1.x 多 interrupt 的 ID 键 resume map）把每张单的裁决精确路由到对应 interrupt，前端累积全部裁决后一次性提交。
 
-**超时 fail-close 的语义**：`interrupt()` 挂起时写操作本就没执行，超时只需让审批单**失效**（不再可批）——「没人批 = 阻断」是 interrupt 设计的固有性质，故无需后台 worker 主动回放拒绝（那是单用户应用外的过度设计）。`resume` 收到过期单的续批请求时，强制 `expire` 并按拒绝处理，兜住「过期后仍被点通过」的竞态。
+**超时 fail-close 的语义**：`interrupt()` 挂起时写操作本就没执行，超时只需让审批单**失效**（不再可批）——「没人批 = 阻断」是 interrupt 设计的固有性质，故无需后台 worker 主动回放拒绝（那是单用户应用外的过度设计）。`resume` 收到过期单的续批请求时，强制 `expire` 并按拒绝处理，兜住「过期后仍被点通过」的竞态。多张待审单**各自独立判定**——一张过期拒绝不会污染其他未过期单的裁决（旧实现曾因复用同一 `decision` 变量把「一张过期」放大成「全拒」，已随逐单裁决一并修复）。
 
 **配置**：`copilot_require_write_approval`（总开关，默认 `False`）、`copilot_approval_mode`（`graded` 默认 / `strict`）、`copilot_approval_timeout_seconds`（默认 900）。`deps.py` 的 `_approval_policy_for` 把开关翻译成策略；`get_approval_store` 注入 `SqlAlchemyApprovalStore`。
 
-**代码位置**：`agent/approval.py`（新：`ApprovalDecision`/`ApprovalPolicy`/`resolve_approval_decision`/`approval_summary`）、`agent/tools.py`（`update_profile` → HIGH）、`agent/runtime/config.py`（`approval_policy` 字段）、`agent/runtime/reactive.py`（分级门禁 + 证据载荷 + checkpointer 守卫）、`agent/runtime/plan_graph.py`（`worker_node` 共享裁决）、`agent/events.py`（`CopilotApprovalEvent` 带 summary/level）、`agent/resume.py`（`_record_approval`/`list_pending_approvals`/`resume` 超时 fail-close + 按审批单 id 裁决，D11）、`models/copilot.py`（`CopilotApproval` + `ApprovalStatus`）、`repositories/approval.py`（新：`ApprovalStore` + SQLAlchemy + InMemory）、`schemas/copilot.py`（`CopilotApprovalRead/List`）、`api/routes/copilot.py`（`GET /approvals/pending`）、`api/deps.py`（`get_approval_store` + `_approval_policy_for`）。迁移 `0010_copilot_approval`。测试：`tests/test_approval_policy.py`（13 用例）+ `tests/test_copilot_approval.py`（分级 MEDIUM 自动执行 / HIGH 证据载荷）。
+**代码位置**：`agent/approval.py`（新：`ApprovalDecision`/`ApprovalPolicy`/`resolve_approval_decision`/`approval_summary`）、`agent/tools.py`（`update_profile` → HIGH）、`agent/runtime/config.py`（`approval_policy` 字段）、`agent/runtime/reactive_helpers.py`（`resolve_approvals` 生成 `approval_id` + interrupt 挂起）、`agent/runtime/reactive.py`（分级门禁 + checkpointer 守卫）、`agent/runtime/plan_graph.py`（`worker_node` 共享裁决 + 捕获 `interrupt_id`）、`agent/events.py`（`CopilotApprovalEvent` 带 approval_id/summary/level）、`agent/orchestrate.py`（`record_approval` 落单含 `interrupt_id`）、`agent/resume.py`（`list_pending_approvals`/`resume` 按 `decisions` 列表逐单裁决 + `interrupt_id` 路由 + 超时 fail-close，D11）、`models/copilot.py`（`CopilotApproval` + `ApprovalStatus` + `interrupt_id`）、`repositories/approval.py`（新：`ApprovalStore` + SQLAlchemy + InMemory）、`schemas/copilot.py`（`CopilotDecision`/`CopilotApprovalRead/List`）、`api/routes/copilot.py`（`GET /approvals/pending` + `POST /approve`）、`api/deps.py`（`get_approval_store` + `_approval_policy_for`）。迁移 `0010_copilot_approval` + `0017_copilot_approval_interrupt_id`。测试：`tests/test_approval_policy.py`（13 用例）+ `tests/test_copilot_approval.py`（分级 MEDIUM 自动执行 / HIGH 证据载荷）。
 
 ### 4.16 Agent 容错（状态外置 + exactly-once 幂等键 + 级联熔断，2026-09-23）
 
@@ -555,7 +555,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 | `meta` | `{conversation_id, user_message_id, assistant_message_id}` | 首问自动建会话（`kind='copilot'`、`kb_id=NULL`） |
 | `step` | `{tool_name, args}` | 每次工具调用 |
 | `delta` | `{text}` | 最终回答逐 token |
-| `approval` | `{run_id, tool, args, summary, level}` | 高危写需人工确认（证据包：人话摘要 + 风险等级 + 原始参数，见 §4.15） |
+| `approval` | `{approval_id, run_id, tool, args, summary, level}` | 高危写需人工确认（证据包：`approval_id` 供逐单回传裁决 + 人话摘要 + 风险等级 + 原始参数，见 §4.15） |
 | `done` | `{assistant_message_id}` | 结束，**思维链经 checkpoint + 事件日志落库** |
 | `error` | `{code, message}` | 失败 |
 
@@ -567,7 +567,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 | GET | `/api/copilot/skills` | 内置工具清单（17 工具 name/description/副作用） |
 | GET | `/api/copilot/custom-skills` | 自定义 Skill 清单 `{items:[{name, description, content}]}`（技能层，见 §2.6） |
 | GET | `/api/copilot/approvals/pending` | 待审审批单列表（找回挂起审批；惰性失效已过期单；一个 run 多张并行 pending，D11） |
-| POST | `/api/copilot/approve` | HITL 审批回执：`{approval_id, decision, conversation_id, assistant_message_id}` 续跑（按审批单 id 裁决，D11） |
+| POST | `/api/copilot/approve` | HITL 审批回执：`{run_id, decisions: [{approval_id, decision}], conversation_id, assistant_message_id}` 续跑（一张单一个 decision，按 `interrupt_id` 精确路由，D11） |
 | POST | `/api/copilot/resume` | 崩溃恢复（planner/reactive 统一）：按 run_id 从 checkpoint 续跑（无待审批 interrupt 的宕机恢复，见 §4.16；原 `/plan/resume` 已并入，D10） |
 
 ### 6.3 会话
@@ -787,4 +787,4 @@ Fakes 增补：`FakeCopilotMemoryRepository`、脚本化 agent 模型、fake 计
 61. **复用 reactive 防线纯函数（D4/D7）**：`worker_node` 与 reactive `tool_node` 共用 `validate_param_contract`/`inject_idempotency_keys`/`evaluate_tool_results`/`_resolve_approvals`（从 `reactive.py` 抽纯函数）；执行时统一收集 `trace`（`{"tool","args","result","ok"}`），`review_node` 改读 `trace`+`final_answer`，删 `trace_from_messages`/`_last_answer`。
 62. **审查层 `ChainOptimizer`（D5）**：`analyse_plan(plan)` 产出关键路径长度（DAG 最长路径）+ 四维分 + verdict（critical<50 / warn 50–75 / ok>75）；分级熔断三档全实现——`ok`→Safe 正常执行、`warn`→强制加检查点 + 关键写步骤人工确认、`emergency`（用户强制）→每步审计钩子 + 全链路人工确认。设计层 `planner._SYSTEM` 加五条约束（最长串行链 ≤4 / 无依赖只读 `depends_on=[]` / 写前校验写后补偿 / 幂等键 / 不可逆前 `human_approval`）。
 63. **并发与崩溃恢复（D9/D10）**：按「多 worker 真并发安全」写（状态隔离、`depends_on` 保证拓扑不打架），当前实际串行、未来解锁；崩溃恢复统一走 LangGraph checkpointer，`plan_store` 退役、`copilot_events` 事件溯源保留。
-64. **并行审批（D11）**：支持一个 run 多张并行 pending 审批单，`approval_store.get_pending` 单张→多张、`resume` 按审批单 id 裁决，前端审批框错开叠放。
+64. **并行审批 + 逐单裁决（D11）**：支持一个 run 多张并行 pending 审批单，`approval_store.get_pending` 单张→多张；`resolve_approvals` 挂起时给 interrupt 载荷生成 `approval_id`、`record_approval` 固化 LangGraph `interrupt_id`，`resume` 按 `interrupt_id` 用 ID 键 resume map 逐单路由裁决（LangGraph 1.x 多 interrupt 要求，替代原先会被拒绝的 `Command(resume=[decision] * n)` 列表）；前端审批框错开叠放、逐单 approve/reject 后累积全部裁决一次性提交。
