@@ -27,7 +27,7 @@
 
 ## 2. 数据模型
 
-### 2.1 `knowledge_bases` 表（迁移 `0002_knowledge_bases`）
+### 2.1 `knowledge_bases` 表（已并入基线 `0001_initial`）
 
 | 字段 | 类型 | 约束 / 默认 |
 |---|---|---|
@@ -268,7 +268,7 @@ router.tsx                        # /knowledge-bases 重定向 + /knowledge-base
 
 | 步骤 | 内容 | 产出 |
 |---|---|---|
-| T1 | 模型 + 迁移 `0002_knowledge_bases`（手写 up/down） | 可 `upgrade head` 建表 |
+| T1 | 模型 + 迁移（并入 `0001_initial` 基线，手写 up/down） | 可 `upgrade head` 建表 |
 | T2 | `schemas/knowledge_base.py`（Create/Update/Read/List） | 校验模型 |
 | T3 | `core/exceptions.py` + `main.py` 全局 handler | 领域异常 + 统一错误体 |
 | T4 | `repositories/knowledge_base.py`（Protocol + SQLAlchemy 实现）+ `deps.py` 增补 | 数据访问层 |
@@ -291,6 +291,6 @@ router.tsx                        # /knowledge-bases 重定向 + /knowledge-base
 6. **功能取舍（少而深）**：纯 CRUD，**不加**置顶/收藏/手动排序/复制/回收站。
 7. **测试策略**：内存 Fake repo 做单元 + 集成测试，不起真库、不改 CI。
 8. **名称唯一**：`name` UNIQUE 约束 + service 查重，冲突返回 409。
-9. **前端视觉（修订 2026-09-13）**：界面复刻 ima——窄图标侧栏 + 知识库页三栏（知识库列表 300px | 内容列表 550px | 问答面板剩余）+ 启动预置「我的知识库」+ 不能删最后一个库；仅删减单用户不适用功能；封面沿用颜色块。
+9. **前端视觉**：窄图标侧栏 + 知识库页三栏（知识库列表 300px | 内容列表 550px | 问答面板剩余）+ 启动预置「我的知识库」+ 不能删最后一个库；仅保留单用户适用功能；封面沿用颜色块。
 10. **预置与删除下限**：应用启动幂等预置「我的知识库」；删除最后一个知识库被拒（409 `last_knowledge_base`）。
 11. **笔记全局、文档与笔记分离**：笔记是全局内容（`notes` 无 `kb_id`），与知识库内的「文档」（pdf/word/url 归档）是两类东西；笔记通过「添加到知识库」建立 `note_knowledge_bases` 多对多关联（引用而非复制，改笔记库里同步变）。数据模型据此设计（详见 `docs/module-3-notes.md` §2）。

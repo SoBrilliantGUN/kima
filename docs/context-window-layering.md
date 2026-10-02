@@ -1,20 +1,18 @@
-# 上下文窗口分层整改计划（L0–L5）
+# 上下文窗口分层设计（L0–L5）
 
-> 状态：**已完成（四阶段全部落地，2026-09-28）**。本文档是本次整改的唯一真相源（single source of truth）——
-> 中途会话中断 / 执行故障后，按本文档从头重跑即可，不依赖对话上下文。
-> 定案日期：2026-09-28。
+> 状态：**已完成**。本文档是上下文分层的唯一真相源（single source of truth）。
 
 ---
 
 ## 0. 背景与目标
 
-kima 现在的上下文装配是「L0 system prompt + L2 记忆块 + 历史」这套模糊分层，存在三个根本问题：
+朴素上下文装配是「L0 system prompt + L2 记忆块 + 历史」这套模糊分层，存在三个根本问题：
 
 1. **分层编号错位**：`memory.py` 里写「L0 宪法 / L2 记忆块」、`context.py` 里写「L0 system / L3 工具结果」、记忆 `copilot-memory-taxonomy` 里写「L0 身份 / L1 积累 / L2 技能」——三套编号各说各话，语义对不上。
 2. **压缩对象错**：`context.py` 的 `ContextManager` 把**所有 messages**（含 system、memory、history）一起压，而正确做法是**只压 history（L5）**，其余层是固定成本、不可压缩。
 3. **缺层**：没有 L1 状态快照、没有 L3 skills 全文、没有宪法文件、reminder 用 SystemMessage 而非 user 角色带内标记。
 
-**目标**：把上下文窗口整改为六块分层，每层独立预算，压缩只打 L5，SubAgent 跑 RAG 护前缀，宪法文件化。
+**目标**：把上下文窗口设计为六块分层，每层独立预算，压缩只打 L5，SubAgent 跑 RAG 护前缀，宪法文件化。
 
 ---
 
@@ -62,7 +60,7 @@ kima 现在的上下文装配是「L0 system prompt + L2 记忆块 + 历史」�
 
 - **L0 system prompt 单独**，不进 messages（保 Prompt Cache 前缀稳定）。
 - messages 内顺序固定：**history → [memory + skills + state + reminder 合并为一条 user]**。
-- 所有注入段（memory/skills/state/reminder）都是 **user 角色**、带内标记前缀；四段**合并成一条 user 消息**，且若历史尾已是 user（首轮=用户问题 / review 更正提示），进一步并进历史尾。目的：满足厂商最严「user/assistant 严格交替」约束（首条非 system 必须是 user、无连续 user，Anthropic/DeepSeek 均拒连续 user）。
+- 所有注入段（memory/skills/state/reminder）都是 **user 角色**、带内标记前缀；四段**合并成一条 user 消息**，且若历史尾已是 user（首轮=用户问题 / review 更正提示），进一步并进历史尾。目的：满足厂商最严「user/assistant 严格交替」约束（首条非 system 必须是 user、无连续 user）。
 - 带内标记双作用：① 给 LLM 分界；② 给代码当锚点——消息落盘/跨轮次恢复后结构化引用丢失，代码靠 `startswith("[HISTORY SUMMARY]")` 从纯文本回捞特定条目。
 
 ---
@@ -202,5 +200,5 @@ history_budget = window − L0 − L1 − L2 − L3 − L4 − safety_margin(500
 2. **SubAgent 子图必须复用 LLMGateway**——否则子图 LLM 调用旁路网关、漏记账/漏快照（违反网关铁律）。
 3. **reminder 从 SystemMessage 改 user 角色**——影响 Prompt Cache 前缀？reminder 在尾部、不进 state/checkpoint、每轮复制注入，改 user 角色后仍需保证「不进永不压缩的 L0」。
 4. **`_build_input_messages` 历史摘要与 L5 压缩合并**——现有 `assemble_history`（service 层）与新 L5 五级压缩（context 层）职责重叠，阶段 1 需明确合并归属，避免两套历史压缩并存。
-5. **带内标记的 `startswith` 脆弱性**——回捞依赖纯文本前缀，摘要文本若恰好以 `[HISTORY SUMMARY]` 开头会误判；沿用 prodagent 约定即可，暂不引入结构化消息类型。
+5. **带内标记的 `startswith` 脆弱性**——回捞依赖纯文本前缀，摘要文本若恰好以 `[HISTORY SUMMARY]` 开头会误判；沿用现有带内标记约定即可，暂不引入结构化消息类型。
 

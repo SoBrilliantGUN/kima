@@ -10,7 +10,7 @@
 - **编辑器**：TipTap 所见即所得 + Markdown 快捷输入，**打开即编辑**（顶部工具栏 + 标题 + 写作区，自动保存）
 - **关联与闭环**：添加到知识库 + 知识库内容列表展示关联笔记 + 知识库内「添加内容」新建笔记
 
-核心数据关系（推翻模块 2 §8 决策 #11「文档=笔记统一进库」）：**笔记是全局内容**（不挂知识库），通过「添加到知识库」建立 `note ↔ 知识库` 的**多对多关联**（引用而非复制，改笔记库里同步变）。
+核心数据关系：**笔记是全局内容**（不挂知识库），通过「添加到知识库」建立 `note ↔ 知识库` 的**多对多关联**（引用而非复制，改笔记库里同步变）。
 
 **明确后置（不在本模块）**：网页采集统一归入文档（模块 4，`documents.source_type=url`）；AI 帮写（续写/扩写/润色）、联动知识库写作 → 模块 5 之后；笔记内搜索/标签/目录 → 后续；笔记向量化 → 模块 5（笔记可变需编辑重向量化）。
 
@@ -38,7 +38,7 @@
 
 ## 2. 数据模型
 
-### 2.1 `notes` 表 + `note_knowledge_bases` 表（迁移 `0003_notes`）
+### 2.1 `notes` 表 + `note_knowledge_bases` 表（已并入基线 `0001_initial`）
 
 **`notes`**（全局笔记，**无 `kb_id`**，纯 Markdown）
 
@@ -104,7 +104,7 @@ class Note(Base, TimestampMixin):
 
 - 关联表用 `Table`（非 ORM 实体），`models/__init__.py` 导出 `Note`、`note_knowledge_bases`。
 
-### 2.3 迁移 `0003_notes`（手写，`down_revision = "0002_knowledge_bases"`）
+### 2.3 迁移（已并入基线 `0001_initial`，手写）
 
 - `upgrade`：`op.create_table("notes", …)` → `op.create_table("note_knowledge_bases", …)`，FK 名走 naming convention：`fk_note_knowledge_bases_note_id_notes`、`fk_note_knowledge_bases_knowledge_base_id_knowledge_bases`。
 - `downgrade`：先 `drop_table("note_knowledge_bases")` 再 `drop_table("notes")`。
@@ -241,8 +241,8 @@ class ContentList(BaseModel):
 - **`tiptap-markdown`**（aguingand）：负责 TipTap 文档 ↔ Markdown 双向序列化，这是「底层存 Markdown」的关键：
   - 打开笔记：`editor.commands.setContent(note.content_markdown)`（parse Markdown → ProseMirror 文档）
   - 保存正文：`editor.getMarkdown()`（serialize → Markdown）→ PATCH
-- **界面参考 ima**（打开即编辑，无读态）：编辑器 = **顶部工具栏 + 标题 + 写作区**。
-- **顶部工具栏**：固定工具栏（对齐 ima），按钮集 = 撤销/重做、加粗、斜体、删除线、H1/H2/H3、无序列表、有序列表、引用、代码块、行内代码。工具栏按钮与 Markdown 快捷输入并存。
+- **界面（打开即编辑，无读态）**：编辑器 = **顶部工具栏 + 标题 + 写作区**。
+- **顶部工具栏**：固定工具栏，按钮集 = 撤销/重做、加粗、斜体、删除线、H1/H2/H3、无序列表、有序列表、引用、代码块、行内代码。工具栏按钮与 Markdown 快捷输入并存。
 
 ### 4.2 页面布局（打开即编辑）
 
@@ -258,7 +258,7 @@ class ContentList(BaseModel):
 | 标题 `title` | `onBlur` 失焦（或 Enter） | `PATCH {title}` |
 | 离开编辑页 | 路由切换前 | flush 未保存的 debounce + 保存脏标题 |
 
-- 两者共用 `PATCH /notes/{id}` 部分更新，互不干扰（对齐 ima「自动保存，无需 Ctrl+S」）。
+- 两者共用 `PATCH /notes/{id}` 部分更新，互不干扰（自动保存，无需 Ctrl+S）。
 - 前端用 react-query 的 `useUpdateNote` mutation，成功后 `invalidateQueries(['notes'])` + 更新 `['notes', id]` 缓存。
 
 ---
@@ -327,7 +327,7 @@ router.tsx                        # + /notes/:id（打开即编辑，无 ?edit=1
 | 步骤 | 内容 | 产出 |
 |---|---|---|
 | T1 | `package.json` 加 TipTap 系依赖 | 依赖可装 |
-| T2 | `models/note.py` + 迁移 `0003_notes`（手写 up/down）+ `models/__init__.py` 导出 | 可 `upgrade head` 建表 |
+| T2 | `models/note.py` + 迁移（并入 `0001_initial` 基线，手写 up/down）+ `models/__init__.py` 导出 | 可 `upgrade head` 建表 |
 | T3 | `schemas/note.py`（NoteCreate/NoteUpdate + knowledge_base_id）+ `schemas/knowledge_base.py` 加 ContentItem/ContentList | 校验模型 |
 | T4 | `repositories/note.py`（含 update/list_by_kb）+ `deps.py` 增补 note repo/service | 数据访问层 |
 | T5 | `services/note.py`（create_blank/update/list_by_kb/kb_id 关联） | 业务规则层 |
@@ -343,13 +343,13 @@ router.tsx                        # + /notes/:id（打开即编辑，无 ?edit=1
 
 ## 8. 已定决策
 
-1. **笔记全局（无 `kb_id`）**：推翻模块 2 §8 决策 #11「文档=笔记统一进库」。
+1. **笔记全局（无 `kb_id`）**：笔记是全局内容，不挂知识库（`notes` 无 `kb_id`）。
 2. **添加到知识库 = 多对多关联**（引用不复制，改笔记库里同步变）；关联表复合主键 + 双 `ondelete=CASCADE`。
 3. **纯 Markdown 空白笔记**：无 `type`/`summary`/`source_url`；网页采集统一归入文档（模块 4，`documents.source_type=url`）。
 4. **编辑器形态**：TipTap 所见即所得 + Markdown 快捷输入；底层存 Markdown（`tiptap-markdown` 双向序列化）。
-5. **打开即编辑（无读态）**：对齐 ima「列表 + 工具栏 + 写作区」，点开笔记直接编辑，无读态/编辑态分离、无 `?edit=1` 路由。
-6. **编辑器界面参考 ima**：顶部工具栏（加粗/斜体/标题/列表/引用/代码等）+ 标题 + 写作区。
-7. **保存（混合自动）**：正文 debounce 自动保存 + 标题失焦保存（对齐 ima「无需 Ctrl+S」）；离开前 flush。
+5. **打开即编辑（无读态）**：列表 + 工具栏 + 写作区，点开笔记直接编辑，无读态/编辑态分离、无 `?edit=1` 路由。
+6. **编辑器界面**：顶部工具栏（加粗/斜体/标题/列表/引用/代码等）+ 标题 + 写作区。
+7. **保存（混合自动）**：正文 debounce 自动保存 + 标题失焦保存（无需 Ctrl+S）；离开前 flush。
 8. **空白笔记默认标题**：落库「无标题笔记」（`title` 保持非空，schema 不变）。
 9. **知识库内新建**：知识库页「添加内容」下拉 = 本地文档 / URL 文档（模块 4）；后端给笔记创建端点加可选 `knowledge_base_id`，原子建「笔记 + 关联」，kb 校验前置避免孤儿笔记。
 10. **知识库内容列表展示关联笔记**：本模块收口（新建 `GET /knowledge-bases/{kb_id}/contents` 异构端点，含 notes + documents）。

@@ -267,7 +267,7 @@ SSE 事件流（`text/event-stream`）：
 
 ## 10. 前端
 
-### 10.1 首页（`pages/Home/`，参考 ima 首页）
+### 10.1 首页（`pages/Home/`）
 
 ```
 pages/Home/
@@ -278,7 +278,7 @@ src/components/chat/           # 首页与右面板共用的聊天组件
   ConversationList.tsx         # 历史会话（新建/切换/删除，className 覆盖布局）
 ```
 
-- **布局对齐 ima 首页**：左侧历史会话列表 + 主区问答（中部消息流、底部输入框；输入框上方「联网搜索」开关 + 「基于知识库」按钮 + 已选知识库 chips）。
+- **布局**：左侧历史会话列表 + 主区问答（中部消息流、底部输入框；输入框上方「联网搜索」开关 + 「基于知识库」按钮 + 已选知识库 chips）。
 - **检索范围**：`联网搜索` 开关与「基于知识库」（多选）**互斥**——开启联网走博查、基于知识库走混合检索、两者都不开则纯 LLM 无检索。检索范围由 `kb_ids` + `web_search` 表达。
 - **切换不清空聊天**：切换检索范围只影响下一条消息，会话（首页全局、`kb_id` 为 null）与历史消息保持不变。
 - **默认落地页**：`/` 即首页，首次加载默认选中第一条历史会话（决策 #2/#15）。
@@ -335,7 +335,7 @@ src/components/chat/           # 首页与右面板共用的聊天组件
 
 ## 13. 已定决策
 
-1. **两处入口**：`kima` 首页（联网搜索 / 基于知识库）+ 知识库右面板（当前库）；无「所有库聚合」档（对齐 ima，个人场景够用）。
+1. **两处入口**：`kima` 首页（联网搜索 / 基于知识库）+ 知识库右面板（当前库）；无「所有库聚合」档（个人场景够用）。
 2. **检索范围**：基于知识库模式 = 所选库的 documents + 已关联 notes（可多选）；游离笔记不向量化、不参与检索。
 3. **联网搜索**：完整做，接博查 Web Search API；`WebSearchClient` Protocol 可插拔；联网搜索与基于知识库互斥、不混合；两者都关时纯 LLM 无检索。
 4. **流式（SSE）**：`LLMClient` 加 `stream()`；问答走 SSE 打字机 + 引用补齐。
@@ -344,6 +344,6 @@ src/components/chat/           # 首页与右面板共用的聊天组件
 7. **上下文管理**：token 预算驱动——固定段（system/检索上下文/问题/安全余量）先扣、剩余给历史；超预算时动态降级 recent 轮数（保留「塞得下」的最大 verbatim 轮）+ 摘要早期历史并硬截断到剩余预算，替代硬编码轮数；各阈值可配置。
 8. **引用**：chunk 级 + 底部「来源」面板（标题 + 片段 + 跳转原文档/笔记），正文标 `[n]`。
 9. **会话管理**：首页带历史会话列表（`kb_id` 空）；右面板按库持久化（`kb_id` 挂库）。
-10. **首页 UI 参考 ima**：会话列表 + 主问答区（联网搜索开关 + 基于知识库多选 + 消息流 + 输入框）；Copilot 浮窗本版不加。
+10. **首页 UI**：会话列表 + 主问答区（联网搜索开关 + 基于知识库多选 + 消息流 + 输入框）；Copilot 浮窗本版不加。
 11. **模型**：单 `deepseek-flash`，无「快速/深度」档（后置）；rerank 用 SiliconFlow bge-reranker；改写/摘要 `temperature=0`，生成 `temperature=0.3`。
 12. **评估最小集**：检索层 recall@k / MRR（`app/rag/metrics.py` 纯函数 + `app/rag/eval_runner.py` golden 集运行器，驱动 chunking 决策）+ 端到端 LLM-judge faithfulness / answer_relevancy / context_relevancy（`app/rag/eval.py`，复用现有 `LLMClient`，1–5 分归一化）；`scripts/eval_retrieval.py` 跑真实检索出报告，golden 集用「应命中片段」子串标注（`eval/golden.example.json`）；不引 ragas 重包（避免拖入 langchain），judge 用 `temperature=0`。

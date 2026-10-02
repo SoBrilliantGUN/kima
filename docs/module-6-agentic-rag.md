@@ -1,6 +1,6 @@
 # QA 升级 Agentic RAG：一套实现 + 对等子 Agent
 
-> 状态：已实现（2026-09-28）。本文记录决策、主/子 Agent 差异与实现要点。
+> 状态：已实现。本文记录决策、主/子 Agent 差异与实现要点。
 
 ## 1. 背景与目标
 
@@ -12,7 +12,7 @@
 `build_reactive_graph` 与 `build_rag_subgraph` 两套 `agent ⇄ tools` 循环的重复——
 用「一套实现 + `subagent` 标记」统一，子 Agent 与主 Agent 是**对等完整版**。
 
-对齐 Claude Code 的 SubAgent 设计（上下文强隔离 + 工具白名单 + 父显式下传），而非
+采用「上下文强隔离 + 工具白名单 + 父显式下传」的子 Agent 设计，而非
 另写一套轻量子循环。
 
 ## 2. 核心决策
@@ -75,7 +75,7 @@ _RAG_SUBAGENT_TOOL_NAMES = frozenset(
 QA_TOOL_NAMES = _RAG_SUBAGENT_TOOL_NAMES | {"spawn_rag"}
 ```
 
-### 4.3 约束显式下传（Claude 强隔离）
+### 4.3 约束显式下传（强隔离）
 
 子 Agent **不自动继承**父上下文的 soul/user 人设或完整记忆块，唯一通道是派发参数：
 
@@ -103,7 +103,7 @@ def format_subagent_constraints(recalled: RecalledMemories) -> str:
 ### 4.5 防递归
 
 子 Agent 工具集 `_RAG_SUBAGENT_TOOL_NAMES` 不含 `spawn_rag`，天然禁止子 Agent 再派子 Agent。
-不引入 Claude 的深度限制（RAG 检索子 Agent 场景不需要）。
+不引入子 Agent 递归深度上限（RAG 检索子 Agent 场景不需要）。
 
 ## 5. 改动清单
 

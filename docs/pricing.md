@@ -1,6 +1,6 @@
 # 实时价格计费 + 人民币统一 + 成本审计方案
 
-> 状态：**已实现**（2026-09-23，含「qa.generate 补 run 身份」）
+> 状态：**已实现**
 > 关联：`docs/requirements.md`、`docs/module-6-copilot.md`（§4.11 LLM 网关）
 > 目标读者：后续维护者（读本文件了解设计意图与已落地实现）
 
@@ -283,7 +283,7 @@ copilot_daily_max_cost_cny: float = 10.0  # 原 copilot_daily_max_cost_usd
 
 ### Phase 1 — 定价目录 + 模型 + 迁移
 - 新增 `app/models/pricing.py`（`PricingPolicy` / `PricingChangeLog` / `CopilotLLMCost`），注册进 `models/__init__.py`。
-- 迁移 `0012_pricing.py`：建 3 张表 + exclusion 约束 + 审计触发器 + 时段校验触发器；`ALTER copilot_daily_budget RENAME cost_usd TO cost_cny`。
+- 迁移（已并入 `0002_copilot`）：建 3 张表 + exclusion 约束 + 审计触发器 + 时段校验触发器；`copilot_daily_budget` 直接列名 `cost_cny`（原 `cost_usd`→`cost_cny` 重命名已消解）。
 - 单测：校验触发器（重叠区间拒绝、时段不覆盖 24h 拒绝）。
 
 ### Phase 2 — strategy + PricingService + 仓库
@@ -317,7 +317,7 @@ copilot_daily_max_cost_cny: float = 10.0  # 原 copilot_daily_max_cost_usd
 - `app/models/pricing.py` —— 3 张表模型
 - `app/repositories/pricing.py` —— 价格仓库（SQLAlchemy + InMemory）
 - `app/repositories/llm_cost.py` —— 成本明细仓库（SQLAlchemy + InMemory）
-- `backend/alembic/versions/0012_pricing.py` —— 建表 + 约束 + 触发器 + `cost_usd`→`cost_cny`
+- `backend/alembic/versions/0002_copilot.py` —— 建表 + 约束 + 触发器（已并入合并基线，`copilot_daily_budget` 直接列名 `cost_cny`）
 - `backend/tests/test_pricing.py`、`test_llm_cost.py`
 
 **修改**
@@ -337,7 +337,7 @@ copilot_daily_max_cost_cny: float = 10.0  # 原 copilot_daily_max_cost_usd
 
 **风险/回滚重点**
 - `reactive.py` 的 agent 主循环是热路径，改 `record` 签名要同步更新 `helpers.py` 与三条执行模式。
-- `copilot_daily_budget.cost_usd→cost_cny` 列重命名，迁移要幂等（先建后改、避免破坏现有数据）。
+- `copilot_daily_budget.cost_usd→cost_cny` 列重命名：迁移已并入 `0002_copilot` 基线、直接列名 `cost_cny`（无需先建后改，重命名往返已消解）。
 
 ---
 
@@ -366,7 +366,7 @@ copilot_daily_max_cost_cny: float = 10.0  # 原 copilot_daily_max_cost_usd
 
 ---
 
-## 10. 下次开工清单（给 Claude 的指令）
+## 10. 实施清单
 
 1. 先读 `docs/pricing.md`（本文件）+ 决策表 D1–D9。
 2. 按 §6 分阶段实施，**每阶段独立提交**；阶段间跑通测试再进下一阶段。

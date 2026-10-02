@@ -73,7 +73,7 @@ pending ──worker 拾起──▶ processing ──成功──▶ done
 
 ## 3. 数据模型
 
-### 3.1 `documents` 表（迁移 `0004_documents`，`down_revision="0003_notes"`）
+### 3.1 `documents` 表（已并入基线 `0001_initial`）
 
 **`documents`**（知识库内文档，`kb_id` 必填——与笔记「全局」相反）
 
@@ -216,7 +216,7 @@ class DocumentChunk(Base):
 - `parent_id` 自引用 FK `ondelete=CASCADE`：删 parent → 清其 children；删 document → 清全部分块。
 - `Document.filename` 派生属性：`title + 扩展名`（`DOCUMENT_EXTENSIONS` 映射，注意 WORD 扩展名是 `docx` 而非 `source_type.value` 的 `word`），供下载文件名与 MinerU 上传 name 使用。
 
-### 3.4 迁移 `0004_documents`（手写）
+### 3.4 迁移（已并入基线 `0001_initial`，手写）
 
 - **回改 notes**：`op.drop_column("notes", "type")` / `"summary"` / `"source_url"`（彻底删除网页笔记的 url 专属字段；dev 库已有 url 笔记一并丢弃，写进迁移说明）。
 - **建表**：`op.create_table("documents", …)` → `op.create_table("document_chunks", …)`，FK 名走 naming convention（`fk_documents_kb_id_knowledge_bases`、`fk_document_chunks_parent_id_document_chunks` 等）。
@@ -527,7 +527,7 @@ router.tsx                # 移除 /documents/:documentId 路由（浮动窗口�
 | 步骤 | 内容 | 产出 |
 |---|---|---|
 | T1 | `pyproject.toml` 加 `python-multipart`、`pgvector`、`mammoth`（+ 视需 `tree-sitter`）；`httpx` 移入运行时依赖 | 依赖可装 |
-| T2 | `models/document.py` + 迁移 `0004`（建 documents/document_chunks + drop notes 三列 + 部分 HNSW） | 可 `upgrade head` |
+| T2 | `models/document.py` + 迁移（并入 `0001_initial` 基线，建 documents/document_chunks + drop notes 三列 + 部分 HNSW） | 可 `upgrade head` |
 | T3 | `app/chunking/` 包：markdown-it-py AST 切分 + registry + 3 splitter + parent 切分 + 单测 | 分块能力（可独立验收） |
 | T4 | `integrations/parser.py`（协议 + 分发工厂）+ `parser_mineru.py`/`parser_word.py`/`parser_web.py`（三实现）+ `integrations/embedding.py`（SiliconFlow） | 解析/向量化真实 provider |
 | T5 | `core/storage.py`（FileStore）+ `services/ingest.py`（parent→child→embed 流水线） | 核心业务逻辑 |

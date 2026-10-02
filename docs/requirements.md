@@ -1,14 +1,13 @@
 # kima — 项目需求与技术方案
 
-> 记录日期：2026-09-10
 > 状态：需求已锁定；模块 1（基础设施）、模块 2（知识库管理）、模块 3（笔记/编辑器）、模块 4（文档解析与归档）、模块 5（AI 智能问答）已实现
-> 本文档记录本次讨论的完整结论，作为后续逐模块实现的需求基线
+> 本文档记录完整结论，作为逐模块实现的需求基线
 
 ---
 
 ## 1. 项目概述
 
-复刻腾讯 **ima**（ima.copilot，AI 知识库 / 智能工作台）的同类产品。
+一个 AI 知识库 / 智能工作台（个人工具）。
 
 核心定位：**可用的个人 AI 知识库工具**（非 UI 演示、非 Mock 数据），前后端分离、各模块高度解耦、逐个讨论并实现。
 
@@ -52,7 +51,7 @@
 | 问答 LLM | DeepSeek（OpenAI 兼容） |
 | 向量化 Embedding | SiliconFlow 在线（bge-m3） |
 | Rerank | SiliconFlow（bge-reranker） |
-| RAG 编排 | **v1 Advanced RAG**（查询改写 + 混合检索 + RRF + rerank + 生成引用） |
+| RAG 编排 | **Advanced RAG**（查询改写 + 混合检索 + RRF + rerank + 生成引用） |
 | 词法检索 | PostgreSQL 中文全文检索扩展（pg_jieba，备选 zhparser），与 pgvector 同库 |
 | Agentic 编排 | **LangGraph（后补）**，不使用 LlamaIndex |
 
@@ -141,22 +140,22 @@ kima/
 | `note_knowledge_bases` | note_id(fk→notes)、knowledge_base_id(fk→knowledge_bases)、created_at；唯一(note_id, knowledge_base_id) |
 | `chat_conversations` | id、kb_id、kind(qa/copilot)、标题、created_at |
 | `chat_messages` | id、conversation_id、role、content、citations(jsonb)、steps(jsonb)、created_at |
-| `copilot_memories` | id、kind(约束/事实/偏好/情节)、content、entity_id、embedding(vector)、ttl_days、trigger_conditions(jsonb)、importance、access_count、last_access、superseded、superseded_at/by、version、created_at/updated_at |
+| `copilot_memories` | id、kind(约束/事实/偏好/情节)、content、entity_id、embedding(vector)、ttl_days、trigger_conditions(jsonb)、access_count、last_access、superseded、superseded_at/by、version、tsv(生成列，词法检索)、created_at/updated_at |
 | `copilot_events` | id、seq、run_id、type、payload(jsonb)、created_at（append-only 事件日志） |
-| `copilot_daily_budget` | day(PK)、cost_usd、tokens（跨 run 全局日预算，重启续读） |
+| `copilot_daily_budget` | day(PK)、cost_cny、tokens（跨 run 全局日预算，重启续读） |
 | `copilot_llm_snapshots` | run_id+call_key(PK)、kind、output(jsonb)、usage(jsonb)、created_at（LLM 调用级快照，宕机恢复不重跑） |
 
-> **迁移说明（第一版）**：项目为 v1 第一版、无历史数据，全部数据库迁移已合并为单一基线 `alembic/versions/0001_initial.py`（含 vector + pg_jieba 扩展、8 张表、父子切割自引用 FK、HNSW 部分索引 + tsv GIN）。各模块文档（module-2/3/4/5）中出现的 `0002_knowledge_bases` / `0003_notes` / `0004_documents` / `0006_rag` 等编号均为历史增量，现统一并入 `0001_initial`。
+> **数据库迁移**：数据库迁移为单一基线 `alembic/versions/0001_initial.py`（含 vector + pg_jieba 扩展、8 张表、父子切割自引用 FK、HNSW 部分索引 + tsv GIN）。
 >
-> **模块 6 增量迁移（v2，2026-09-20 起）**：`0001_initial` 之后新增 `0002_copilot`（记忆 + 事件日志 + chat 回改）、`0003_daily_budget`、`0004_constraint_lexical`、`0005_memory_forgetting`、`0006_llm_snapshot`，详见 `docs/module-6-copilot.md` §3。
+> **模块 6 迁移**：`0001_initial` 之后新增单一基线 `0002_copilot`（原 0002~0017 合并：记忆/事件/预算/快照/审批/熔断/幂等/计费全量表 + chat/notes/documents 回改），详见 `docs/module-6-copilot.md` §3。
 
 ---
 
 ## 7. 关键决策记录（含理由）
 
-1. **前端视觉**：界面尽量复刻 ima（窄图标侧栏 + 知识库页「左列表 + 右问答」+ 简洁白蓝视觉），仅删减单用户不适用的功能（共享知识库/知识库广场/微信生态导入/成员权限/多端同步等），不做自己的设计语言。
-2. **AI 助手形态**：复刻 ima，无独立「AI」按钮。AI 由两处承载——① `kima` 首页 tab（全局 AI 问答主页，模块 5 实现）；② 知识库页右侧常驻问答面板（针对当前知识库/文档提问）。「Copilot」（知识 Agent，双形态：首页「我的Copilot」普通对话 + 跨 Tab 小窗）由模块 6 实现（`docs/module-6-copilot.md`）。理由：ima 的 AI 入口是「ima 首页 tab + 知识库右问答 + 首页 Copilot」，并不存在顶栏「AI」按钮；原「全局可呼出侧栏」是与 ima 不符的过度设计。
-3. **RAG 路线**：v1 直接做 Advanced RAG（查询改写 + 向量/词法混合检索 + RRF + rerank + 生成引用），Agentic 用 LangGraph（模块 6 落地），不用 LlamaIndex。理由：数据管道自定义，LlamaIndex 价值有限；LangGraph 是 Agentic 正统编排，模块 6 只在编排层替换即可。
+1. **前端视觉**：窄图标侧栏 + 知识库页「左列表 + 右问答」+ 简洁白蓝视觉，仅保留单用户适用的功能（不做共享知识库/知识库广场/微信生态导入/成员权限/多端同步等）。
+2. **AI 助手形态**：无独立「AI」按钮。AI 由两处承载——① `kima` 首页 tab（全局 AI 问答主页，模块 5 实现）；② 知识库页右侧常驻问答面板（针对当前知识库/文档提问）。「Copilot」（知识 Agent，双形态：首页「我的Copilot」普通对话 + 跨 Tab 小窗）由模块 6 实现（`docs/module-6-copilot.md`）。理由：AI 入口收敛到首页 tab + 知识库右问答两处，再加首页 Copilot 入口，不设顶栏「AI」按钮，也不做全局可呼出侧栏（单用户场景下属过度设计）。
+3. **RAG 路线**：直接做 Advanced RAG（查询改写 + 向量/词法混合检索 + RRF + rerank + 生成引用），Agentic 用 LangGraph（模块 6 落地），不用 LlamaIndex。理由：数据管道自定义，LlamaIndex 价值有限；LangGraph 是 Agentic 正统编排，模块 6 只在编排层替换即可。
 4. **MinerU 接入**：走托管 API，避免本地重模型。后端抽象为可配置解析客户端。
 5. **编辑器**：Markdown 编辑器（TipTap），不做类 Notion 块级编辑器（工作量大，后续可迭代）。
 6. **文档类型**：PDF、网页链接、Word；图片 OCR 可选（MinerU 自带 OCR，顺带处理）。
@@ -168,10 +167,10 @@ kima/
 12. **Postgres 镜像节奏**：模块 1 先用官方 `pgvector/pgvector` 镜像跑通链路，词法检索的 pg_jieba 自建镜像推迟到模块 5 再编译。理由：降低起步复杂度与调试成本，先验证其余链路，基础设施一次性定型反而拖慢节奏。
 13. **Python 包管理**：uv。理由：极快、有锁文件（uv.lock）、内建虚拟环境，最契合「可复现、可运维」的工程展示目标。
 14. **集成抽象形态**：LLM / Embedding / MinerU 三接口统一用 **async + Protocol**（结构化鸭子类型）。理由：与 FastAPI / asyncpg 的 async 生态一致，LLM/Embedding 的 IO 调用不阻塞事件循环；Protocol 避免继承耦合。
-15. **导航信息架构对齐 ima**：侧栏一级导航复刻 ima 的单用户裁剪版，顺序为 `kima`（首页 = AI 问答主页，默认落地页）/ `知识库` / `笔记`。其中「问答」并入 `kima` 首页、「搜索」并入问答检索（ima 无独立全局搜索，不单列模块）、「发现」因多用户裁掉、「浏览」因需内嵌浏览器（纯 Web 无法实现）裁掉，其「收藏网页」能力改由知识库的「URL 文档」承载（见 #19）。理由：决策 #1 只复刻了视觉（窄图标栏），未复刻信息架构；ima 侧栏是「产品功能入口」而非「模块清单」，命名/结构应与产品对齐。
-16. **知识库页三栏布局**：复刻 ima 的 master-detail 三栏——`[图标导航 64px] [知识库列表 300px] [内容列表 550px] [问答面板 剩余空间]`，三栏同屏。选中知识库走 URL（`/knowledge-bases/:id`，`/knowledge-bases` 重定向到第一个）；内容列表展示当前知识库的内容 = 库内 documents + 关联进来的 notes（见 #18/#19），问答面板针对当前知识库提问。
+15. **导航信息架构**：侧栏一级导航为单用户裁剪版，顺序为 `kima`（首页 = AI 问答主页，默认落地页）/ `知识库` / `笔记`。其中「问答」并入 `kima` 首页、「搜索」并入问答检索（不单列独立全局搜索模块）、「发现」因多用户场景裁掉、「浏览」因需内嵌浏览器（纯 Web 无法实现）裁掉，其「收藏网页」能力改由知识库的「URL 文档」承载（见 #19）。理由：侧栏定位为「产品功能入口」而非「模块清单」，命名/结构按用户使用路径组织。
+16. **知识库页三栏布局**：master-detail 三栏——`[图标导航 64px] [知识库列表 300px] [内容列表 550px] [问答面板 剩余空间]`，三栏同屏。选中知识库走 URL（`/knowledge-bases/:id`，`/knowledge-bases` 重定向到第一个）；内容列表展示当前知识库的内容 = 库内 documents + 关联进来的 notes（见 #18/#19），问答面板针对当前知识库提问。
 17. **默认知识库 + 删除规则**：应用启动（lifespan）时幂等预置「我的知识库」（`#5B8DEF`），保证始终至少一个知识库；**不能删除最后一个知识库**（后端 409 `last_knowledge_base` + 前端隐藏删除按钮）。
-18. **笔记全局 + 添加到知识库（推翻旧「文档=笔记统一进库」）**：笔记是**全局**内容，不归属任何知识库（`notes` 无 `kb_id`）；知识库内的「文档」（pdf/word/url 归档）与「笔记」是两类东西。笔记可通过「添加到知识库」动作关联进某知识库（`note_knowledge_bases` 多对多，**引用而非复制**，改笔记库里同步变）。
+18. **笔记全局 + 添加到知识库**：笔记是**全局**内容，不归属任何知识库（`notes` 无 `kb_id`）；知识库内的「文档」（pdf/word/url 归档）与「笔记」是两类东西。笔记可通过「添加到知识库」动作关联进某知识库（`note_knowledge_bases` 多对多，**引用而非复制**，改笔记库里同步变）。
 
 19. **URL 统一归入文档（详见 `docs/module-4-documents.md`）**：URL 不再作为网页笔记，统一归入文档（`documents.source_type=pdf/word/url`）；`notes` 为纯 Markdown 空白笔记（无 `type`/`summary`/`source_url` 三列、无 `from-url` 端点）。文档解析按类型分发——PDF→MinerU、Word→mammoth+markdownify、URL→复用 WebFetcher。父子切割 small-to-big——`document_chunks` 自引用 `parent_id`，parent 大块存上下文不向量化、child 小块向量化，检索命中 child 回 parent。内容感知分块基于 markdown-it-py AST + 3 splitter（结构化递归兜底 + 表格 + 代码），标题落地为可检索 child、相邻块重叠 ~50 token。异步 DB 轮询 worker + 自建重试退避。文档阅读器（PDF 内嵌原文件 / Word 与 URL 渲染解析 markdown），支持下载原文件 / 打开原网页。笔记向量化留模块 5。
 
