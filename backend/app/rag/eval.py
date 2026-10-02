@@ -1,6 +1,6 @@
 """端到端 RAG 指标（LLM-judge）：faithfulness / answer_relevancy / context_relevancy。
 
-最小集：只实现无需 ground-truth 的三项（对照 RAGAS 语义），1–5 分归一化到 0–1。
+最小集：只实现无需 ground-truth 的三项，1–5 分归一化到 0–1。
 不引入 ragas 重包（避免拖入 langchain），直接复用现有 LLMClient；judge 用
 temperature=0 提高稳定性，但仍建议多次采样取均值。
 """

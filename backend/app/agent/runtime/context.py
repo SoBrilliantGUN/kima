@@ -8,7 +8,7 @@ L0 system / L1 state / L2 memory / L3 skills / L4 reminder 是**固定成本**�
 黄金法则：``ratio = 所有层实际占用之和 / window``，但刀只落在 history——窗口是所有人的池子，
 拥挤度要看所有人；能让步的只有 history 一个。``history_budget = window − 其余五层 − margin``。
 
-五级渐进（对齐 prodagent）：
+五级渐进压缩：
 - NONE（<0.25）：``_fit_budget`` 丢最老（保持 tool 配对）
 - TOOL_COMPRESS（0.25–0.70）：工具结果内联压缩（规则式，无 LLM）
 - HISTORY_SUMMARY（0.70–0.85）：保留最近 6 条，更早 LLM 摘要成 ``[HISTORY SUMMARY]``
@@ -62,7 +62,7 @@ class Layer(StrEnum):
 
 
 class RunState(StrEnum):
-    """run 生命周期（L1 快照 ``State`` 字段的真实值，对齐 prodagent ``RunState``）。"""
+    """run 生命周期（L1 快照 ``State`` 字段的真实值）。"""
 
     RUNNING = "running"  # agent ⇄ tools ⇄ review 循环进行中
     SUSPENDED = "suspended"  # HITL interrupt 挂起，等写工具审批
@@ -127,8 +127,8 @@ def format_state(
 ) -> str:
     """L1 状态快照（``[STATE]`` 带内标记）：轻量运行时状态，不是完整 State JSON（噪音太大）。
 
-    ``state`` 是 run 的真实生命周期状态（``RunState`` 值），由调用方从图状态读出——对齐
-    prodagent ``format_state`` 的 ``run.state.value``，而不是写死 ``"running"``。
+    ``state`` 是 run 的真实生命周期状态（``RunState`` 值），由调用方从图状态读出，
+    而不是写死 ``"running"``。
     ``last_error`` 是经 :func:`format_last_error` 映射后的失败信号（空则省略该段）。
     """
     line = (

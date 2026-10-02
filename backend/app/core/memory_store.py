@@ -52,8 +52,8 @@ class FileMemoryStore:
     async def write(self, name: str, content: str) -> None:
         """原子覆盖写：临时文件 + ``os.replace``（写一半崩溃/并发读不会看到半截文件）。
 
-        直接 ``write_text`` 是「先截断再写」，并发读写会读到空/半截内容（《隔离优于共享》
-        场景一的进度文件竞态）；改为同目录临时文件写完后原子替换。
+        直接 ``write_text`` 是「先截断再写」，并发读写会读到空/半截内容（进度文件竞态）；
+        改为同目录临时文件写完后原子替换。
         """
         self._base_dir.mkdir(parents=True, exist_ok=True)
         path = self._path(name)

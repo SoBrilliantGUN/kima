@@ -12,7 +12,7 @@ MEMORY_LEXICAL_TOP_K = 5
 # RRF 融合的排名衰减常数（与 app/rag/hybrid.py 的 RRF_K 一致）
 _RRF_K = 60
 
-# activation 公式参数（见 module-6 §2.4，对齐 prodagent forgetting.py）
+# activation 公式参数（见 module-6 §2.4）
 RECALL_FLOOR = 0.05
 ACCESS_LOG_FACTOR = 0.2
 RECENCY_BONUS = 0.3

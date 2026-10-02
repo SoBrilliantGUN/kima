@@ -24,7 +24,7 @@ class RunSession:
 
     `run_state` 是编排层生命周期（running→suspended/completed/failed），由 `stream_graph`
     在三个真实边界写入（interrupt/review 判终/异常），收尾时透传给 `commit_assistant` 落
-    done 事件——对齐 prodagent 把 `state` 放在 `AgentRun`（循环持有的可变对象）而非图内。
+    done 事件——生命周期状态放在编排层循环持有的可变对象（本对象）而非图内。
     """
 
     write_tool_names: frozenset[str]

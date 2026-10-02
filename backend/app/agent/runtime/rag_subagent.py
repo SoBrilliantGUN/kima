@@ -8,7 +8,7 @@
 归因），故不能跨 run 缓存。``spawn_rag`` 工具在 tool 节点被 ``run_budget`` 包裹，``run``
 里 ``current()`` 拿到的就是主循环的 run context；无网关的测试路径则自建独立账本。
 
-约束由父 Agent **显式下传**（Claude 强隔离，唯一通道是派发参数）：``run(task, constraints)``
+约束由父 Agent **显式下传**（强隔离，唯一通道是派发参数）：``run(task, constraints)``
 的 ``constraints`` 是调用方（``spawn_rag``）拼好的「红线 + constraint 型硬约束」，子 Agent
 不自动继承父上下文的 soul/user 人设或完整记忆块。
 """

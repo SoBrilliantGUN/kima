@@ -161,8 +161,8 @@ def format_subagent_constraints(recalled: RecalledMemories) -> str:
     """子 Agent 精简约束块（父显式下传）：宪法铁律（红线）+ constraint 型硬约束。
 
     不传 preference/fact/episodic（检索子任务只需底线）；也不传主 Agent 的 soul/user 人设
-    与工具清单——子 Agent 用自己的「检索子 Agent」角色 + 这份精简底线，对齐 Claude 子
-    Agent 的强隔离（唯一通道是派发时显式拼入）。
+    与工具清单——子 Agent 用自己的「检索子 Agent」角色 + 这份精简底线，实现强隔离
+    （唯一通道是派发时显式拼入）。
     """
     parts = [f"[约束]\n{load_constitution()}"]
     if recalled.constraint:
