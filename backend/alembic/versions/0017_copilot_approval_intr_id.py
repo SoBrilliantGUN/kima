@@ -1,6 +1,6 @@
 """审批单加 interrupt_id（LangGraph 并行多 interrupt 的 resume map 键）
 
-Revision ID: 0017_copilot_approval_interrupt_id
+Revision ID: 0017_copilot_approval_intr_id
 Revises: 0016_drop_copilot_plan
 Create Date: 2026-10-02
 
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0017_copilot_approval_interrupt_id"
+revision = "0017_copilot_approval_intr_id"
 down_revision = "0016_drop_copilot_plan"
 branch_labels = None
 depends_on = None
