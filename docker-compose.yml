@@ -8,8 +8,10 @@ services:
       POSTGRES_USER: kima
       POSTGRES_PASSWORD: kima
       POSTGRES_DB: kima
+    # 只绑 127.0.0.1（loopback）：开发时 host 上的 pytest/alembic 要连 localhost:5432，
+    # 但不暴露给局域网/公网，满足生产收口诉求。
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -45,9 +47,11 @@ services:
       WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-fake}
       WEB_SEARCH_API_KEY: ${WEB_SEARCH_API_KEY:-}
       WEB_SEARCH_BASE_URL: ${WEB_SEARCH_BASE_URL:-https://api.bochaai.com/v1}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+    # 只绑 127.0.0.1（loopback）：开发时 vite dev proxy 指向 localhost:8000，
+    # 生产走 nginx 反代、不暴露给外部。
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -57,6 +61,24 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+    image: kima-frontend:latest
+    container_name: kima-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
 volumes:
   pgdata:

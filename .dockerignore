@@ -1,0 +1,12 @@
+# 构建上下文排除（backend/frontend 镜像共用 context: .）
+# 关键：排除 node_modules，否则宿主机 Windows 的 node_modules 会在 COPY 时覆盖
+# 容器内 pnpm install 生成的 Linux 依赖。
+.git
+.gitignore
+node_modules
+dist
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
