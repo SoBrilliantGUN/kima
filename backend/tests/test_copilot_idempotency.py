@@ -1,4 +1,4 @@
-"""写工具幂等去重：幂等表状态机 + 业务意图键派生（对照《Agent Tools 的幂等性》§3/§6）。
+"""写工具幂等去重：幂等表状态机 + 业务意图键派生。
 
 覆盖幂等表核心状态机：原子抢占（inserted）、结果缓存命中（cached）、同键不同参数冲突
 （conflict）、处理中（processing）、永久失败（failed_final）、processing 过期惰性回收；

@@ -134,6 +134,13 @@ async def test_plan_graph_parallel_steps(tmp_path: Path) -> None:
             {"id": "1", "action": "list_notes", "params": {}},
             {"id": "2", "action": "list_notes", "params": {}},
             {"id": "3", "action": "list_notes", "params": {}},
+            {
+                "id": "4",
+                "action": "finalize_answer",
+                "params": {},
+                "depends_on": ["1", "2", "3"],
+                "terminal": True,
+            },
         ]
     }
     rt = make_plan_runtime(tmp_path, json.dumps(plan), "三份笔记都列好了。")
@@ -141,7 +148,7 @@ async def test_plan_graph_parallel_steps(tmp_path: Path) -> None:
     run_id = uuid.uuid4()
     config = make_config(rt, run_id, uuid.uuid4(), "列出所有笔记")
     final = await graph.ainvoke(_initial_state("列出所有笔记"), config=config)
-    assert set(final["results"].keys()) == {"1", "2", "3"}
+    assert set(final["results"].keys()) == {"1", "2", "3", "4"}
     assert final["final_answer"] == "三份笔记都列好了。"
 
 
