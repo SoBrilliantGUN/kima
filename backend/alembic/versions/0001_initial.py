@@ -1,10 +1,10 @@
-"""initial schema（v1 全量基线：合并原 0001–0007）
+"""initial schema（全量基线）
 
 Revision ID: 0001_initial
 Revises:
 Create Date: 2026-09-18
 
-第一版无历史数据，把所有增量迁移合并为单一基线。包含：
+所有数据库迁移合并为单一基线。包含：
 - 扩展：vector（pgvector）+ pg_jieba（中文全文检索）
 - 表：knowledge_bases / notes / note_knowledge_bases / documents / document_chunks
        / note_chunks / chat_conversations / chat_messages
