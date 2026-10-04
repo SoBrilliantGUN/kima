@@ -1,7 +1,5 @@
 """契约交互：上行 OutputContract 校验 + 约束显式携带（planner/synthesizer）+ 输出自检。"""
 
-
-
 from app.agent.runtime.planner import LLMPlanner
 from app.agent.toolmeta import OutputContract, apply_output_contract
 from tests.fakes import (

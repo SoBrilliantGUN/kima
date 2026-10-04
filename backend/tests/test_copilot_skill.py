@@ -1,6 +1,8 @@
 """自定义 Skill（L2 技能层）文件存储：frontmatter 解析 + 目录只读加载。"""
 
+import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
@@ -9,10 +11,13 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatResult
 from pydantic import Field
 
+from app.agent.memory import format_skills_block
+from app.agent.orchestrate import recall_relevant_skills
+from app.agent.runtime.budget import BudgetTracker, HardBudget
 from app.agent.runtime.context import ContextConfig
 from app.agent.runtime.reactive import _build_invoked_skills_block
-from app.core.skill_store import FileSkillStore, _parse_skill
-from tests.fakes import FakeOutputReviewer, make_reactive_graph
+from app.core.skill_store import CustomSkill, FileSkillStore, _parse_skill
+from tests.fakes import FakeOutputReviewer, make_gateway, make_reactive_graph
 
 
 def test_parse_skill_with_frontmatter() -> None:
@@ -176,3 +181,74 @@ async def test_invoked_skills_block_injected_into_agent_input() -> None:
     skills_idx = tail.index("[INVOKED SKILLS]")
     state_idx = tail.index("[STATE]")
     assert skills_idx < state_idx  # skills 在 state 之前（合并进同一条尾部 user）
+
+
+# —— 检索式 skill 召回（planner 规划期预选，见 orchestrate.recall_relevant_skills）——
+
+
+def test_format_skills_block_empty() -> None:
+    assert format_skills_block([], 1000) == ""
+
+
+def test_format_skills_block_formats() -> None:
+    skills = [CustomSkill(name="写周报", description="d", content="1. 完成\n2. 计划")]
+    block = format_skills_block(skills, 10000)
+    assert block.startswith("[SKILLS]\n")
+    assert "### Skill: 写周报" in block
+    assert "1. 完成" in block
+
+
+def test_format_skills_block_truncates_to_budget() -> None:
+    """超预算截断：首个 skill 保留，后续塞不下的整条丢弃（与 L3 策略一致）。"""
+    skills = [
+        CustomSkill(name="a", description="", content="x" * 1000),
+        CustomSkill(name="b", description="", content="y" * 1000),
+    ]
+    block = format_skills_block(skills, max_tokens=50)
+    assert "### Skill: a" in block
+    assert "### Skill: b" not in block
+
+
+class _KeywordEmbeddingClient:
+    """按关键词返回正交向量：使 query 与目标 skill 高相似、与无关 skill 相似度 0。"""
+
+    def __init__(self) -> None:
+        self._dim = 4
+
+    @property
+    def dimension(self) -> int:
+        return self._dim
+
+    def _vec(self, text: str) -> list[float]:
+        if "周报" in text:
+            return [1.0, 0.0, 0.0, 0.0]
+        if "代码" in text:
+            return [0.0, 1.0, 0.0, 0.0]
+        return [0.0, 0.0, 1.0, 0.0]
+
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self._vec(t) for t in texts]
+
+    async def embed_query(self, text: str) -> list[float]:
+        return self._vec(text)
+
+
+async def test_recall_relevant_skills(tmp_path: Path) -> None:
+    """query 与「写周报」skill 高相似、与「代码审查」低相似，只召回前者。"""
+    store = FileSkillStore(tmp_path)
+    await store.write_skill("写周报", "写周报用这个模板", "1. 完成")
+    await store.write_skill("代码审查", "审查代码时的检查清单", "检查")
+    gateway = make_gateway(embedder=_KeywordEmbeddingClient())
+    rt = SimpleNamespace(skill_store=store, gateway=gateway)
+    tracker = BudgetTracker(HardBudget())
+    selected = await recall_relevant_skills(rt, "帮我写周报", tracker, uuid.uuid4())
+    assert [s.name for s in selected] == ["写周报"]
+
+
+async def test_recall_relevant_skills_empty_store(tmp_path: Path) -> None:
+    """无 skill 时不碰 embedding，直接返回空（避免无谓的网关调用）。"""
+    store = FileSkillStore(tmp_path)
+    gateway = make_gateway(embedder=_KeywordEmbeddingClient())
+    rt = SimpleNamespace(skill_store=store, gateway=gateway)
+    tracker = BudgetTracker(HardBudget())
+    assert await recall_relevant_skills(rt, "任意任务", tracker, uuid.uuid4()) == []

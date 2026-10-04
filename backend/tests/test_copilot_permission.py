@@ -133,6 +133,26 @@ def test_tracker_tool_call_unlimited_by_default() -> None:
     assert tracker.tool_call_count == 1000
 
 
+def test_tracker_scale_tool_calls_for_plan_raises() -> None:
+    """计划步数上调 tool_calls 上限：100 步 → 310，超过则超限。"""
+    tracker = BudgetTracker(HardBudget(max_tool_calls=50))
+    tracker.scale_tool_calls_for_plan(100)  # 100*3+10=310 > 50 → 上调到 310
+    for _ in range(310):
+        tracker.record_tool_calls(1)  # 310 恰好到上限，放行
+    with pytest.raises(BudgetExceeded):
+        tracker.record_tool_calls(1)  # 311 > 310 → 超限
+
+
+def test_tracker_scale_never_lowers() -> None:
+    """小计划不降低全局下限：4 步推导 22 < 50，仍以 50 为上限。"""
+    tracker = BudgetTracker(HardBudget(max_tool_calls=50))
+    tracker.scale_tool_calls_for_plan(4)  # 4*3+10=22，不降
+    for _ in range(50):
+        tracker.record_tool_calls(1)  # 50 恰好到上限，放行
+    with pytest.raises(BudgetExceeded):
+        tracker.record_tool_calls(1)  # 51 > 50 → 超限
+
+
 # --- 防线④：安全熔断（手动恢复） ---
 
 
@@ -204,8 +224,8 @@ async def test_graph_rejects_invalid_param_and_runs_valid() -> None:
         "correction": "",
     }
     async for _ in graph.astream(
-    initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"
-):
+        initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"
+    ):
         pass
     # 非法 limit=1000 被拒收，只执行了合法 limit=10
     assert calls == [10]
@@ -246,8 +266,8 @@ async def test_graph_security_breaker_freezes_on_repeated_violations() -> None:
     }
     with pytest.raises(SecurityBreakerTripped):
         async for _ in graph.astream(
-    initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"
-):
+            initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"
+        ):
             pass
     assert calls == []  # 熔断前所有违规调用都被拒收，工具从未真正执行
 
@@ -289,7 +309,7 @@ async def test_graph_tool_call_budget_terminates() -> None:
     }
     with pytest.raises(BudgetExceeded):
         async for _ in graph.astream(
-    initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"
-):
+            initial, config={"configurable": {"thread_id": "t1"}}, stream_mode="updates"
+        ):
             pass
     assert calls == [10]  # 只执行了第一次，第二次被第五轴预算拦截

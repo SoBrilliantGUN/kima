@@ -32,7 +32,7 @@ def test_critical_path_parallel_branch() -> None:
 
 
 def test_critical_path_long_chain_is_critical() -> None:
-    """19 步串行链 → 关键路径 19，verdict critical（结构硬伤）。"""
+    """19 步串行链 → 关键路径 19，verdict critical（极长链提示）。"""
     steps = [PlanStep(step_id="1", action="a")]
     for i in range(2, 20):
         steps.append(PlanStep(step_id=str(i), action="a", depends_on=(str(i - 1),)))
@@ -40,3 +40,13 @@ def test_critical_path_long_chain_is_critical() -> None:
     assert report.critical_path == 19
     assert report.verdict == "critical"
     assert report.issues
+
+
+def test_13_step_chain_not_critical() -> None:
+    """13 步串行链不再 critical——长参数链是合法形态，不因串行链长被硬砍。"""
+    steps = [PlanStep(step_id="1", action="a")]
+    for i in range(2, 14):
+        steps.append(PlanStep(step_id=str(i), action="a", depends_on=(str(i - 1),)))
+    report = analyse_plan(Plan(steps=tuple(steps)), {})
+    assert report.critical_path == 13
+    assert report.verdict != "critical"

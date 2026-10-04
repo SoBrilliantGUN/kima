@@ -115,6 +115,7 @@ def _initial_state(task: str) -> dict:
         "task": task,
         "system_prompt": "",
         "memory_block": "",
+        "skills_block": "",
         "plan": {},
         "results": {},
         "failures": {},

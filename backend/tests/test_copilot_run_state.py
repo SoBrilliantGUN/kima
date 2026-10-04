@@ -85,7 +85,8 @@ async def test_stream_graph_marks_suspended_on_interrupt() -> None:
         ]
     )
     events = [
-        e async for e in stream_graph(
+        e
+        async for e in stream_graph(
             _rt(), graph, {}, uuid.uuid4(), {}, session, uuid.uuid4(), uuid.uuid4()
         )
     ]
@@ -99,7 +100,8 @@ async def test_stream_graph_marks_completed_on_review_terminal() -> None:
         payloads=[("updates", {"review": {"review_verdict": "ok", "review_issues": []}})]
     )
     events = [
-        e async for e in stream_graph(
+        e
+        async for e in stream_graph(
             _rt(), graph, {}, uuid.uuid4(), {}, session, uuid.uuid4(), uuid.uuid4()
         )
     ]
@@ -113,7 +115,8 @@ async def test_stream_graph_marks_failed_on_exception() -> None:
     graph = _ScriptedGraph(exc=RuntimeError("boom"))
     with pytest.raises(RuntimeError, match="boom"):
         _ = [
-            e async for e in stream_graph(
+            e
+            async for e in stream_graph(
                 rt, graph, {}, uuid.uuid4(), {}, session, uuid.uuid4(), uuid.uuid4()
             )
         ]
@@ -129,12 +132,7 @@ async def test_resume_refuses_terminal_run() -> None:
     run_id = uuid.uuid4()
     await repo.add_event(CopilotEvent(run_id=run_id, type="done", payload={}))
     rt = _rt(repo)
-    events = [
-        e
-        async for e in resume(
-            rt, str(run_id), [], uuid.uuid4(), uuid.uuid4()
-        )
-    ]
+    events = [e async for e in resume(rt, str(run_id), [], uuid.uuid4(), uuid.uuid4())]
     # 短路：只推一段 delta，无 done 事件、无二次副作用
     assert len(events) == 1
     assert getattr(events[0], "text", "") == "该 run 已结束，无需恢复。"

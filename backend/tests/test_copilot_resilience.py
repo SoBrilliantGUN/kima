@@ -284,8 +284,7 @@ def test_blocked_permanent_calls() -> None:
 
     # 无 last_error → 放行
     assert (
-        blocked_permanent_calls(cast(AgentState, {"messages": permanent["messages"]}), calls)
-        == []
+        blocked_permanent_calls(cast(AgentState, {"messages": permanent["messages"]}), calls) == []
     )
 
 

@@ -535,11 +535,18 @@ class FakePlanner:
     调用规划器，故用空实现占位即可；需要真规划器行为的用例另注入 LLMPlanner。
     """
 
-    async def generate(self, task: str, tool_names: list[str], constraints: str = "") -> Plan:
+    async def generate(
+        self, task: str, tool_names: list[str], constraints: str = "", skills: str = ""
+    ) -> Plan:
         return Plan(steps=())
 
     async def replan(
-        self, plan: Plan, failed_step: PlanStep, error: str, tool_names: Sequence[str]
+        self,
+        plan: Plan,
+        failed_step: PlanStep,
+        error: str,
+        tool_names: Sequence[str],
+        skills: str = "",
     ) -> list[PlanStep]:
         return []
 

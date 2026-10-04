@@ -1,6 +1,5 @@
 """LLM Planner：DAG 解析 + 拓扑执行 + 失败增量重规划 + 计划状态机（Plan-as-Data）。"""
 
-
 import pytest
 
 from app.agent.runtime.planner import (
@@ -118,7 +117,10 @@ def test_merge_defensively_obsoletes_replaced_step() -> None:
     s1 = plan.get_step("1")
     assert s1 is not None
     s1.status = StepStatus.COMPLETED
-    plan.merge([PlanStep(step_id="1r", action="redump", params={}, replaces_step_id="1")], ["dump", "redump"])
+    plan.merge(
+        [PlanStep(step_id="1r", action="redump", params={}, replaces_step_id="1")],
+        ["dump", "redump"],
+    )
     assert s1.status == StepStatus.OBSOLETE
     assert plan.version == 2
     nr = plan.get_step("1r")
@@ -134,7 +136,10 @@ def test_merge_same_id_reuse_gets_renamed_not_overwritten() -> None:
     old = plan.get_step("1")
     assert old is not None
     old.status = StepStatus.COMPLETED
-    plan.merge([PlanStep(step_id="1", action="redump", params={"x": 2}, replaces_step_id="1")], ["dump", "redump"])
+    plan.merge(
+        [PlanStep(step_id="1", action="redump", params={"x": 2}, replaces_step_id="1")],
+        ["dump", "redump"],
+    )
     assert plan.version == 2
     # 旧步骤仍在，只是作废（未被覆盖）
     assert old is not None and old.status == StepStatus.OBSOLETE
@@ -273,3 +278,30 @@ async def test_planner_self_corrects_after_feedback() -> None:
     assert len(llm.calls) == 2
     # 第二次调用把第一次的精确错误回喂进了 prompt
     assert "nope" in "".join(m.content for m in llm.calls[1])
+
+
+async def test_planner_generate_injects_skills() -> None:
+    """skill 全文作为「技能指引」段拼进规划器 user prompt（约束之前）。"""
+    llm = ScriptedLLM(['{"steps":[{"id":"1","action":"search","params":{}}]}'])
+    planner = LLMPlanner(make_gateway(llm=llm))
+    async with gateway_run():
+        await planner.generate("查点东西", ["search"], skills="[SKILLS]\n### Skill: 写周报\n模板")
+    prompt = "".join(m.content for m in llm.calls[0])
+    assert "可参考的技能指引" in prompt
+    assert "写周报" in prompt
+
+
+async def test_replan_injects_skills() -> None:
+    """skill 全文随 replan 一起送达——失败步骤的替换步骤也遵循 skill 指引。"""
+    llm = ScriptedLLM(['{"steps":[{"id":"2r","action":"transfer","params":{}}]}'])
+    planner = LLMPlanner(make_gateway(llm=llm))
+    plan = Plan(steps=(PlanStep(step_id="2", action="transfer", params={}),))
+    failed = plan.get_step("2")
+    assert failed is not None
+    async with gateway_run():
+        await planner.replan(
+            plan, failed, "boom", ["transfer"], skills="[SKILLS]\n### Skill: 写周报\n模板"
+        )
+    prompt = "".join(m.content for m in llm.calls[0])
+    assert "可参考的技能指引" in prompt
+    assert "写周报" in prompt
