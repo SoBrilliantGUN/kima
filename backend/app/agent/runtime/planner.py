@@ -23,27 +23,45 @@ from app.agent.runtime.plan_model import (
 )
 from app.integrations.llm import ChatMessage, StructuredParseError, format_instructions
 
+# 合成步骤动作名：plan 的最后一步，把前置步骤产物整理成最终回答。它不注册进工具集，
+# 由 worker 识别后调 LLM 合成（而非调工具）。作为保留动作加入规划器可用动作白名单。
+SYNTHESIZE_ACTION = "finalize_answer"
+
 
 class LLMPlanner:
     """真实实现：一次 LLM 调用产出 DAG；解析/语义失败 fail-closed 回退空 plan（决策 D5）。"""
 
     _SYSTEM = (
         "你是任务规划器。把用户任务拆成步骤 DAG，只使用给定工具。\n"
-        "规划约束（缩短串行链路，提升整体可靠性）：\n"
-        "1. 最长串行链不超过 4 步，需要更多步骤时拆成并行组。\n"
-        "2. 无依赖的只读步骤用 depends_on=[] 声明并行（扇出）。\n"
-        "3. 每个写操作前必须有校验步骤，后必须有补偿步骤。\n"
-        "4. 每个写操作必须包含 idempotency_key。\n"
-        "5. 不可逆操作前必须有 human_approval 步骤。\n"
+        "规划约束：\n"
+        "1. 无依赖的只读步骤用 depends_on=[] 声明并行（扇出）。\n"
+        "2. 每个写操作前必须有校验步骤，后必须有补偿步骤。\n"
+        "3. 每个写操作必须包含 idempotency_key。\n"
+        "4. 不可逆操作前必须有 human_approval 步骤。\n"
+        f'5. 最后必须有一个合成步骤：action="{SYNTHESIZE_ACTION}"、terminal=true、'
+        "depends_on 所有其他步骤、params 留空。系统会自动收集它依赖步骤的结果整理成最终回答，"
+        "不要在 params 里写任何引用。\n"
     ) + format_instructions(PlanModel)
 
     def __init__(self, gateway: LLMGateway) -> None:
         self._gateway = gateway
 
-    async def generate(self, task: str, tool_names: list[str], constraints: str = "") -> Plan:
-        # 约束显式携带（文档「约束蒸发」）：规划器是路由 Agent 派给「子 Agent」的下行任务包，
-        # 用户的底线/红线必须随任务一起送达，否则规划器在不知道约束的情况下拆步骤。
+    async def generate(
+        self,
+        task: str,
+        tool_names: list[str],
+        constraints: str = "",
+        skills: str = "",
+    ) -> Plan:
+        # 约束/技能显式携带（文档「约束蒸发」）：规划器是路由 Agent 派给「子 Agent」的下行任务包，
+        # 用户的底线/红线与「怎么做」的技能经验必须随任务一起送达，否则规划器在不知道它们
+        # 的情况下拆步骤。
         user = f"任务：{task}\n可用工具：{', '.join(tool_names)}"
+        if skills.strip():
+            user += (
+                f"\n可参考的技能指引（沉淀的「怎么做」经验，规划步骤时尽量遵循）："
+                f"\n{skills.strip()}"
+            )
         if constraints.strip():
             user += f"\n必须遵守的约束（红线，规划时不得违反）：\n{constraints.strip()}"
         # 自纠错循环：解析/语义失败（字段漂移、幻觉工具、依赖缺失、成环）把精确错误回喂
@@ -73,17 +91,30 @@ class LLMPlanner:
         return Plan(steps=())
 
     async def replan(
-        self, plan: Plan, failed_step: PlanStep, error: str, tool_names: Sequence[str]
+        self,
+        plan: Plan,
+        failed_step: PlanStep,
+        error: str,
+        tool_names: Sequence[str],
+        skills: str = "",
     ) -> list[PlanStep]:
         """增量重规划：让 LLM 针对失败步骤给出替换步骤（带 replaces 声明 + 完整 depends_on）。
 
         返回的替换步骤交给 executor 的 ``Plan.merge`` 做工具名合法性（幻觉工具在并入边界
-        拦截）、依赖/环校验与 id 撞车改名；这里只做结构解析。
+        拦截）、依赖/环校验与 id 撞车改名；这里只做结构解析。``skills`` 与 ``generate`` 同源
+        显式携带——失败步骤若受某 skill 指引，替换步骤也应遵循该 skill，故随 replan 一起送达。
         """
         user = (
             f"步骤 {failed_step.step_id}（{failed_step.action}）失败：{error}\n"
             f"可用工具：{', '.join(tool_names)}\n"
-            f"当前计划状态：\n{self._describe_plan(plan)}\n"
+        )
+        if skills.strip():
+            user += (
+                f"\n可参考的技能指引（沉淀的「怎么做」经验，规划替换步骤时尽量遵循）："
+                f"\n{skills.strip()}"
+            )
+        user += (
+            f"\n当前计划状态：\n{self._describe_plan(plan)}\n"
             "请给出替换步骤。规则：\n"
             "- 用 replaces 声明你替换的旧步骤 id（被替换的旧步骤会被作废）；\n"
             "- depends_on 可引用已完成的步骤（复用其产物）或同批新步骤 id；\n"
@@ -125,4 +156,5 @@ __all__ = [
     "StepStatus",
     "parse_plan",
     "validate_plan",
+    "SYNTHESIZE_ACTION",
 ]

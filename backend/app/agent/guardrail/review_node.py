@@ -126,9 +126,7 @@ def build_review_node(
             if reason is not None:
                 result = ReviewResult(
                     verdict=ReviewVerdict.MISMATCH,
-                    issues=[
-                        ReviewIssue(claim=reason, tool=name, evidence="side_effect_missing")
-                    ],
+                    issues=[ReviewIssue(claim=reason, tool=name, evidence="side_effect_missing")],
                 )
                 break
         if result is None:

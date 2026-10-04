@@ -52,7 +52,8 @@ class PlanStep:
 
     # 运行时状态（系统填写，非 LLM）
     status: StepStatus = StepStatus.PENDING
-    output_ref: str | None = None
+    # 上游产物：通常是字符串（文件路径/裁剪后的文本），也可是 dict（结构化产物）。
+    output_ref: str | dict[str, Any] | None = None
     error: str | None = None
     version_created: int = 1
     replaces_step_id: str | None = None
@@ -279,10 +280,17 @@ class Plan:
 class Planner(Protocol):
     """规划器（可注入 Fake 做确定性测试）。"""
 
-    async def generate(self, task: str, tool_names: list[str], constraints: str = "") -> Plan: ...
+    async def generate(
+        self, task: str, tool_names: list[str], constraints: str = "", skills: str = ""
+    ) -> Plan: ...
 
     async def replan(
-        self, plan: Plan, failed_step: PlanStep, error: str, tool_names: Sequence[str]
+        self,
+        plan: Plan,
+        failed_step: PlanStep,
+        error: str,
+        tool_names: Sequence[str],
+        skills: str = "",
     ) -> list[PlanStep]: ...
 
 
@@ -399,8 +407,7 @@ def validate_plan(plan: Plan, tool_names: Sequence[str]) -> list[str]:
     all_ids = {s.step_id for s in plan.steps}
     for step in invalid_tools(plan.steps, tool_names):
         errors.append(
-            f"步骤 {step.step_id} 的工具 {step.action!r} 不在可用工具集 "
-            f"{sorted(valid_tools)!r} 中"
+            f"步骤 {step.step_id} 的工具 {step.action!r} 不在可用工具集 {sorted(valid_tools)!r} 中"
         )
     for step in plan.steps:
         for dep in step.depends_on:

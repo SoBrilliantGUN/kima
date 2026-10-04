@@ -327,7 +327,7 @@ def build_reactive_graph(
             if isinstance(state["messages"][-1], AIMessage)
             else tool_calls
         )
-        if (blocked := blocked_permanent_calls(state, injected_calls)):
+        if blocked := blocked_permanent_calls(state, injected_calls):
             return {"messages": blocked}
         # 工具执行可能调网关（如 search_knowledge_base 走 retriever 的 embed/rerank），
         # 必须带 run context 才能记账/快照（不可旁路）。

@@ -13,7 +13,7 @@ cost 轴：成本**只在网关侧经 `PricingService` 算一次**（按厂商 s
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from app.core.exceptions import DomainError
@@ -39,6 +39,12 @@ class HardBudget:
     max_tokens: int = 100_000
     max_cost_cny: float = 1.0
     max_tool_calls: int | None = None
+
+
+# 计划执行预算的推导系数：每步允许尝试 _PLAN_STEP_TOOL_CALLS 次工具 + 固定 replan 余量。
+# 只上调 tool_calls 轴（执行轴随计划规模伸缩），turns/seconds/tokens/cost 轴保持全局兜底。
+_PLAN_STEP_TOOL_CALLS = 3
+_PLAN_REPLAN_SLACK = 10
 
 
 @dataclass(frozen=True)
@@ -177,6 +183,20 @@ class BudgetTracker:
             raise BudgetExceeded(
                 f"tool_calls 超限：{self._tool_call_count}/{self._budget.max_tool_calls}"
             )
+
+    def scale_tool_calls_for_plan(self, n_steps: int) -> None:
+        """计划生成后按步数上调工具调用上限（执行预算随计划规模伸缩）。
+
+        执行预算 = ``n_steps × _PLAN_STEP_TOOL_CALLS + _PLAN_REPLAN_SLACK``；只上调、不
+        下降（保留全局配置的防穷举下限）。turns/seconds/tokens/cost 轴不动——资源轴仍
+        全局兜底，长任务超时/超成本照样被砍，只是「执行次数」不再被固定上限误杀。
+        """
+        if self._budget is None:
+            return
+        derived = n_steps * _PLAN_STEP_TOOL_CALLS + _PLAN_REPLAN_SLACK
+        current = self._budget.max_tool_calls or 0
+        if derived > current:
+            self._budget = replace(self._budget, max_tool_calls=derived)
 
     def elapsed(self) -> float:
         return time.monotonic() - self._start

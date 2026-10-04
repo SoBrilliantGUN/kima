@@ -107,8 +107,7 @@ async def copilot_approve(
     async def stream() -> AsyncIterator[str]:
         try:
             decisions = [
-                {"approval_id": d.approval_id, "decision": d.decision}
-                for d in request.decisions
+                {"approval_id": d.approval_id, "decision": d.decision} for d in request.decisions
             ]
             async for event in resume(
                 rt,

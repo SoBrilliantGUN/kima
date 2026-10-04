@@ -15,6 +15,7 @@
 from app.agent.toolmeta import SideEffectLevel, ToolMeta, ToolRegistry
 from app.chunking.base import estimate_tokens
 from app.core.config import BACKEND_DIR
+from app.core.skill_store import CustomSkill
 from app.models.copilot import CopilotMemory
 from app.services.copilot import RecalledMemories
 
@@ -169,3 +170,28 @@ def format_subagent_constraints(recalled: RecalledMemories) -> str:
         lines = ["- " + m.content for m in recalled.constraint]
         parts.append("硬约束（必须遵守）：\n" + "\n".join(lines))
     return "\n\n".join(parts)
+
+
+def format_skills_block(skills: list[CustomSkill], max_tokens: int) -> str:
+    """把检索选中的 skill 全文格式化成 ``[SKILLS]`` 块（planner 规划期 + 合成步骤注入用）。
+
+    与 L3 ``[INVOKED SKILLS]`` 的截断策略一致（``reactive._fit_skill_entries``）：按 token
+    预算贪心填充、塞不下的整条丢弃。与 L3 的区别在语义——这里不是「本会话已加载」的懒加载
+    缓存，而是「按 query 语义召回、与任务相关」的预选技能指引，随 planner 显式携带。
+    """
+    if not skills:
+        return ""
+    header = "[SKILLS]\n以下技能指引与本任务相关，规划步骤与作答时请遵循其经验："
+    lines: list[str] = []
+    used = 0
+    for skill in skills:
+        entry = f"### Skill: {skill.name}\n{skill.content}"
+        cost = estimate_tokens(entry)
+        # 首个 skill 即使超预算也保留（保证至少一个在场）；后续塞不下的整条丢弃。
+        if lines and used + cost > max_tokens:
+            continue
+        lines.append(entry)
+        used += cost
+    if not lines:
+        return ""
+    return "\n\n".join([header, *lines])

@@ -33,9 +33,7 @@ def format_tool_error(exc: Exception) -> str:
     return f"Error: {exc}"
 
 
-def inject_idempotency_keys(
-    state: AgentState, run_id: str, registry: ToolRegistry
-) -> AgentState:
+def inject_idempotency_keys(state: AgentState, run_id: str, registry: ToolRegistry) -> AgentState:
     """给本轮写工具调用注入「业务意图」幂等键（执行契约）。
 
     键 = ``{run_id}:{tool_name}:sha256(规范化 key_fields)``，``key_fields`` 来自

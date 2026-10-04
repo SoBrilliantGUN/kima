@@ -1,17 +1,17 @@
-"""计划审查层（ChainOptimizer）：关键路径 + 四维体检 + 分级熔断 verdict。
+"""计划诊断层（ChainOptimizer）：关键路径 + 四维体检 + 分级 verdict。
 
-核心：缩短 n（链路长度）比提升 R（单步精度）便宜一两个数量级。LLM 生成的 Plan 往往
-是一条线性长链，单步失败概率相乘导致整体可靠性崩塌。审查层不算总步数，而是算**最长
-串行链**（DAG 最长路径）——并行分支不拖垮成功率，真正决定可靠性的是「必须排队等的
-串行步骤」。据此给三档：
+核心：串行链的端到端可靠性 = 单步可靠性的 n 次方（R^n，链杀手）——真正决定可靠性的是
+「必须排队等的串行步骤」，并行分支不拖垮成功率。审查层算**最长串行链**（DAG 最长路径），
+据此给三档：
 
-- ``ok``（≥75）：放行。
-- ``warn``（50-75）：放行（与 ok 同处置，无额外兜底）。
-- ``critical``（<50 或结构硬伤）：打回重生成，不执行。
+- ``ok``（≥75）：健康。
+- ``warn``（50-75）：可观察。
+- ``critical``（<50 或极长链）：高风险提示。
 
-本模块只「说真话」：算分给 verdict，不改 Plan。审查结论随 run 落 state——plan_node 仅
-消费 critical（打回重生成），ok/warn 均放行；写步骤的人工审批由 worker 的防线③
-（``resolve_approvals``）独立承担，与本 verdict 无关。
+本模块只「说真话」：算分给 verdict，不改 Plan、也不阻塞执行（plan_node 只落报告，不再
+因 critical 打回重生成）——长任务本就可能是长参数链，硬砍串行链是错的；真正的执行兜底
+是预算（按计划步数推导）与 ``validate_plan`` 的环/幻觉工具校验。写步骤的人工审批由 worker
+的防线③（``resolve_approvals``）独立承担，与本 verdict 无关。
 """
 
 from dataclasses import dataclass, field
@@ -20,8 +20,9 @@ from typing import Any
 from app.agent.runtime.planner import Plan
 from app.agent.toolmeta import SideEffectLevel, ToolRegistry
 
-# 结构分硬底线：关键路径超过此值视为拓扑硬伤（无救），直接 critical。
-_CRITICAL_PATH_HARD_FLOOR = 12
+# 极长链提示线：关键路径超过此值仅诊断 critical（R^n 端到端可靠性已跌破 ~0.5），
+# 不阻塞执行——plan_node 已不再打回重生成。
+_CRITICAL_PATH_HARD_FLOOR = 14
 
 
 @dataclass(frozen=True)
@@ -89,8 +90,8 @@ def analyse_plan(plan: Plan, registry: ToolRegistry) -> PlanReport:
     n = max(len(steps), 1)
     high = [s for s in steps if _side_effect(registry, s.action) is SideEffectLevel.HIGH]
 
-    # 结构分：最长串行链越短越高（≤4 满分）
-    structure = _stepped(cp, [(4, 100.0), (8, 70.0), (12, 40.0)], 20.0)
+    # 结构分：最长串行链越短越高（≤5 满分、≤13 可观察，对齐 R^n 的 OK/WARNING 线）
+    structure = _stepped(cp, [(5, 100.0), (13, 70.0)], 40.0)
     # 风险分：不可逆写（HIGH 副作用）占比越低越高
     risk = 100.0 - (len(high) / n) * 100.0
     # 兜底分：无不可逆写则满分，有则默认人工审批兜底（降 20）
@@ -100,12 +101,12 @@ def analyse_plan(plan: Plan, registry: ToolRegistry) -> PlanReport:
 
     total = structure * 0.4 + risk * 0.2 + safety * 0.2 + cost * 0.2
     verdict = "critical" if total < 50 else ("warn" if total < 75 else "ok")
-    if structure < 40.0 or cp > _CRITICAL_PATH_HARD_FLOOR:
-        verdict = "critical"  # 结构硬伤直接拒
+    if cp > _CRITICAL_PATH_HARD_FLOOR:
+        verdict = "critical"  # 极长链高风险提示（不阻塞执行）
 
     issues: list[str] = []
-    if cp > 4:
-        issues.append(f"最长串行链 {cp} 步，建议拆并行组或缩短链路")
+    if cp > 13:
+        issues.append(f"最长串行链 {cp} 步，端到端可靠性偏低，可考虑拆并行组")
     if high:
         names = "、".join(s.action for s in high)
         issues.append(f"{len(high)} 个不可逆写步骤（{names}），需人工审批")
