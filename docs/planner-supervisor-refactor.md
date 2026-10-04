@@ -46,7 +46,7 @@ planner 是一个 **LangGraph supervisor-worker 执行引擎**，具备五项能
 START → plan_node → supervisor_node ⇄ worker_node（Send 扇出） → finalize_node → review_node → END
 ```
 
-- **`plan_node`**：`planner.generate` 生成 Plan + ChainOptimizer 审查 → 写 Plan 进状态。
+- **`plan_node`**：`planner.generate` 生成 Plan + ChainOptimizer 审查 → 写 Plan 进状态。生成前先做**检索式 skill 召回**（embedding 相似度预选 top-K，`orchestrate.recall_relevant_skills`）→ 把选中 skill 全文经 `generate(skills=...)` 显式携带给规划器、并写进 `skills_block` 供合成步骤注入（reactive 走懒加载 `get_skill`→L3，plan 无 agentic 循环故用检索式预选替代）。
 - **`supervisor_node`**：确定性路由。读 `Plan.get_parallel_ready()`，返回 `[Send("worker", {step}) …]` 扇出；全部完成则 goto finalize；检测 FAILED 则内部 `await planner.replan` + `plan.merge` 后继续。
 - **`worker_node`**：执行单个 step，复用 reactive 防线纯函数 + `interrupt()` 审批。
 - **`finalize_node`**：只挑 terminal 合成步骤（`finalize_answer`）的产物写进 `final_answer`——不再汇总所有 `results`、不再调 LLM（合成已在 worker 内完成）。
@@ -60,14 +60,15 @@ START → plan_node → supervisor_node ⇄ worker_node（Send 扇出） → fin
 
 ```python
 class PlannerState(TypedDict):
-    plan: dict            # Plan.to_dict()，节点边界 from_dict/to_dict 转换
+    plan: dict  # Plan.to_dict()，节点边界 from_dict/to_dict 转换
     task: str
-    system_prompt: str    # L0（合成步骤 / review 共用）
-    memory_block: str     # L2 召回约束
-    results: dict         # step_id → output_ref
-    trace: list[dict]     # 统一执行轨迹 {"tool","args","result","ok"}
-    final_answer: str     # finalize 挑 terminal 合成产物，review 对账用
-    verdict: str          # 审查 verdict（ok / warn / critical）
+    system_prompt: str  # L0（合成步骤 / review 共用）
+    memory_block: str  # L2 召回约束
+    skills_block: str  # 召回的相关 skill 全文块（plan_node 写入、合成步骤共用）
+    results: dict  # step_id → output_ref
+    trace: list[dict]  # 统一执行轨迹 {"tool","args","result","ok"}
+    final_answer: str  # finalize 挑 terminal 合成产物，review 对账用
+    verdict: str  # 审查 verdict（ok / warn / critical）
     last_error: dict | None  # 崩溃现场，与 AgentState 同字段语义
 ```
 
@@ -90,9 +91,8 @@ class PlannerState(TypedDict):
 | `plan_node` / `supervisor` 的 LLM 出口 | `agent_node` 装配层 | 复用 `run_budget` + `gateway.invoke_model`（已在用） |
 | 审查层 | 新增 `runtime/chain_optimizer.py` | 新写，无复用 |
 
-**合成步骤 + 参数链 + 入口**：
+**合成步骤 + 入口**：
 - **合成步骤**：planner 生成的最后一步是 terminal 的 `finalize_answer` 步骤（`depends_on` 所有前置步骤、`params` 留空），`worker_node` 识别后调 LLM 把前置产物整理成最终回答、写入 `results[step_id]`；`finalize_node` 只挑它的产物当 `final_answer`。收益：plan 不再汇总所有 `results` → **results 累积不膨胀 → 无需给 plan 模式加分层压缩**。
-- **参数链（`resolve_params`）**：`Plan` 加 `resolve_params(step)`，把 params 里的 `{{step_id.output}}` / `{{task}}` 模板解析成前置步骤产物——步骤间能传数据。
 - **执行入口（`runtime/entry.py`）**：两张图（reactive / planner）独立演进，`entry.is_plan/run_plan/run_reactive` 是唯一「按意图选入口」的分派点，`run()` 只做会话/记账/上下文准备。
 
 **轨迹统一**：

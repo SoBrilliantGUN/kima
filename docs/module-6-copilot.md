@@ -124,6 +124,7 @@
 - **存储**：`data/skills/*.md`（文件、不入库，与 Soul/User 同构）。**无 DB 表**——skill 就是 Markdown 文本资产。
 - **格式**：frontmatter `name`（唯一标识）+ `description`（一句话，供召回匹配）+ 正文（skill 的指令/经验）。**暂不做**模板/程序/沙箱——skill 是「一份 Markdown 说明书」，无可执行体。
 - **注入**：按需召回（语义匹配 description/正文）而非全文常驻——skill 数量会增长，不能像 Soul/User 每轮全量注入。
+- **plan 模式注入（检索式预选）**：planner 图无 agentic 循环、`get_skill` 懒加载无法触发，故改为**检索式预选**——`plan_node` 生成计划前对 task 与 skill 的 `name+description` 做 embedding 余弦召回（`orchestrate.recall_relevant_skills`，top-K + 相似度阈值），选中 skill 全文经 `planner.generate(skills=...)` 显式携带给规划器、并写进 `PlannerState.skills_block` 供合成步骤注入。reactive 仍走懒加载 `get_skill`→L3。
 - **增删改查（Agent 工具）**：`list_skills`/`get_skill`（只读，`get_skill` 加载全文进 L3 跨轮次持久，见 §4.18）+ `write_skill`（MEDIUM，upsert 覆盖同名）+ `delete_skill`（HIGH，走 HITL 审批；**只能删自定义 skill、官方内置工具不可删**）。文件系统直放仍可用，`write_skill` 按 frontmatter `name` 覆盖既有文件、兼容手工直放。
 - **与内置工具的区别**：现有 `GET /api/copilot/skills` 返回**内置工具清单**（name/description/has_side_effect，即「Agent 能调的能力」）；自定义 skill 是「用户沉淀的可复用经验」（知识资产），二者不同、勿混。
 
@@ -474,7 +475,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 - **消息装配合并 + 严格交替**：L1/L2/L3/L4 四段注入合并成一条 user 消息（不再各自独立），若历史尾是 user（首轮问题 / review 更正）则并进历史尾；`agent_node` 出口统一合并相邻 user。满足厂商最严「首条非 system 是 user、user/assistant 严格交替」约束。
 - **压缩保头**：丢最老（NONE/TOOL_COMPRESS）与 EMERGENCY（无旧摘要）会削历史头，两者均无条件保留原始提问（首条 user），保证压缩后首条非 system 仍是 user、不丢用户原始问题。
 - **SubAgent RAG**：`spawn_rag` 工具派 LangGraph 子图（独立窗口 + 只读检索工具集 + 独立 budget）自主多步检索，结果过契约白名单截断，只回结论进 L2，保护主 Agent 前缀。
-- **skills 渐进加载**：L0 注入 name+description 列表；`get_skill(name)` 工具命中后全文进 `_invoked` 缓存 → L3 `[INVOKED SKILLS]` 块跨轮次持久。官方 skills = Tools（走 `bind_tools` schema，不进 L3）。
+- **skills 渐进加载**：L0 注入 name+description 列表；`get_skill(name)` 工具命中后全文进 `_invoked` 缓存 → L3 `[INVOKED SKILLS]` 块跨轮次持久。官方 skills = Tools（走 `bind_tools` schema，不进 L3）。plan 模式无此循环，改检索式预选（见 §2.6），选中 skill 全文经 `skills_block` 进 planner 与合成步骤、不进 L3。
 - **window = 1048576（1M）**：对齐 DeepSeek V4 `deepseek-flash` 官方上下文窗口，配置 `copilot_context_max_tokens` 由 32000 提到 1048576；各层 ratio 8%/15%/35%、L3 固定 25k、margin 500。
 
 ---
