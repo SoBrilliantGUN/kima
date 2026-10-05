@@ -6,10 +6,10 @@
 
 本模块交付「**文档解析与归档**」完整能力：
 
-- **三种来源**：PDF / Word / 网页(URL)，统一「上传 → 解析为 Markdown → 内容感知父子分块 → 向量化入库」
+- **四种来源**：PDF / Word / 网页(URL) / Markdown，统一「上传 → 解析为 Markdown → 内容感知父子分块 → 向量化入库」
 - **异步处理**：DB 轮询式 worker + 自建重试退避，状态落库、重启可恢复
 - **父子切割（small-to-big）**：child 小块向量化做精确检索，parent 大块存上下文，命中 child 回 parent 出完整上下文
-- **文档阅读器**：PDF 内嵌预览原文件；Word 与 URL 渲染解析出的 Markdown（可下载原文件 / 打开原网页）
+- **文档阅读器**：PDF 内嵌预览原文件；Word / URL / Markdown 渲染解析出的 Markdown（可下载原文件 / 打开原网页）
 
 **本模块同步回改模块 3**：彻底删除「网页笔记」——URL 统一归入文档，笔记收敛为纯 Markdown 空白笔记。
 
@@ -81,10 +81,10 @@ pending ──worker 拾起──▶ processing ──成功──▶ done
 |---|---|---|
 | `id` | `UUID`（PG native） | PK，app 端 `uuid.uuid4` |
 | `kb_id` | `UUID` | FK → `knowledge_bases.id ON DELETE CASCADE`，非空 |
-| `title` | `String(255)` | 非空（pdf/word=文件名去扩展名；url 初始=URL，done 后=og:title） |
-| `source_type` | `Enum(DocumentType)` `native_enum=False` 存 VARCHAR(16) | 非空，`pdf`/`word`/`url` |
+| `title` | `String(255)` | 非空（pdf/word/markdown=文件名去扩展名；url 初始=URL，done 后=og:title） |
+| `source_type` | `Enum(DocumentType)` `native_enum=False` 存 VARCHAR(16) | 非空，`pdf`/`word`/`url`/`markdown` |
 | `source_url` | `Text` | 可空（仅 url 类型，点击打开原网页） |
-| `file_path` | `Text` | 可空（仅 pdf/word，本地相对路径） |
+| `file_path` | `Text` | 可空（仅 pdf/word/markdown，本地相对路径） |
 | `status` | `Enum(DocumentStatus)` `native_enum=False` 存 VARCHAR(16) | 非空，`pending`/`processing`/`done`/`error`/`needs_approval`，默认 `pending` |
 | `content_markdown` | `Text` | 可空（解析产物，供 RAG 分块向量化 + word/url 文档阅读，经 `/content` 端点下发） |
 | `metadata` | `JSONB` | 可空（`file_name`/`mime_type`/`page_count` 等解析器回传） |
@@ -142,6 +142,7 @@ class DocumentType(StrEnum):
     PDF = "pdf"
     WORD = "word"
     URL = "url"
+    MARKDOWN = "markdown"
 
 
 class DocumentStatus(StrEnum):
@@ -237,12 +238,13 @@ op.execute(
 
 ## 4. 解析层：按类型分发（`integrations/parser.py` 扩展）
 
-模块 1 的 `DocumentParser` Protocol + `SourceType` 已定形，本模块落三个真实实现，工厂按 `source_type` 分发：
+模块 1 的 `DocumentParser` Protocol + `SourceType` 已定形，本模块落四个真实实现，工厂按 `source_type` 分发：
 
 ```
 PDF  → MinerUDocumentParser   （托管 API v4：申请上传 → PUT → 轮询 → 下载 zip → markdown）
 WORD → WordDocumentParser     （mammoth → HTML → markdownify → markdown，保留 GFM 表格）
 URL  → WebDocumentParser      （复用 WebFetcher：trafilatura → Playwright 回退 → markdown + og:title）
+MD   → MarkdownDocumentParser （直接 bytes 解码，UTF-8 优先回退 GBK，无需外部转换）
 ```
 
 ### 4.1 `MinerUDocumentParser`（PDF）
@@ -266,9 +268,15 @@ URL  → WebDocumentParser      （复用 WebFetcher：trafilatura → Playwrigh
 - 标题取 `og:title`/`<title>`（worker 完成后回写 `documents.title`）。
 - **不生成摘要**（阅读器直接渲染解析正文，摘要无用武之地）。
 
-### 4.4 工厂分发
+### 4.4 `MarkdownDocumentParser`（Markdown）
 
-- `get_document_parser(settings)` 返回 `DispatchDocumentParser`（满足 `DocumentParser` 分发边界协议）：按 `source_type` 路由到 pdf/word/web 三个窄解析器——pdf 满足 `PdfParser`、word 满足 `WordParser`、web 满足 `UrlParser`，业务层无感。`parse` 透传可选 `filename`（原始文件名），仅 PDF（MinerU 上传 name）使用。
+- `.md` / `.markdown` → 直接按编码解码为 markdown（内容本身即 markdown，无需第三方转换）。
+- 编码 UTF-8 优先，失败回退 GBK（中文 Windows 环境常见），最终兜底 `errors="replace"`；解码很快，无需 `to_thread`。
+- 不提取标题（title 用文件名去扩展名，与 pdf/word 一致）；metadata 仅 `mime_type=text/markdown`。
+
+### 4.5 工厂分发
+
+- `get_document_parser(settings)` 返回 `DispatchDocumentParser`（满足 `DocumentParser` 分发边界协议）：按 `source_type` 路由到 pdf/word/web/markdown 四个窄解析器——pdf 满足 `PdfParser`、word 满足 `WordParser`、web 满足 `UrlParser`、markdown 满足 `MarkdownParser`，业务层无感。`parse` 透传可选 `filename`（原始文件名），仅 PDF（MinerU 上传 name）使用。
 
 ---
 
@@ -378,7 +386,7 @@ class DocumentRepository(Protocol):
 
 | 方法 | 规则 |
 |---|---|
-| `create_file(kb_id, file, filename)` | 先 `kb_repo.get` 校验知识库存在（404）→ 校验扩展名/`mime_type` ∈ pdf/docx、大小 ≤50MB（超限：`UploadSizeLimitMiddleware` 按 Content-Length 在读 body 前粗筛 413、service 精确校验 422）→ `FileStore.save` 落盘 → 建 `Document(source_type=pdf/word, title=文件名去扩展名, status=pending)` → `repo.add` |
+| `create_file(kb_id, file, filename)` | 先 `kb_repo.get` 校验知识库存在（404）→ 校验扩展名 ∈ pdf/docx/md、大小 ≤50MB（超限：`UploadSizeLimitMiddleware` 按 Content-Length 在读 body 前粗筛 413、service 精确校验 422）→ `FileStore.save` 落盘 → 建 `Document(source_type=pdf/word/markdown, title=文件名去扩展名, status=pending)` → `repo.add` |
 | `create_from_url(kb_id, url)` | 先 `kb_repo.get` 校验（404）→ URL 校验 http/https 非空（否则 422）→ 建 `Document(source_type=url, source_url=url, title=url, status=pending)` → `repo.add` |
 | `get(doc_id)` | 查无抛 `NotFoundError("文档不存在")` |
 | `delete(doc_id)` | 先 `get`（404）→ 删文件（pdf/word 时 `FileStore.delete`）→ `repo.delete`（chunk 随 CASCADE 清） |
@@ -496,6 +504,7 @@ router.tsx                # 移除 /documents/:documentId 路由（浮动窗口�
 - **浮动阅读窗口（`DocumentWindow`）**：点击文档在页面上层打开可拖拽、可调整大小、可关闭的窗口；同一文档去重、重复点击聚焦已有窗口；可同时开多个；纯内存态，切换知识库或刷新即清空。窗口内容按 source_type 渲染：
   - `pdf`：`<iframe src={documentFileUrl(id)}>` 浏览器原生内嵌预览（不引 PDF.js，最简）+ header「下载原文件」按钮；
   - `word`：渲染解析出的 Markdown（`GET /content` → `react-markdown` + `remark-gfm`）+ header「下载原文件」按钮；
+  - `markdown`：同 `word`，渲染解析出的 Markdown + header「下载原文件」按钮；
   - `url`：渲染解析出的 Markdown（同上）+ header「打开原网页」按钮（新标签页打开 `source_url`）。
 - **问答面板常驻**：右侧 `QaPanel` 始终可见、针对整个知识库提问；浮动文档窗口仅作阅读参考，不切换问答范围。
 - **删除**：二次确认 → `deleteDocument` → `invalidateQueries(['knowledge-bases'])`；若该文档窗口正打开则一并关闭。
@@ -546,12 +555,12 @@ router.tsx                # 移除 /documents/:documentId 路由（浮动窗口�
 ## 12. 已定决策
 
 1. **异步处理**：DB 轮询式 worker + 自建重试退避（`retry_count`/`next_retry_at` + 常量 `MAX_RETRIES`），状态落库、重启可恢复，不引 Redis/队列。
-2. **来源路由按类型分发**：PDF→MinerU、Word→mammoth+markdownify、URL→复用 WebFetcher；pdf/word/web 分别满足 `PdfParser`/`WordParser`/`UrlParser` 窄协议，对外统一由 `DispatchDocumentParser` 按 `source_type` 分发。
-3. **URL 只作为文档**：放弃网页笔记；`documents.source_type = pdf/word/url`；解析出 markdown 供阅读器渲染，也可点击打开原网页核对最新内容。
+2. **来源路由按类型分发**：PDF→MinerU、Word→mammoth+markdownify、URL→复用 WebFetcher、Markdown→直接字节解码；pdf/word/web/markdown 分别满足 `PdfParser`/`WordParser`/`UrlParser`/`MarkdownParser` 窄协议，对外统一由 `DispatchDocumentParser` 按 `source_type` 分发。
+3. **URL 只作为文档**：放弃网页笔记；`documents.source_type = pdf/word/url/markdown`；解析出 markdown 供阅读器渲染，也可点击打开原网页核对最新内容。
 4. **彻底删除网页笔记**：`notes` 删 `type`/`summary`/`source_url` 三列，删 `from-url` 端点、`WebNoteFormModal`、「新建→网页」入口、url 摘要块；`WebFetcher` 保留给 URL 文档复用。
 5. **父子切割（small-to-big）**：单表 `document_chunks` 自引用 `parent_id`；parent 大块存上下文不向量化，child 小块向量化；检索命中 child 回 parent 出上下文。
 6. **内容感知分块**：markdown-it-py AST 识别异质块 + 3 个可插拔 splitter（结构化递归=兜底 + 表格 + 代码），标题作为可检索 child 落地、相邻块重叠 ~50 token，独立 `app/chunking/` 包。
-7. **文档阅读器**：PDF 内嵌预览原文件（浏览器原生 `<iframe>`）；Word 与 URL 渲染解析出的 Markdown（`react-markdown` + `remark-gfm`，支持 GFM 表格），并提供「下载原文件」（pdf/word）或「打开原网页」（url）按钮。
+7. **文档阅读器**：PDF 内嵌预览原文件（浏览器原生 `<iframe>`）；Word / URL / Markdown 渲染解析出的 Markdown（`react-markdown` + `remark-gfm`，支持 GFM 表格），并提供「下载原文件」（pdf/word/markdown）或「打开原网页」（url）按钮。
 8. **笔记向量化留模块 5**：笔记可变需编辑重向量化 + 索引语义，随 RAG 消费方一起定。
 9. **文件存储本地磁盘**：`backend/storage/documents/`（gitignore），`FileStore` 抽象留对象存储扩展点；URL 无本地文件只存 `source_url`。
 10. **正文与元数据分离**：`DocumentRead` 不含 `content_markdown`/`file_path`；正文经 `/content` 端点下发（阅读器渲染），原文件经 `/file` 端点流式下发。

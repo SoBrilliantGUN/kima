@@ -2,10 +2,13 @@
 
 import asyncio
 import uuid
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
+from app.agent.compose import CopilotRuntime
 from app.agent.orchestrate import done_payload, stream_graph
 from app.agent.resume import _has_terminal_event, resume
 from app.agent.runtime.context import RunState
@@ -19,12 +22,15 @@ def _session() -> RunSession:
     return RunSession(write_tool_names=frozenset())
 
 
-def _rt(event_repo: FakeCopilotEventRepository | None = None) -> SimpleNamespace:
-    return SimpleNamespace(
-        db_lock=asyncio.Lock(),
-        event_repository=event_repo or FakeCopilotEventRepository(),
-        approval_store=InMemoryApprovalStore(),
-        runtime=SimpleNamespace(daily_budget=None, approval_timeout_seconds=900.0),
+def _rt(event_repo: FakeCopilotEventRepository | None = None) -> CopilotRuntime:
+    return cast(
+        CopilotRuntime,
+        SimpleNamespace(
+            db_lock=asyncio.Lock(),
+            event_repository=event_repo or FakeCopilotEventRepository(),
+            approval_store=InMemoryApprovalStore(),
+            runtime=SimpleNamespace(daily_budget=None, approval_timeout_seconds=900.0),
+        ),
     )
 
 
@@ -32,13 +38,17 @@ class _ScriptedGraph:
     """按给定 (mode, payload) 序列回放 astream，或直接抛异常。"""
 
     def __init__(
-        self, payloads: list[tuple[str, dict]] | None = None, exc: Exception | None = None
+        self,
+        payloads: list[tuple[str, dict[str, Any]]] | None = None,
+        exc: Exception | None = None,
     ):
         self._payloads = payloads or []
         self._exc = exc
 
-    def astream(self, input: object, config: object, stream_mode: object):
-        async def gen():
+    def astream(
+        self, input: object, config: object, stream_mode: object
+    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        async def gen() -> AsyncIterator[tuple[str, dict[str, Any]]]:
             if self._exc is not None:
                 raise self._exc
             for item in self._payloads:
@@ -48,7 +58,7 @@ class _ScriptedGraph:
 
 
 def test_done_payload_includes_run_state() -> None:
-    rt = SimpleNamespace(model_name="test-model")
+    rt = cast(CopilotRuntime, SimpleNamespace(model_name="test-model"))
     payload = done_payload(rt, uuid.uuid4(), None, "task", RunState.COMPLETED.value)
     assert payload["run_state"] == "completed"
 
@@ -122,8 +132,9 @@ async def test_stream_graph_marks_failed_on_exception() -> None:
         ]
     assert session.run_state == RunState.FAILED.value
     # 错误事件落库时携带 run_state
-    assert rt.event_repository.events[-1].type == "error"
-    assert rt.event_repository.events[-1].payload["run_state"] == "failed"
+    event_repo = cast(FakeCopilotEventRepository, rt.event_repository)
+    assert event_repo.events[-1].type == "error"
+    assert event_repo.events[-1].payload["run_state"] == "failed"
 
 
 async def test_resume_refuses_terminal_run() -> None:

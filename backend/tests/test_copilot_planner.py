@@ -158,8 +158,10 @@ def test_merge_multiple_replacements_are_distinguishable() -> None:
     plan.merge([PlanStep(step_id="3", action="c", replaces_step_id="2")], ["a", "b", "c"])
     ids = {s.step_id for s in plan.steps}
     assert ids == {"1", "2", "3"}
-    assert plan.get_step("1").status == StepStatus.OBSOLETE
-    assert plan.get_step("2").status == StepStatus.OBSOLETE
+    s1 = plan.get_step("1")
+    s2 = plan.get_step("2")
+    assert s1 is not None and s1.status == StepStatus.OBSOLETE
+    assert s2 is not None and s2.status == StepStatus.OBSOLETE
     c = plan.get_step("3")
     assert c is not None and c.replaces_step_id == "2" and c.status == StepStatus.PENDING
     # 三次合并分别落在 version 2/3/4

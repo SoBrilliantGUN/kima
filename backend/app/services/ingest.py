@@ -95,7 +95,7 @@ class IngestService:
         """
         if document.source_type == DocumentType.URL:
             return await self._parser.parse(source_type=SourceType.URL, url=document.source_url)
-        if document.source_type in (DocumentType.PDF, DocumentType.WORD):
+        if document.source_type in (DocumentType.PDF, DocumentType.WORD, DocumentType.MARKDOWN):
             if not document.file_path:
                 raise ParserError("缺少文件路径")
             content = await self._file_store.open(document.file_path)

@@ -14,6 +14,7 @@ class SourceType(StrEnum):
     PDF = "pdf"
     URL = "url"
     WORD = "word"
+    MARKDOWN = "markdown"
 
 
 @dataclass(frozen=True)
@@ -57,12 +58,21 @@ class UrlParser(Protocol):
     async def parse(self, *, url: str) -> ParsedDocument: ...
 
 
+class MarkdownParser(Protocol):
+    """Markdown 解析器：收 bytes 出 markdown（内容本身即 markdown，只做编码解码）。"""
+
+    async def parse(self, *, content: bytes) -> ParsedDocument: ...
+
+
 class ParserError(Exception):
     """文档解析失败（由 worker 判重试）。"""
 
 
 class DispatchDocumentParser:
-    """按 source_type 路由到 pdf/word/web 三个窄解析器；对外统一收 source_type + content/url。"""
+    """按 source_type 路由到 pdf/word/web/markdown 四个窄解析器。
+
+    对外统一收 source_type + content/url；markdown 仅做字节解码。
+    """
 
     def __init__(
         self,
@@ -70,10 +80,12 @@ class DispatchDocumentParser:
         pdf: PdfParser,
         word: WordParser,
         web: UrlParser,
+        markdown: MarkdownParser,
     ) -> None:
         self._pdf = pdf
         self._word = word
         self._web = web
+        self._markdown = markdown
 
     async def parse(
         self,
@@ -95,11 +107,16 @@ class DispatchDocumentParser:
             if url is None:
                 raise ParserError("缺少 URL")
             return await self._web.parse(url=url)
+        if source_type == SourceType.MARKDOWN:
+            if content is None:
+                raise ParserError("缺少 Markdown 文件内容")
+            return await self._markdown.parse(content=content)
         raise ParserError(f"不支持的来源类型: {source_type}")
 
 
-# 重导出：放在模块末尾——三个具体解析器依赖上方的 ``ParsedDocument``/``ParserError``，
+# 重导出：放在模块末尾——四个具体解析器依赖上方的 ``ParsedDocument``/``ParserError``，
 # 若在顶部 import 会与它们形成 import 环（partial initialization）。
+from app.integrations.parser_markdown import MarkdownDocumentParser  # noqa: E402
 from app.integrations.parser_mineru import MinerUDocumentParser  # noqa: E402
 from app.integrations.parser_web import WebDocumentParser  # noqa: E402
 from app.integrations.parser_word import WordDocumentParser  # noqa: E402
@@ -111,9 +128,11 @@ __all__ = [
     "PdfParser",
     "WordParser",
     "UrlParser",
+    "MarkdownParser",
     "ParserError",
     "DispatchDocumentParser",
     "MinerUDocumentParser",
     "WordDocumentParser",
     "WebDocumentParser",
+    "MarkdownDocumentParser",
 ]

@@ -13,7 +13,9 @@ export function DocumentWindowBody({ document, isLoading }: DocumentWindowBodyPr
   // word/url 完成后阅读解析出的 markdown；pdf 走 iframe 原文件
   const needsMarkdown =
     document?.status === 'done' &&
-    (document.source_type === 'word' || document.source_type === 'url')
+    (document.source_type === 'word' ||
+      document.source_type === 'url' ||
+      document.source_type === 'markdown')
   const { data: content } = useDocumentContent(document?.id, needsMarkdown)
 
   return (

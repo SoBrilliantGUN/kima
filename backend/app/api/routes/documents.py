@@ -20,6 +20,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 PDF_MEDIA_TYPE = "application/pdf"
 DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+MARKDOWN_MEDIA_TYPE = "text/markdown"
 
 
 @router.post("/from-url", response_model=DocumentRead, status_code=status.HTTP_201_CREATED)
@@ -56,6 +57,9 @@ async def get_document_file(document_id: uuid.UUID, service: DocumentServiceDep)
     if document.source_type == DocumentType.PDF:
         media_type = PDF_MEDIA_TYPE
         disposition = "inline"
+    elif document.source_type == DocumentType.MARKDOWN:
+        media_type = MARKDOWN_MEDIA_TYPE
+        disposition = "attachment"
     else:
         media_type = DOCX_MEDIA_TYPE
         disposition = "attachment"

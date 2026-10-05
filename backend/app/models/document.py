@@ -22,12 +22,14 @@ class DocumentType(StrEnum):
     PDF = "pdf"
     WORD = "word"
     URL = "url"
+    MARKDOWN = "markdown"
 
 
 # 文档类型 → 文件扩展名（注意 WORD 的 source_type.value 是 "word"，但扩展名是 "docx"）
 DOCUMENT_EXTENSIONS: dict[DocumentType, str] = {
     DocumentType.PDF: "pdf",
     DocumentType.WORD: "docx",
+    DocumentType.MARKDOWN: "md",
 }
 
 

@@ -93,7 +93,9 @@ export function DocumentWindow({
             </a>
           ) : null}
           {document?.status === 'done' &&
-          (document.source_type === 'pdf' || document.source_type === 'word') ? (
+          (document.source_type === 'pdf' ||
+            document.source_type === 'word' ||
+            document.source_type === 'markdown') ? (
             <a href={documentFileUrl(document.id)} download>
               下载原文件
             </a>

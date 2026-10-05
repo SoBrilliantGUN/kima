@@ -52,6 +52,27 @@ async def test_create_file_pdf_pending(
     assert doc.file_path is not None
 
 
+async def test_create_file_markdown_pending(
+    service: DocumentService,
+    kb_repo: FakeKnowledgeBaseRepository,
+) -> None:
+    kb = await _make_kb(kb_repo)
+    doc = await service.create_file(kb.id, content="# 标题".encode(), filename="笔记.md")
+    assert doc.status == DocumentStatus.PENDING
+    assert doc.source_type == DocumentType.MARKDOWN
+    assert doc.title == "笔记"
+    assert doc.file_path is not None
+
+
+async def test_create_file_markdown_long_ext(
+    service: DocumentService,
+    kb_repo: FakeKnowledgeBaseRepository,
+) -> None:
+    kb = await _make_kb(kb_repo)
+    doc = await service.create_file(kb.id, content="# 标题".encode(), filename="笔记.markdown")
+    assert doc.source_type == DocumentType.MARKDOWN
+
+
 async def test_document_filename_reconstructs_title_and_ext(
     service: DocumentService,
     kb_repo: FakeKnowledgeBaseRepository,

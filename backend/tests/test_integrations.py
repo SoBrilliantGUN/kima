@@ -11,6 +11,7 @@ from app.integrations import get_document_parser, get_embedding_client, get_llm_
 from app.integrations.llm import ChatMessage
 from app.integrations.parser import (
     DispatchDocumentParser,
+    MarkdownDocumentParser,
     MinerUDocumentParser,
     SourceType,
     WebDocumentParser,
@@ -57,15 +58,30 @@ async def test_dispatch_routes_by_source_type() -> None:
     pdf = FakeFileParser("pdf")
     word = FakeFileParser("word")
     web = FakeUrlParser("web")
-    dispatch = DispatchDocumentParser(pdf=pdf, word=word, web=web)
+    markdown = FakeFileParser("markdown")
+    dispatch = DispatchDocumentParser(pdf=pdf, word=word, web=web, markdown=markdown)
 
     await dispatch.parse(source_type=SourceType.PDF, content=b"x")
     await dispatch.parse(source_type=SourceType.WORD, content=b"x")
     await dispatch.parse(source_type=SourceType.URL, url="https://example.com")
+    await dispatch.parse(source_type=SourceType.MARKDOWN, content=b"x")
 
     assert pdf.calls == ["pdf"]
     assert word.calls == ["word"]
     assert web.calls == ["web"]
+    assert markdown.calls == ["markdown"]
+
+
+async def test_markdown_parser_decodes_utf8() -> None:
+    result = await MarkdownDocumentParser().parse(content="# 标题\n\n正文".encode())
+    assert result.markdown == "# 标题\n\n正文"
+    assert result.metadata["mime_type"] == "text/markdown"
+
+
+async def test_markdown_parser_falls_back_to_gbk() -> None:
+    text = "# 中文标题"
+    result = await MarkdownDocumentParser().parse(content=text.encode("gbk"))
+    assert result.markdown == text
 
 
 async def test_web_parser_uses_fetcher() -> None:

@@ -4,6 +4,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
@@ -17,7 +18,7 @@ from app.core.skill_store import FileSkillStore
 from app.integrations.embedding import FakeEmbeddingClient
 from app.integrations.rerank import FakeRerankerClient
 from app.integrations.search import FakeWebSearchClient
-from app.models.chat import ChatMessage
+from app.models.chat import ChatConversation, ChatMessage
 from app.rag.retriever import RagRetriever
 from app.rag.schema import RetrievedChunk
 from app.services.copilot import CopilotMemoryService
@@ -59,6 +60,21 @@ class _EmptyRetrievalRepo:
 
 
 class _FakeChatRepository:
+    async def add_conversation(self, conversation: ChatConversation) -> ChatConversation:
+        conversation.id = conversation.id or uuid.uuid4()
+        return conversation
+
+    async def get_conversation(self, conversation_id: uuid.UUID) -> ChatConversation | None:
+        return None
+
+    async def list_conversations(
+        self, kb_id: uuid.UUID | None, kind: str | None, *, limit: int, offset: int
+    ) -> tuple[list[ChatConversation], int]:
+        return [], 0
+
+    async def delete_conversation(self, conversation: ChatConversation) -> None:
+        return None
+
     async def add_message(self, message: ChatMessage) -> ChatMessage:
         message.id = message.id or uuid.uuid4()
         message.created_at = datetime.now(UTC)
@@ -110,7 +126,7 @@ def make_plan_runtime(tmp_path: Path, plan_json: str, answer: str) -> CopilotRun
     )
 
 
-def _initial_state(task: str) -> dict:
+def _initial_state(task: str) -> dict[str, Any]:
     return {
         "task": task,
         "system_prompt": "",

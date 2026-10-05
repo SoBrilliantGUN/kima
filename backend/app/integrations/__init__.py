@@ -10,6 +10,7 @@ from app.integrations.llm import DeepSeekLLMClient, FakeLLMClient, LLMClient
 from app.integrations.parser import (
     DispatchDocumentParser,
     DocumentParser,
+    MarkdownDocumentParser,
     MinerUDocumentParser,
     WebDocumentParser,
     WordDocumentParser,
@@ -118,4 +119,5 @@ def _document_parser(mineru_base_url: str, mineru_token: str) -> DocumentParser:
         pdf=MinerUDocumentParser(base_url=mineru_base_url, token=mineru_token),
         word=WordDocumentParser(),
         web=WebDocumentParser(),
+        markdown=MarkdownDocumentParser(),
     )

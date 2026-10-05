@@ -29,7 +29,7 @@ const STATUS_LABEL: Record<UploadStatus, string> = {
 }
 
 function isSupported(name: string): boolean {
-  return /\.(pdf|docx)$/i.test(name)
+  return /\.(pdf|docx|md|markdown)$/i.test(name)
 }
 
 export function DocumentDropzone({ kbId, onClose }: DocumentDropzoneProps) {
@@ -109,12 +109,12 @@ export function DocumentDropzone({ kbId, onClose }: DocumentDropzoneProps) {
         onDrop={handleDrop}
         onClick={() => inputRef.current?.click()}
       >
-        <p className={styles.dropzoneTitle}>拖拽 PDF / Word 文档到此处</p>
-        <p className={styles.dropzoneHint}>或点击选择文件（支持 .pdf / .docx，可多选）</p>
+        <p className={styles.dropzoneTitle}>拖拽 PDF / Word / Markdown 文档到此处</p>
+        <p className={styles.dropzoneHint}>或点击选择文件（支持 .pdf / .docx / .md，可多选）</p>
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,.docx"
+          accept=".pdf,.docx,.md,.markdown"
           multiple
           hidden
           onChange={handleInputChange}

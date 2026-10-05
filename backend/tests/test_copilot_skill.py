@@ -3,7 +3,7 @@
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatResult
 from pydantic import Field
 
+from app.agent.compose import CopilotRuntime
 from app.agent.memory import format_skills_block
 from app.agent.orchestrate import recall_relevant_skills
 from app.agent.runtime.budget import BudgetTracker, HardBudget
@@ -239,7 +240,7 @@ async def test_recall_relevant_skills(tmp_path: Path) -> None:
     await store.write_skill("写周报", "写周报用这个模板", "1. 完成")
     await store.write_skill("代码审查", "审查代码时的检查清单", "检查")
     gateway = make_gateway(embedder=_KeywordEmbeddingClient())
-    rt = SimpleNamespace(skill_store=store, gateway=gateway)
+    rt = cast(CopilotRuntime, SimpleNamespace(skill_store=store, gateway=gateway))
     tracker = BudgetTracker(HardBudget())
     selected = await recall_relevant_skills(rt, "帮我写周报", tracker, uuid.uuid4())
     assert [s.name for s in selected] == ["写周报"]
@@ -249,6 +250,6 @@ async def test_recall_relevant_skills_empty_store(tmp_path: Path) -> None:
     """无 skill 时不碰 embedding，直接返回空（避免无谓的网关调用）。"""
     store = FileSkillStore(tmp_path)
     gateway = make_gateway(embedder=_KeywordEmbeddingClient())
-    rt = SimpleNamespace(skill_store=store, gateway=gateway)
+    rt = cast(CopilotRuntime, SimpleNamespace(skill_store=store, gateway=gateway))
     tracker = BudgetTracker(HardBudget())
     assert await recall_relevant_skills(rt, "任意任务", tracker, uuid.uuid4()) == []

@@ -58,7 +58,7 @@ export interface NoteAddToKnowledgeBase {
   knowledge_base_id: string
 }
 
-export type DocumentType = 'pdf' | 'word' | 'url'
+export type DocumentType = 'pdf' | 'word' | 'url' | 'markdown'
 
 export type DocumentStatus = 'pending' | 'processing' | 'done' | 'error' | 'needs_approval'
 

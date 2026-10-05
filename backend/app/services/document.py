@@ -15,6 +15,8 @@ MAX_FILE_SIZE = 50 * 1024 * 1024
 ALLOWED_EXTENSIONS: dict[str, DocumentType] = {
     ".pdf": DocumentType.PDF,
     ".docx": DocumentType.WORD,
+    ".md": DocumentType.MARKDOWN,
+    ".markdown": DocumentType.MARKDOWN,
 }
 
 
@@ -44,7 +46,7 @@ class DocumentService:
         await self._require_kb(kb_id)
         ext = Path(filename).suffix.lower()
         if ext not in ALLOWED_EXTENSIONS:
-            raise ValidationError("仅支持 PDF 或 Word(.docx) 文件")
+            raise ValidationError("仅支持 PDF / Word / Markdown 文件")
         if len(content) > MAX_FILE_SIZE:
             raise ValidationError(f"文件大小不能超过 {MAX_FILE_SIZE // (1024 * 1024)}MB")
 

@@ -93,11 +93,11 @@ pnpm dev
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/documents`（multipart: `file` + `kb_id`） | 上传 PDF/Word → 201（pending，后台异步解析） |
+| POST | `/api/documents`（multipart: `file` + `kb_id`） | 上传 PDF/Word/Markdown → 201（pending，后台异步解析） |
 | POST | `/api/documents/from-url`（json: `url` + `kb_id`） | 抓取网页 URL → 201（pending） |
 | GET | `/api/documents/{id}` | 详情（状态/来源/错误信息） |
-| GET | `/api/documents/{id}/file` | 原文件流（pdf 内嵌 / word 下载；url 类型 409） |
-| GET | `/api/documents/{id}/content` | 解析正文 markdown（word/url 阅读器渲染，仅 done 态） |
+| GET | `/api/documents/{id}/file` | 原文件流（pdf 内嵌 / word、markdown 下载；url 类型 409） |
+| GET | `/api/documents/{id}/content` | 解析正文 markdown（word/url/markdown 阅读器渲染，仅 done 态） |
 | POST | `/api/documents/{id}/retry` | 失败重试（仅 error 态） |
 | DELETE | `/api/documents/{id}` | 删除 |
 
