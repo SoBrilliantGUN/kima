@@ -264,11 +264,11 @@ backend/eval/agent/         # 评测闭环
 
 给每份进入上下文的数据打 0-100 可信度分、按分处置，替代一刀切的布尔 veto。
 
-- **红线**：硬正则（忽略/忘记/角色切换/格式逃逸/泄露提示词）命中即**一票毙**（`injection.py`），不进评分。
+- **红线**：硬正则（忽略/忘记/角色切换/格式逃逸/泄露提示词）命中即**一票毙**（`injection.py`），不进评分——唯一例外是写库闸：文档命中红线不再即毙，改走人工确认 + 低信任入库（见下「写库闸」与 module-4 §2.1b）。
 - **三维度**（`trust.py`）：内容（100 − 20×祈使密度）+ 来源（系统 90 / 用户 70 / 模型 60 / KB 60 / 工具 40 / 网页 20）+ 行为（写 ≥3 次 −25 / 写后回读 −20）。综合分 = 加权平均（内容 0.5 / 来源 0.3 / 行为 0.2，假设值，待标注样本校准）。
 - **五节点**：输入 / 检索 / 上下文 / 工具调用 / 输出，各节点重新评估、分数只减不增（`AgentState.trust` min 合并）。
 - **分级处置**：80-100 放行 / 60-79 观察（审计）/ 40-59 隔离（`<data>` 标签）/ 20-39 脱敏 / 0-19 阻断。
-- **写库闸**：文档入库前按分拦截（`document_guard.py`），红线即拒（直接置 error，不重试）。
+- **写库闸**：文档入库前按分拦截（`document_guard.py`）。红线命中 → `needs_approval`（人工确认，`guard_report` 存命中片段供前端高亮）；确认后低信任入库、命中 chunk 打 `quarantined`，检索侧 `<data trust=20>` 隔离而非硬阻断。软信号综合分 BLOCK 仍拒（不重试）。
 - **脱敏**：模型输出与审计日志里的密钥/邮箱/手机号打码（`sensitive.py`）。
 - **HITL（分级审批）**：写工具 `interrupt()` 挂起 → 前端确认 → resume 重放同一调用（不重问 LLM）。不再是一刀切的「所有写都审批」——那是审批疲劳的根源。改为**规则化分级（Policy-as-Code）**：`app/agent/approval.py` 的 `ApprovalPolicy` 把工具 `SideEffectLevel` 映射成三档处置——`LOW` 自动放行、`MEDIUM`（建笔记/写记忆）异步通知 + 事后审计（自动执行，review 节点 + 事件日志对账）、`HIGH`（覆盖人设档案，`update_profile`）同步审批打断人。规则即代码、可 CR，不引入黑盒风险分。配套三件套：**审批单第一类实体**（`copilot_approvals` 表，pending/approved/rejected/expired 状态机，`GET /copilot/approvals/pending` 找回挂起审批）、**超时 fail-close**（`expires_at` 过期默认阻断，`copilot_approval_timeout_seconds` 默认 15 分钟）、**证据包**（审批载荷带 `summary` 人话摘要 + `level` 风险等级 + `args` 原始参数，前端渲染「动的是什么、风险多高」而非裸 JSON）。详见 §4.15。
 - **review**：进图，`OK→END / mismatch→回 agent`（attempts 上限）；**fail-closed**——审查器解析失败判 `UNVERIFIED` 追加诚实更正、不回退放行；**确定性副作用对账**（`SideEffectVerifier` 回查 DB 确认写工具声称的 id 真落库）先于 LLM 判定，防「伪造证据骗校验器」。

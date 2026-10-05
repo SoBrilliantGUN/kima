@@ -17,6 +17,7 @@ from typing import Any
 
 from langchain_core.tools import BaseTool, tool
 
+from app.agent.guardrail.trust import quarantine_content
 from app.agent.helpers import clip
 from app.agent.resilience.circuit_breaker import CircuitBreaker, with_circuit_breaker
 from app.agent.resilience.result import ToolFailure, ToolOutcome
@@ -236,7 +237,13 @@ def build_tools(
         chunks = await rag_retriever.retrieve(query, ids)
         if not chunks:
             return "未检索到相关内容。"
-        body = "\n\n".join(f"[{i + 1}] {c.title}\n{c.content}" for i, c in enumerate(chunks))
+        # 低信任命中（注入红线经用户确认入库）包进 <data> 隔离，禁止当指令执行，而非硬阻断
+        parts = [
+            f"[{i + 1}] {c.title}\n"
+            f"{quarantine_content(c.content, 'kb') if c.quarantined else c.content}"
+            for i, c in enumerate(chunks)
+        ]
+        body = "\n\n".join(parts)
         return _finalize(body, "search_knowledge_base")
 
     @copilot_tool(
@@ -304,6 +311,8 @@ def build_tools(
         try:
             document = await document_service.get(doc_id)
             content = await document_service.get_content(doc_id)
+            if document.injection_approved:
+                content = quarantine_content(content, "kb")
             return _finalize(f"# {document.title}\n\n{content}", "read_document")
         except DomainError as exc:
             raise _deny(

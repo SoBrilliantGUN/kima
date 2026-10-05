@@ -7,6 +7,7 @@
 
 from collections.abc import Awaitable, Callable
 
+from app.agent.guardrail.trust import quarantine_content
 from app.chunking.base import estimate_tokens
 from app.integrations.llm import ChatMessage
 from app.integrations.search import WebSearchResult
@@ -29,7 +30,8 @@ def format_kb_context(chunks: list[RetrievedChunk]) -> tuple[str, list[Citation]
     parts: list[str] = []
     citations: list[Citation] = []
     for index, chunk in enumerate(chunks, start=1):
-        parts.append(f"[{index}] {chunk.title}\n{chunk.content}")
+        content = quarantine_content(chunk.content, "kb") if chunk.quarantined else chunk.content
+        parts.append(f"[{index}] {chunk.title}\n{content}")
         citations.append(
             Citation(
                 index=index,

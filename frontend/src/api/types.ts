@@ -62,6 +62,17 @@ export type DocumentType = 'pdf' | 'word' | 'url' | 'markdown'
 
 export type DocumentStatus = 'pending' | 'processing' | 'done' | 'error' | 'needs_approval'
 
+export interface GuardViolation {
+  pattern: string
+  matched: string
+  before: string
+  after: string
+}
+
+export interface GuardReport {
+  violations: GuardViolation[]
+}
+
 export interface Document {
   id: string
   kb_id: string
@@ -70,6 +81,8 @@ export interface Document {
   source_url: string | null
   status: DocumentStatus
   embedding_approved: boolean
+  injection_approved: boolean
+  guard_report: GuardReport | null
   error_message: string | null
   metadata: Record<string, unknown> | null
   created_at: string

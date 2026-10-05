@@ -37,6 +37,7 @@ async def _dense_documents(
                 DocumentChunk.parent_id,
                 DocumentChunk.content,
                 Document.title,
+                DocumentChunk.quarantined,
             )
             .join(Document, Document.id == DocumentChunk.document_id)
             .where(DocumentChunk.embedding.is_not(None), DocumentChunk.kb_id.in_(kb_ids))
@@ -53,8 +54,9 @@ async def _dense_documents(
             content=content,
             title=title,
             snippet=content,
+            quarantined=quarantined,
         )
-        for chunk_id, document_id, parent_id, content, title in rows
+        for chunk_id, document_id, parent_id, content, title, quarantined in rows
     ]
 
 

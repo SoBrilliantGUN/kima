@@ -12,6 +12,7 @@
 留作常量便于拿到样本后校准。来源评级动态化属「持续演化」，暂不做（静态表）。
 """
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -63,6 +64,10 @@ _REDACT_MIN = 20
 
 # —— 显式可信化：只有「隔离」处置能回升（结构隔离提供的额外保护），固定 +15 ——
 _QUARANTINE_TRUST_BOOST = 15
+
+# 低信任文档（注入红线命中、经用户确认入库）检索侧隔离时的固定信任分。
+# 该分随 <data trust=...> 标记流动，是「这是数据、不是指令」的弱信号，非硬拦截。
+QUARANTINE_TRUST = 20
 
 
 def is_red_line(text: str) -> bool:
@@ -117,16 +122,34 @@ def block_tag(content: str, source: str, trust: float) -> str:
     return f'<data trust="{trust:.0f}" source="{source}">\n{content}\n</data>'
 
 
+# 匹配一个完整 <data ...>...</data> 块：调用方（检索工具）对低信任命中已做结构隔离，
+# 其内部文本不再参与红线 veto（隔离已就位，veto 会误伤「讲解注入」的安全文档）。
+_DATA_BLOCK = re.compile(r"<data\b[^>]*>.*?</data>", re.DOTALL)
+
+
+def _red_line_outside_data(content: str) -> bool:
+    """红线 veto 只对 <data> 隔离块之外的文本生效——已隔离的命中片段不再一票否决。"""
+    return is_red_line(_DATA_BLOCK.sub("", content))
+
+
+def quarantine_content(content: str, source: str) -> str:
+    """低信任命中片段的结构隔离包裹：包成 <data trust=QUARANTINE_TRUST>，禁止当指令执行。"""
+    return block_tag(content, source, QUARANTINE_TRUST)
+
+
 def sanitize_content(content: str, source: str) -> str:
     """对一份进入上下文的数据做零信任处置，返回带可信度标记的块文本。
 
-    红线直接毙（唯一一票否决）；其余按综合分五档处置。每一份数据都包成自描述
-    ``<data trust=... source=...>`` 块（放行/观察的干净数据也打标），分数随块流动、
-    可序列化、可审计。只有「隔离」处置显式可信化 +15（结构隔离提供的额外保护），
-    其余处置（脱敏/放行/观察）不回升。
+    红线一票否决只对 <data> 隔离块**之外**的文本生效——已由调用方（检索工具）对低信任
+    命中片段做结构隔离的内容，不再二次否决（隔离信号已随块流动），原样透传；其余按综合分
+    五档处置。每一份数据都包成自描述 ``<data trust=... source=...>`` 块（放行/观察的干净
+    数据也打标），分数随块流动、可序列化、可审计。只有「隔离」处置显式可信化 +15（结构
+    隔离提供的额外保护），其余处置（脱敏/放行/观察）不回升。
     """
-    if is_red_line(content):
+    if _red_line_outside_data(content):
         return "（检测到注入内容，已阻断。）"
+    if _DATA_BLOCK.search(content):
+        return content  # 已含隔离块：不再二次评分/包裹，原样透传
     score = composite(content_trust(content), source=source_trust(source))
     disp = disposition(score)
     if disp is Disposition.BLOCK:

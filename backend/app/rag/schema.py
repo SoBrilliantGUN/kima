@@ -26,6 +26,8 @@ class RetrievedChunk:
     title: str
     snippet: str
     score: float = 0.0
+    # 低信任文档（注入红线命中、经用户确认入库）的 chunk 打标；检索侧据此 <data> 隔离而非硬阻断
+    quarantined: bool = False
 
 
 @dataclass(frozen=True)

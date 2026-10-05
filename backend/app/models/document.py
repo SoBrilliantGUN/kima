@@ -70,6 +70,10 @@ class Document(Base, TimestampMixin):
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # 大文档已获用户确认嵌入（确认后跳过阈值检查）
     embedding_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # 注入红线命中的文档经用户确认后入库（低信任，检索侧 <data> 隔离）；确认前跳过红线硬停
+    injection_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # 写库闸命中的违规详情（结构化：pattern/matched/before/after），供前端待确认态高亮展示
+    guard_report: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     @property
     def filename(self) -> str:
@@ -103,3 +107,5 @@ class DocumentChunk(Base):
     tsv: Mapped[str | None] = mapped_column(
         TSVECTOR(), Computed("to_tsvector('jiebacfg', content)", persisted=True), nullable=True
     )
+    # 该 chunk 正文命中注入红线（低信任文档经确认入库后打标，检索侧据此 <data> 隔离而非硬阻断）
+    quarantined: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

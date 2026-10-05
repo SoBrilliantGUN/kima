@@ -165,6 +165,46 @@ def matches_injection_pattern(
     return any(pattern.search(text) for pattern in policy.injection_patterns)
 
 
+@dataclass(frozen=True)
+class RedLineHit:
+    """一次注入红线命中的定位与上下文（供写库闸待确认态高亮展示）。"""
+
+    pattern: str  # 命中的正则 pattern 原文（审计用）
+    start: int  # 命中起始下标（全文）
+    end: int  # 命中结束下标
+    matched: str  # 命中原文
+    before: str  # 命中前 context 字符
+    after: str  # 命中后 context 字符
+
+
+def find_red_line_hits(
+    text: str,
+    policy: InjectionPolicy = DEFAULT_INJECTION_POLICY,
+    context_chars: int = 100,
+) -> list[RedLineHit]:
+    """定位文本内所有注入红线命中，带前后各 ``context_chars`` 字上下文。
+
+    与 ``matches_injection_pattern``（布尔）互补：后者用于 L1/L2/L3 一票否决，
+    这里用于写库闸——命中不再立即毙，而是把「哪里命中、命中了什么、上下文是什么」
+    提取出来交给前端高亮，让用户决定是否作为安全/研究文档入库。
+    """
+    hits: list[RedLineHit] = []
+    for pattern in policy.injection_patterns:
+        for match in pattern.finditer(text):
+            start, end = match.start(), match.end()
+            hits.append(
+                RedLineHit(
+                    pattern=pattern.pattern,
+                    start=start,
+                    end=end,
+                    matched=match.group(0),
+                    before=text[max(0, start - context_chars) : start],
+                    after=text[end : end + context_chars],
+                )
+            )
+    return hits
+
+
 def scan_text(text: str, policy: InjectionPolicy, source: str) -> None:
     """扫描文本；命中任一注入正则即抛 PromptInjectionDetected。"""
     for pattern in policy.injection_patterns:

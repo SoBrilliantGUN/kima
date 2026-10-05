@@ -13,7 +13,7 @@ from app.rag.schema import RetrievedChunk, SourceType
 _DOCUMENT_LEXICAL_SQL = text(
     """
     SELECT dc.id AS chunk_id, dc.document_id AS source_id, dc.parent_id AS parent_id,
-           dc.content AS content, d.title AS title,
+           dc.content AS content, d.title AS title, dc.quarantined AS quarantined,
            ts_rank(dc.tsv, plainto_tsquery('jiebacfg', :query)) AS rank
     FROM document_chunks dc
     JOIN documents d ON d.id = dc.document_id
@@ -73,6 +73,7 @@ async def _lexical_documents(
             content=row["content"],
             title=row["title"],
             snippet=row["content"],
+            quarantined=row["quarantined"],
         )
         for row in rows
     ]

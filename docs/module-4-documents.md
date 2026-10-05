@@ -60,6 +60,16 @@ pending ──worker 拾起──▶ processing ──成功──▶ done
   - `approve=false` → `error`（不嵌入）。
 - 动机：token/cost 是「事后才知道」，硬限只能滞后一批地卡、救不了当前调用；对大文档改成**事前估算 + 用户确认**，而非硬拒绝——只要用户确认、账户有钱就继续处理。非循环 worker 不设 per-run token/cost 硬限，时间由网关 per-call 超时兜底（见 module-6 §4.11）。
 
+### 2.1b 注入红线确认（`needs_approval`，2026-10-05）
+
+解析后、分块前，用 `find_red_line_violations` 扫全文；命中注入红线且未获用户确认 → 置 **`needs_approval`**，`guard_report` 存结构化命中片段（`pattern`/`matched`/`before`/`after`，前后各 100 字上下文），`error_message` 记总数，本轮不落 chunk、不排期重试。
+
+- 用户在 `POST /api/documents/{id}/approve` 传 `{approve: bool}`（与大文档确认共用端点）：
+  - `approve=true` → `injection_approved=true` + 回 `pending`（worker 重跑跳过红线硬停，正常分块入库，命中红线的 chunk 打 `quarantined`）；
+  - `approve=false` → `error`。
+- 动机：正则分不清「实施注入」与「讲解注入」——安全/研究类文章正文里的示例 payload（如「忽略之前的指令」）会误命中红线。改为**人工确认 + 低信任入库**而非硬拒绝；放行的低信任文档在检索侧以 `<data trust=20>` 结构隔离（禁止当指令执行），而非硬阻断。
+- 安全边界：这是对「红线一票否决」的**唯一让步**，且仅限用户显式确认过的文档；未确认的文档仍会被 `sanitize_content` 的红线否决（检索侧 `<data>` 隔离块之外的文本照旧一票毙）。
+
 ### 2.2 worker 实现（`app/workers/document_worker.py`）
 
 - `main.py` lifespan 里 `asyncio.create_task(run_worker())`，循环：
@@ -91,6 +101,8 @@ pending ──worker 拾起──▶ processing ──成功──▶ done
 | `retry_count` | `Integer` | 非空，默认 `0`（重试上限为常量 `MAX_RETRIES=3`，非列） |
 | `error_message` | `Text` | 可空（失败原因 / 大文档待确认提示，前端展示） |
 | `embedding_approved` | `Boolean` | 非空，默认 `false`（大文档经用户确认后置 `true`，跳过阈值检查） |
+| `injection_approved` | `Boolean` | 非空，默认 `false`（注入红线命中经用户确认后置 `true`，跳过红线硬停） |
+| `guard_report` | `JSONB` | 可空（注入红线命中的结构化片段 `pattern/matched/before/after`，前端待确认态高亮） |
 | `next_retry_at` | `DateTime(timezone)` | 可空（排期重试） |
 | `created_at` / `updated_at` | `DateTime(timezone)` | 继承 `TimestampMixin` |
 
@@ -107,6 +119,7 @@ pending ──worker 拾起──▶ processing ──成功──▶ done
 | `metadata` | `JSONB` | 可空（`heading_path`/`block_type`，供 RAG 上下文与调试） |
 | `token_count` | `Integer` | 可空（估算） |
 | `embedding` | `Vector(1024)` | **可空**：child 有向量，parent 为 NULL |
+| `quarantined` | `Boolean` | 非空，默认 `false`（该 chunk 命中注入红线，检索侧据此 `<data>` 隔离而非硬阻断） |
 
 **两级语义（small-to-big）**：
 

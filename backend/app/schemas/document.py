@@ -37,6 +37,8 @@ class DocumentRead(BaseModel):
     status: DocumentStatus
     error_message: str | None
     embedding_approved: bool
+    injection_approved: bool
+    guard_report: dict[str, Any] | None
     metadata: dict[str, Any] | None = Field(validation_alias="doc_metadata")
     created_at: datetime
     updated_at: datetime

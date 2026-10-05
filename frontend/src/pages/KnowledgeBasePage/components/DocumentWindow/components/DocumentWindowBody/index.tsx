@@ -1,6 +1,7 @@
 import { documentFileUrl } from '@/api/documents'
 import type { Document } from '@/api/types'
 import { useDocumentContent } from '@/hooks/useDocuments'
+import { GuardReport } from './components/GuardReport'
 import { MarkdownView } from './components/MarkdownView'
 import styles from './index.module.scss'
 
@@ -35,7 +36,11 @@ export function DocumentWindowBody({ document, isLoading }: DocumentWindowBodyPr
         </div>
       ) : document.status === 'needs_approval' ? (
         <div className={styles.placeholder}>
-          <p>文档较大，嵌入成本较高，请确认是否继续。</p>
+          {document.guard_report ? (
+            <GuardReport report={document.guard_report} />
+          ) : (
+            <p>文档较大，嵌入成本较高，请确认是否继续。</p>
+          )}
         </div>
       ) : document.source_type === 'pdf' ? (
         <iframe

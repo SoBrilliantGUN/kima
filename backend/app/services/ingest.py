@@ -8,7 +8,13 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from app.agent.gateway import LLMGateway, run_budget
-from app.agent.guardrail.document_guard import PoisonedDocumentError, guard_document_text
+from app.agent.guardrail.document_guard import (
+    PoisonedDocumentError,
+    find_red_line_violations,
+    guard_document_text,
+)
+from app.agent.guardrail.injection import RedLineHit
+from app.agent.guardrail.trust import is_red_line
 from app.agent.runtime.budget import BudgetTracker, DailyBudget
 from app.chunking import ParentChunk, chunk_document, estimate_tokens
 from app.core.storage import FileStore
@@ -18,6 +24,8 @@ from app.repositories.document import DocumentRepository
 
 EMBED_BATCH_SIZE = 32  # 向量化批大小：控制单次 embed API 调用的文本条数
 RETRY_BASE_DELAY = timedelta(seconds=60)  # 重试退避基数：1min → 2min → 4min（指数）
+# guard_report 最多存多少条命中片段（避免超大 JSONB）；总数仍在 error_message 里体现
+MAX_REPORTED_VIOLATIONS = 20
 
 
 class IngestService:
@@ -53,7 +61,13 @@ class IngestService:
         try:
             await self._repository.delete_chunks(document_id)
             parsed = await self._parse(document)
-            guard_document_text(parsed.markdown)  # 写库闸：投毒文档在分块/入库前拦截
+            # 写库闸（红线层）：命中注入红线且未获用户确认 → 置 needs_approval，提取命中片段
+            # 供前端高亮；确认后（injection_approved）跳过红线硬停，低信任入库 + 检索侧隔离。
+            violations = find_red_line_violations(parsed.markdown)
+            if violations and not document.injection_approved:
+                await self._needs_approval(document, violations)
+                return
+            guard_document_text(parsed.markdown)  # 写库闸（软信号层）：综合分 BLOCK 仍拒绝
 
             chunks = self._build_chunks(document, chunk_document(parsed.markdown))
             # 大文档警告：嵌入成本（child token 预估）超阈值且未获用户确认 → 置 needs_approval，
@@ -124,6 +138,7 @@ class IngestService:
                 doc_metadata={"heading_path": parent.heading_path} if parent.heading_path else None,
                 token_count=estimate_tokens(parent.content),
                 embedding=None,
+                quarantined=is_red_line(parent.content),
             )
             rows.append(parent_row)
             for child_index, child in enumerate(parent.children):
@@ -138,6 +153,7 @@ class IngestService:
                         doc_metadata=child.metadata,
                         token_count=estimate_tokens(child.content),
                         embedding=None,
+                        quarantined=is_red_line(child.content),
                     )
                 )
         return rows
@@ -177,9 +193,30 @@ class IngestService:
         await self._repository.update(document)
 
     async def _reject(self, document: Document, exc: PoisonedDocumentError) -> None:
-        """写库闸命中：直接置 error，不重试（毒内容重试也不会变干净）。"""
+        """写库闸命中（软信号 BLOCK）：直接置 error，不重试（毒内容重试也不会变干净）。"""
         document.status = DocumentStatus.ERROR
         document.error_message = str(exc)
+        document.next_retry_at = None
+        await self._repository.update(document)
+
+    async def _needs_approval(self, document: Document, violations: list[RedLineHit]) -> None:
+        """写库闸命中红线：置 needs_approval，结构化存命中片段供前端高亮，等用户确认。"""
+        reported = violations[:MAX_REPORTED_VIOLATIONS]
+        document.guard_report = {
+            "violations": [
+                {
+                    "pattern": v.pattern,
+                    "matched": v.matched,
+                    "before": v.before,
+                    "after": v.after,
+                }
+                for v in reported
+            ],
+        }
+        document.status = DocumentStatus.NEEDS_APPROVAL
+        document.error_message = (
+            f"文档疑似包含 {len(violations)} 处提示注入内容，请确认是否作为安全/研究文档入库"
+        )
         document.next_retry_at = None
         await self._repository.update(document)
 

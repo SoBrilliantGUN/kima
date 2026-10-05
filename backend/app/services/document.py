@@ -59,6 +59,7 @@ class DocumentService:
             status=DocumentStatus.PENDING,
             retry_count=0,
             embedding_approved=False,
+            injection_approved=False,
         )
         return await self._repository.add(document)
 
@@ -72,6 +73,7 @@ class DocumentService:
             status=DocumentStatus.PENDING,
             retry_count=0,
             embedding_approved=False,
+            injection_approved=False,
         )
         return await self._repository.add(document)
 
@@ -115,22 +117,29 @@ class DocumentService:
         return await self._repository.update(document)
 
     async def approve(self, document_id: uuid.UUID, approve: bool) -> Document:
-        """大文档确认：needs_approval 状态的文档，用户确认后置 embedding_approved + 回 PENDING；
-        拒绝则置 ERROR（不嵌入）。"""
+        """needs_approval 文档的用户确认：两类原因共用此状态——大文档嵌入确认、注入红线确认。
+
+        approve=True：同时置 ``embedding_approved`` 与 ``injection_approved``（两者都是「用户
+        已确认放行」的开关，对不涉及其一的文档无害），清 ``guard_report``，回 PENDING 触发重跑。
+        approve=False：置 ERROR，清 ``guard_report``。
+        """
         document = await self.get(document_id)
         if document.status != DocumentStatus.NEEDS_APPROVAL:
             raise ConflictError("仅待确认状态的文档可审批")
         if approve:
             document.embedding_approved = True
+            document.injection_approved = True
+            document.guard_report = None
             document.status = DocumentStatus.PENDING
             document.retry_count = 0
             document.next_retry_at = None
             document.error_message = None
         else:
             document.embedding_approved = False
+            document.guard_report = None
             document.status = DocumentStatus.ERROR
             document.next_retry_at = None
-            document.error_message = "用户拒绝处理大文档"
+            document.error_message = "用户拒绝处理该文档"
         return await self._repository.update(document)
 
     async def list_by_kb(self, kb_id: uuid.UUID) -> Sequence[Document]:
