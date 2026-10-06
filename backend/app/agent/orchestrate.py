@@ -14,11 +14,10 @@ import math
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
-from app.agent.compose import CopilotRuntime
 from app.agent.events import (
     CopilotApprovalEvent,
     CopilotDeltaEvent,
@@ -55,6 +54,9 @@ from app.core.skill_store import CustomSkill
 from app.models.chat import ChatConversation, ChatKind, ChatMessage, ChatRole
 from app.models.copilot import ApprovalStatus, CopilotApproval, CopilotEvent
 from app.schemas.copilot import CopilotRequest
+
+if TYPE_CHECKING:
+    from app.agent.compose import CopilotRuntime
 
 logger = logging.getLogger(__name__)
 

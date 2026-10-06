@@ -20,7 +20,7 @@ from app.agent.orchestrate import (
     make_tracker,
     reject_run,
 )
-from app.agent.runtime.entry import is_plan, run_plan, run_reactive
+from app.agent.runtime.entry import run_reactive
 from app.agent.runtime.router import Intent, classify_intent
 from app.agent.runtime.workflow import COMPLAINT_RESPONSE, REJECT_RESPONSE
 from app.models.chat import ChatMessage, ChatRole
@@ -56,26 +56,14 @@ async def run(rt: CopilotRuntime, request: CopilotRequest) -> AsyncIterator[Copi
     # 全接网关，须先建 tracker 供它们的 run_budget 使用；run 结束导出单位成本落 done 事件。
     tracker = make_tracker(rt)
 
-    # 约束显式携带：召回 + 组装上移到三种执行模式之前，planner/qa/synthesizer 与 reactive
+    # 约束显式携带：召回 + 组装上移到执行模式之前，planner/qa/synthesizer 与 reactive
     # 共用同一份 soul/user 底线 + 召回约束。
     system_prompt, memory_block, reminder = await assemble_context(
         rt, request.question, run_id, tracker
     )
 
-    if is_plan(intent):
-        async for event in run_plan(
-            rt,
-            run_id=run_id,
-            conversation_id=conversation.id,
-            assistant_message_id=assistant_message_id,
-            tracker=tracker,
-            system_prompt=system_prompt,
-            memory_block=memory_block,
-            question=request.question,
-        ):
-            yield event
-        return
-
+    # 主 agent 默认 reactive（不再按意图硬编码路由到 plan）；复杂任务由 reactive loop 里
+    # 的 spawn 子 agent 表达「要不要规划」。
     async for event in run_reactive(
         rt,
         run_id=run_id,
