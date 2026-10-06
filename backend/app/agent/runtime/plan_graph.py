@@ -408,7 +408,7 @@ async def stream_plan_graph(
     final_answer = ""
     try:
         async for _mode, payload in graph.astream(
-            initial_state, config=config, stream_mode="updates"
+            initial_state, config=config, stream_mode=["updates"]
         ):
             if "__interrupt__" in payload:
                 # 写工具审批挂起（并行可多个 interrupt）：逐张落审批单 + 发 approval 事件。

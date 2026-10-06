@@ -10,8 +10,9 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage
 
 from app.agent.compose import CopilotRuntime, build_runtime
+from app.agent.events import CopilotDoneEvent, CopilotStepEvent
 from app.agent.orchestrate import make_config, make_tracker
-from app.agent.runtime.plan_graph import build_plan_graph
+from app.agent.runtime.plan_graph import build_plan_graph, stream_plan_graph
 from app.agent.runtime.planner import LLMPlanner
 from app.core.memory_store import FileMemoryStore
 from app.core.skill_store import FileSkillStore
@@ -180,3 +181,46 @@ async def test_plan_graph_replans_on_failure(tmp_path: Path) -> None:
     # read_note 读不到 → 失败 → replan 返回空（ScriptedLLM 用尽）→ plan_error 落定
     assert final["plan_error"]
     assert "失败" in final["final_answer"]
+
+
+async def test_stream_plan_graph_streams_events(tmp_path: Path) -> None:
+    """回归：stream_plan_graph 必须能走完 astream 并产出 step/done 事件。
+
+    之前 ``graph.astream(stream_mode="updates")`` 传的是单个字符串，LangGraph 在单 mode 下
+    只 yield payload（dict）而非 ``(mode, payload)`` 元组，``_mode, payload`` 解包报
+    ``not enough values to unpack (expected 2, got 1)``。改为列表后应正常流式产出。
+    """
+    plan = {
+        "steps": [
+            {"id": "1", "action": "list_notes", "params": {}},
+            {
+                "id": "2",
+                "action": "finalize_answer",
+                "params": {},
+                "depends_on": ["1"],
+                "terminal": True,
+            },
+        ]
+    }
+    rt = make_plan_runtime(tmp_path, json.dumps(plan), "列好了。")
+    tracker = make_tracker(rt)
+    graph = build_plan_graph(rt, tracker)
+    run_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    assistant_message_id = uuid.uuid4()
+    config = make_config(rt, run_id, conversation_id, "列出所有笔记")
+    events = [
+        e
+        async for e in stream_plan_graph(
+            rt,
+            graph,
+            config,
+            run_id,
+            _initial_state("列出所有笔记"),
+            conversation_id,
+            assistant_message_id,
+            tracker,
+        )
+    ]
+    assert any(isinstance(e, CopilotStepEvent) for e in events)
+    assert any(isinstance(e, CopilotDoneEvent) for e in events)
