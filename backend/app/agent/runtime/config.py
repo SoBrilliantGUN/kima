@@ -40,6 +40,7 @@ class RuntimeConfig:
     max_result_chars: int = 4000  # read/search 工具返回截断/落盘阈值
     review_max_attempts: int = 2  # 输出审查发现不一致时的自动修复重试上限
     cache_hit_rate_warn: float = 0.3  # 前缀缓存命中率告警阈值
+    max_spawn: int = 8  # 单 run 最多 spawn 子 Agent 次数（防无限 spawn 烧钱）
 
     # —— 上下文分层（L0-L5，见 runtime/context.py）——
     context: ContextConfig = field(default_factory=ContextConfig)
