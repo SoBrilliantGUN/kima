@@ -20,9 +20,9 @@
 
 | # | 决策 | 结论 |
 |---|---|---|
-| D1 | 范围 | 一步到位全落地（含 SubAgent RAG + skills 全文） |
+| D1 | 范围 | 一步到位全落地（含子 Agent 护前缀 + skills 全文） |
 | D2 | 分层主轴 | 按「来源 + 生命周期」六块分层（见 §2） |
-| D3 | SubAgent RAG 形态 | **真正的嵌套 Agent，用 LangGraph 子图**（自主多步「检索→阅读→再检索→综合」，独立上下文窗口，只回结论） |
+| D3 | 子 Agent 形态 | **真正的嵌套 Agent，用 LangGraph 子图**（自主多步执行，独立上下文窗口，只回结论；rag/reactive/plan 三个 spawn 工具） |
 | D4 | 宪法文件位置 | `backend/data/constitution.md`（数据文件，可像 soul/user 一样编辑） |
 | D5 | 宪法内容边界 | 只装「红线 + 身份 + 行为铁律」（现 `_BASE_INSTRUCTIONS` 核心 + `CONSTRAINT_REMINDER` 约束部分）；`_MEMORY_GUIDANCE`/`render_tool_hint` 派生的工具提示操作引导留 L0 常规、不进宪法 |
 | D6 | soul/user 归属 | **只留 L0 常规**（不进宪法、不尾部重放）；reminder 只重放「红线 + 行为铁律」 |
@@ -100,12 +100,15 @@ history_budget = window − L0 − L1 − L2 − L3 − L4 − safety_margin(500
 
 > **保头**：丢最老的 NONE / TOOL_COMPRESS（`_fit_budget`）与 EMERGENCY（无旧摘要时）会削掉历史头；两者都**无条件保留原始提问**（首条 user）——保证压缩后「首条非 system 仍是 user」，且不丢用户原始问题。
 
-### 3.4 SubAgent RAG（LangGraph 子图）
+### 3.4 子 Agent 护前缀（LangGraph 子图）
 
-- 新增 `spawn_rag` 工具：主 Agent 传 **task + 引用**（不传内容）。
-- 子 Agent = LangGraph 子图，**独立上下文窗口**，工具集只含只读检索（search_knowledge_base / read_document / read_note），自主多步「检索→阅读→再检索→综合」。
-- 子图结果过契约白名单 + `handoff_output_max_chars` 截断，只把**结论 + 记账标量（turns/cost/tokens）**回主 Agent 的 L2。
-- 复用现有 `LLMGateway`（子图的 LLM 调用也走网关记账/快照）+ 现有四轴 `HardBudget`（子图独立 budget）。
+- 三个 spawn 工具（`spawn_rag`/`spawn_reactive`/`spawn_plan`）：主 Agent 传 **task + 引用**（不传内容）。
+- 子 Agent = LangGraph 子图，**独立上下文窗口**：
+  - `spawn_rag`：只读检索工具（search_knowledge_base / read_document / read_note），自主多步「检索→阅读→再检索→综合」
+  - `spawn_reactive`：读+写全工具，处理灵活子任务
+  - `spawn_plan`：plan 图 + 全工具（含 for），规划/遍历子任务
+- 子图结果过契约白名单 + `max_result_chars` 截断，只把**结论 + 记账标量（turns/cost/tokens）**回主 Agent 的 L2。
+- 复用现有 `LLMGateway`（子图 LLM 调用也走网关记账/快照）+ 现有四轴 `HardBudget`（子图共享主循环账本、独立 turn）。
 
 ### 3.5 skills 渐进式加载
 
@@ -154,14 +157,14 @@ history_budget = window − L0 − L1 − L2 − L3 − L4 − safety_margin(500
 
 **验收**：L0 有列表、get_skill 加载后全文进 L3 并跨轮次保持。
 
-### 阶段 3 — SubAgent RAG
+### 阶段 3 — 子 Agent 护前缀
 
-1. 新建 RAG 子图（独立窗口 + 只读检索工具集 + 独立 budget）。
-2. `app/agent/tools.py`：新增 `spawn_rag` 工具（子图执行 + 契约截断回结论）。
-3. L2 注入 SubAgent RAG 结论。
+1. 新建子 Agent 门面（独立窗口 + 各自工具集 + 共享主循环账本）。
+2. `app/agent/tools.py`：新增 `spawn_rag`（后续演进 `spawn_reactive`/`spawn_plan`）工具（子图执行 + 契约截断回结论）。
+3. L2 注入子 Agent 结论。
 4. 新增 `tests/test_copilot_subagent.py`。
 
-**验收**：主 Agent 调 spawn_rag → 子图独立跑 → 只回结论进 L2，主 Agent 前缀不被检索结果污染。
+**验收**：主 Agent 调 spawn 工具 → 子图独立跑 → 只回结论进 L2，主 Agent 前缀不被子任务结果污染。
 
 ### 阶段 4 — 配置收敛 + 文档 + 全量回归
 

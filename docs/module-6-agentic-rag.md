@@ -1,6 +1,8 @@
 # QA 升级 Agentic RAG：一套实现 + 对等子 Agent
 
 > 状态：已实现。本文记录决策、主/子 Agent 差异与实现要点。
+>
+> **演进注记（2026-10）**：本方案落地后，Copilot 进一步重构为「多 Agent 运行时」——主 agent 默认 reactive（去掉意图路由的 QA/PLAN 分派），`spawn_rag` 之外新增 `spawn_reactive`（reactive + 全工具）与 `spawn_plan`（plan + 全工具，含 for）。本文的「对等子 Agent」设计（工具白名单 / 共享成本 / 独立 turn / 防递归）被三个子 agent 全部复用，`RagSubagent` 加 `system_prompt` 参数后同时支撑 `spawn_rag` 与 `spawn_reactive`。详见 `docs/module-6-copilot.md` §4.3。
 
 ## 1. 背景与目标
 

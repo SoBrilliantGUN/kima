@@ -93,7 +93,7 @@ class PlannerState(TypedDict):
 
 **合成步骤 + 入口**：
 - **合成步骤**：planner 生成的最后一步是 terminal 的 `finalize_answer` 步骤（`depends_on` 所有前置步骤、`params` 留空），`worker_node` 识别后调 LLM 把前置产物整理成最终回答、写入 `results[step_id]`；`finalize_node` 只挑它的产物当 `final_answer`。收益：plan 不再汇总所有 `results` → **results 累积不膨胀 → 无需给 plan 模式加分层压缩**。
-- **执行入口（`runtime/entry.py`）**：两张图（reactive / planner）独立演进，`entry.is_plan/run_plan/run_reactive` 是唯一「按意图选入口」的分派点，`run()` 只做会话/记账/上下文准备。
+- **执行入口（`runtime/entry.py`）**：两张图（reactive / planner）独立演进，`entry.run_plan` 供 `PlanSubagent`（plan 子 agent）复用；主 agent 默认 `run_reactive`（不再按意图选入口），复杂任务经 `spawn_plan` 子 agent 表达。
 
 **轨迹统一**：
 - state 新增 `trace: list[dict]`，统一结构 `{"tool","args","result","ok"}`。
@@ -126,7 +126,7 @@ analyse_plan(plan) -> PlanReport   # 关键路径长度（DAG 最长路径，缓
 - `runtime/chain_optimizer.py` — 审查层
 - `runtime/planner.py` — LLMPlanner（DAG 生成 + replan）
 - `runtime/plan_model.py` — Plan-as-Data 数据模型
-- `runtime/entry.py` — 执行入口分派
+- `runtime/entry.py` — 执行入口（run_plan 供 PlanSubagent 复用 / run_reactive 主循环）
 
 防线纯函数（`validate_param_contract` / `resolve_approvals` / `inject_idempotency_keys` / `evaluate_tool_results`）由 worker 与 reactive 共用。
 
