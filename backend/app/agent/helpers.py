@@ -52,3 +52,16 @@ async def bounded_call(
 
 def clip(text: str, max_chars: int) -> str:
     return text if len(text) <= max_chars else text[:max_chars] + "…"
+
+
+def extract_llm_text(raw: Any) -> str:
+    """从工具返回值提取给 LLM 的文本。
+
+    约定：工具返回 dict 时，``summary`` 字段是给 LLM 的可读文本（其余字段给程序 / for /
+    参数链读）；list 逐元素提取（for 聚合结果）；其他类型 ``str()`` 兜底。
+    """
+    if isinstance(raw, dict):
+        return str(raw.get("summary") or "")
+    if isinstance(raw, list):
+        return "\n".join(extract_llm_text(item) for item in raw)
+    return str(raw)
