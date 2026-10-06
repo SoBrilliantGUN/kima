@@ -20,8 +20,13 @@ _MEMORY_KINDS = frozenset({"constraint", "fact", "preference", "episodic"})
 LIST_PARAM_CONTRACT = ParamContract(min={"limit": 1, "offset": 0}, max={"limit": LIST_LIMIT_MAX})
 MEMORY_KIND_CONTRACT = ParamContract(enum={"kind": _MEMORY_KINDS})
 PROFILE_KIND_CONTRACT = ParamContract(enum={"kind": frozenset({"soul", "user"})})
-DOC_ID_CONTRACT = ParamContract(pattern={"document_id": _UUID_PATTERN})
-NOTE_ID_CONTRACT = ParamContract(pattern={"note_id": _UUID_PATTERN})
+DOC_ID_CONTRACT = ParamContract(
+    required=frozenset({"document_id"}), pattern={"document_id": _UUID_PATTERN}
+)
+NOTE_ID_CONTRACT = ParamContract(
+    required=frozenset({"note_id"}), pattern={"note_id": _UUID_PATTERN}
+)
+KB_ID_CONTRACT = ParamContract(required=frozenset({"kb_id"}), pattern={"kb_id": _UUID_PATTERN})
 
 
 Fn = TypeVar("Fn", bound=Callable[..., Awaitable[Any]])

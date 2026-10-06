@@ -12,8 +12,9 @@ registry 是「工具名 → ToolMeta」的单一真源（name 取自函数名�
 """
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.tools import BaseTool, tool
 
@@ -36,6 +37,7 @@ from app.agent.toolmeta import (
 )
 from app.agent.tools_helpers import (
     DOC_ID_CONTRACT,
+    KB_ID_CONTRACT,
     LIST_LIMIT_DEFAULT,
     LIST_PARAM_CONTRACT,
     MEMORY_KIND_CONTRACT,
@@ -187,19 +189,20 @@ def build_tools(
         """红灯：永久失败，告知模型别重试、换策略。"""
         return ToolFailure(outcome=ToolOutcome.PERMANENT, reason=reason, hint=hint, code=code)
 
-    async def _dedup(tool_name: str, idem_key: str, request_hash: str) -> str | None:
+    async def _dedup(tool_name: str, idem_key: str, request_hash: str) -> dict[str, Any] | None:
         """写工具幂等去重（执行契约）：claim 抢占，命中缓存/处理中返回直接结果，冲突/永久失败
         抛红灯。
 
-        返回 None 表示抢到执行权、应继续执行业务；返回字符串表示应直接返回该结果。
+        返回 None 表示抢到执行权、应继续执行业务；返回 dict 表示应直接返回该结果
+        （缓存命中还原完整结构化返回，处理中则给提示）。
         """
         claim = await idempotency.claim(tool_name, idem_key, request_hash)
         if claim.outcome is IdempotencyOutcome.INSERTED:
             return None
         if claim.outcome is IdempotencyOutcome.CACHED:
-            return claim.response or ""
+            return cast(dict[str, Any], json.loads(claim.response or "{}"))
         if claim.outcome is IdempotencyOutcome.PROCESSING:
-            return "该操作正在处理中，请稍后重试。"
+            return {"summary": "该操作正在处理中，请稍后重试。"}
         if claim.outcome is IdempotencyOutcome.CONFLICT:
             raise _deny(
                 "同一幂等键下参数不同，拒绝执行（请勿复用旧键）",
@@ -223,28 +226,33 @@ def build_tools(
         output_contract=_RETRIEVAL_CONTRACT,
         resource="db",
     )
-    async def search_knowledge_base(query: str, kb_ids: list[str] | None = None) -> str:
+    async def search_knowledge_base(query: str, kb_ids: list[str] | None = None) -> dict[str, Any]:
         """检索知识库内的文档/笔记原文。
         【用途】当需要基于知识库资料回答、或查找库内某主题内容时使用。
         【区别】搜的是「已入库原文」，语义+关键词混合检索；查外部信息用 search_web，
         查个人长期记忆用 search_memory。
         【参数】query 为检索问题；kb_ids 可选知识库 id 列表，不传则检索全部知识库。
-        【约束】只读无副作用；返回片段可能很长，超限会落盘，用 read_tool_result 查全文。
-        【示例】search_knowledge_base("项目架构", ["<kb_id>"]) → 带编号命中片段（含标题与正文）。"""
+        【约束】只读无副作用；返回结构化 dict——summary 给 LLM，items 数组给程序。
+        【示例】search_knowledge_base("项目架构", ["<kb_id>"]) → {"summary":"…","items":[…] }。"""
         ids = await parse_kb_ids(kb_ids, kb_service)
         if not ids:
-            return "知识库为空，无可检索内容。"
+            return {"summary": "知识库为空，无可检索内容。", "items": []}
         chunks = await rag_retriever.retrieve(query, ids)
         if not chunks:
-            return "未检索到相关内容。"
+            return {"summary": "未检索到相关内容。", "items": []}
         # 低信任命中（注入红线经用户确认入库）包进 <data> 隔离，禁止当指令执行，而非硬阻断
-        parts = [
-            f"[{i + 1}] {c.title}\n"
-            f"{quarantine_content(c.content, 'kb') if c.quarantined else c.content}"
-            for i, c in enumerate(chunks)
+        items = [
+            {
+                "title": c.title,
+                "content": quarantine_content(c.content, "kb") if c.quarantined else c.content,
+            }
+            for c in chunks
         ]
-        body = "\n\n".join(parts)
-        return _finalize(body, "search_knowledge_base")
+        summary = _finalize(
+            "\n\n".join(f"[{i + 1}] {it['title']}\n{it['content']}" for i, it in enumerate(items)),
+            "search_knowledge_base",
+        )
+        return {"summary": summary, "items": items}
 
     @copilot_tool(
         hint="列出知识库",
@@ -254,19 +262,26 @@ def build_tools(
         param_contract=LIST_PARAM_CONTRACT,
         resource="db",
     )
-    async def list_knowledge_bases(limit: int = LIST_LIMIT_DEFAULT, offset: int = 0) -> str:
+    async def list_knowledge_bases(
+        limit: int = LIST_LIMIT_DEFAULT, offset: int = 0
+    ) -> dict[str, Any]:
         """列出全部知识库。
         【用途】需要知道有哪些知识库、或拿到知识库 id 时使用。
         【区别】只列知识库元信息（id/名称/描述）；列笔记用 list_notes，
         检索内容用 search_knowledge_base。
         【参数】limit 每页条数（默认 50，上限 100）；offset 偏移量。
-        【约束】只读无副作用；条数超过一页会提示继续列。
-        【示例】list_knowledge_bases() → 每行「id | 名称 | 描述」。"""
+        【约束】只读无副作用；返回结构化 dict——summary 给 LLM 读，items 数组给程序（for 遍历）。
+        【示例】list_knowledge_bases() → {"summary":"…","items":[{id,name,description}]}。"""
         items, total = await kb_service.list(limit=limit, offset=offset)
-        if not items:
-            return "暂无知识库。"
-        lines = [f"{kb.id} | {kb.name} | {kb.description or ''}" for kb in items]
-        return _finalize(with_has_more(lines, offset, total, "知识库"), "list_knowledge_bases")
+        rows = [
+            {"id": str(kb.id), "name": kb.name, "description": kb.description or ""}
+            for kb in items
+        ]
+        if not rows:
+            return {"summary": "暂无知识库。", "items": []}
+        lines = [f"{r['id']} | {r['name']} | {r['description']}" for r in rows]
+        summary = with_has_more(lines, offset, total, "知识库")
+        return {"summary": _finalize(summary, "list_knowledge_bases"), "items": rows}
 
     @copilot_tool(
         hint="列出笔记",
@@ -276,19 +291,51 @@ def build_tools(
         param_contract=LIST_PARAM_CONTRACT,
         resource="db",
     )
-    async def list_notes(limit: int = LIST_LIMIT_DEFAULT, offset: int = 0) -> str:
+    async def list_notes(
+        limit: int = LIST_LIMIT_DEFAULT, offset: int = 0
+    ) -> dict[str, Any]:
         """列出全部笔记。
         【用途】需要知道有哪些笔记、或拿到笔记 id 时使用。
         【区别】只列笔记元信息（id/标题）；列知识库用 list_knowledge_bases，
         检索内容用 search_knowledge_base。
         【参数】limit 每页条数（默认 50，上限 100）；offset 偏移量。
-        【约束】只读无副作用；条数超过一页会提示继续列。
-        【示例】list_notes() → 每行「id | 标题」。"""
+        【约束】只读无副作用；返回结构化 dict——summary 给 LLM 读，items 数组给程序（for 遍历）。
+        【示例】list_notes() → {"summary":"…","items":[{id,title}]}。"""
         items, total = await note_service.list(limit=limit, offset=offset)
-        if not items:
-            return "暂无笔记。"
-        lines = [f"{note.id} | {note.title}" for note in items]
-        return _finalize(with_has_more(lines, offset, total, "笔记"), "list_notes")
+        rows = [{"id": str(note.id), "title": note.title} for note in items]
+        if not rows:
+            return {"summary": "暂无笔记。", "items": []}
+        lines = [f"{r['id']} | {r['title']}" for r in rows]
+        summary = with_has_more(lines, offset, total, "笔记")
+        return {"summary": _finalize(summary, "list_notes"), "items": rows}
+
+    @copilot_tool(
+        hint="列出知识库文档",
+        side_effect_level=SideEffectLevel.LOW,
+        source="tool_result",
+        latency_ms=500,
+        param_contract=KB_ID_CONTRACT,
+        resource="db",
+    )
+    async def list_documents(kb_id: str) -> dict[str, Any]:
+        """列出指定知识库内的全部文档。
+        【用途】需要知道某知识库里有哪些文档、或拿到文档 id 时使用。
+        【区别】只列文档元信息（id/标题/来源）；读正文用 read_document，
+        检索内容用 search_knowledge_base。
+        【参数】kb_id 为知识库 id（先用 list_knowledge_bases 拿）。
+        【约束】只读无副作用；返回结构化 dict——summary 给 LLM 读，items 数组给程序（for 遍历）。
+        【示例】list_documents("<kb_id>") → {"summary":"…","items":[{id,title,source_type}]}。"""
+        kbid = parse_uuid(kb_id)
+        assert kbid is not None  # KB_ID_CONTRACT 已保证合法，此处不可达
+        docs = await document_service.list_by_kb(kbid)
+        items = [
+            {"id": str(d.id), "title": d.title, "source_type": d.source_type.value}
+            for d in docs
+        ]
+        summary = "\n".join(
+            f"{it['id']} | {it['title']} | {it['source_type']}" for it in items
+        ) or "该知识库暂无文档。"
+        return {"summary": _finalize(summary, "list_documents"), "items": items}
 
     @copilot_tool(
         hint="读文档全文",
@@ -299,13 +346,13 @@ def build_tools(
         param_contract=DOC_ID_CONTRACT,
         resource="db",
     )
-    async def read_document(document_id: str) -> str:
+    async def read_document(document_id: str) -> dict[str, Any]:
         """读取指定文档的完整正文（markdown）。
         【用途】需要细读某篇已入库文档内容时使用。
         【区别】读的是「文档原文」；读笔记用 read_note。
-        【参数】document_id 为文档 id（先用 list_knowledge_bases / search_knowledge_base 拿 id）。
-        【约束】只读无副作用；id 非法会永久失败（不要重试同一 id）。
-        【示例】read_document("<doc_id>") → 文档标题 + markdown 正文。"""
+        【参数】document_id 为文档 id（先用 list_documents / search_knowledge_base 拿 id）。
+        【约束】只读无副作用；返回结构化 dict——summary 给 LLM，content/标题给程序。
+        【示例】read_document("<doc_id>") → {"summary":"…","id":..,"title":..,"content":..}。"""
         doc_id = parse_uuid(document_id)
         assert doc_id is not None  # DOC_ID_CONTRACT 已保证合法，此处不可达
         try:
@@ -313,7 +360,13 @@ def build_tools(
             content = await document_service.get_content(doc_id)
             if document.injection_approved:
                 content = quarantine_content(content, "kb")
-            return _finalize(f"# {document.title}\n\n{content}", "read_document")
+            summary = _finalize(f"# {document.title}\n\n{content}", "read_document")
+            return {
+                "summary": summary,
+                "id": str(document.id),
+                "title": document.title,
+                "content": content,
+            }
         except DomainError as exc:
             raise _deny(
                 str(exc), "该文档不存在，请先用 search_knowledge_base 找到存在的 id。", "not_found"
@@ -328,18 +381,24 @@ def build_tools(
         param_contract=NOTE_ID_CONTRACT,
         resource="db",
     )
-    async def read_note(note_id: str) -> str:
+    async def read_note(note_id: str) -> dict[str, Any]:
         """读取指定笔记的完整正文（markdown）。
         【用途】需要细读某篇笔记内容时使用。
         【区别】读的是「笔记原文」；读文档用 read_document。
         【参数】note_id 为笔记 id（先用 list_notes 拿 id）。
-        【约束】只读无副作用；id 非法会永久失败（不要重试同一 id）。
-        【示例】read_note("<note_id>") → 笔记标题 + markdown 正文。"""
+        【约束】只读无副作用；返回结构化 dict——summary 给 LLM，content/标题给程序。
+        【示例】read_note("<note_id>") → {"summary":"…","id":..,"title":..,"content":..}。"""
         nid = parse_uuid(note_id)
         assert nid is not None  # NOTE_ID_CONTRACT 已保证合法，此处不可达
         try:
             note = await note_service.get(nid)
-            return _finalize(f"# {note.title}\n\n{note.content_markdown}", "read_note")
+            summary = _finalize(f"# {note.title}\n\n{note.content_markdown}", "read_note")
+            return {
+                "summary": summary,
+                "id": str(note.id),
+                "title": note.title,
+                "content": note.content_markdown,
+            }
         except DomainError as exc:
             raise _deny(
                 str(exc), "该笔记不存在，请先用 list_notes 找到存在的 id。", "not_found"
@@ -353,18 +412,22 @@ def build_tools(
         output_contract=_RETRIEVAL_CONTRACT,
         resource="web",
     )
-    async def search_web(query: str) -> str:
+    async def search_web(query: str) -> dict[str, Any]:
         """联网搜索。
         【用途】问题超出知识库范围、需要最新信息或外部资料时使用。
         【区别】搜公网信息；搜知识库用 search_knowledge_base，搜个人长期记忆用 search_memory。
         【参数】query 为搜索词。
-        【约束】只读无副作用；返回带标题/链接/摘要。
-        【示例】search_web("2026 年最新 React 版本") → 搜索结果。"""
+        【约束】只读无副作用；返回结构化 dict——summary 给 LLM，items 数组给程序。
+        【示例】search_web("2026 年最新 React 版本") → {"summary":"…","items":[…]}。"""
         results = await web_search.search(query, top_k=WEB_TOP_K)
         if not results:
-            return "未搜到结果。"
-        body = "\n\n".join(f"{r.title}\n{r.url}\n{r.snippet}" for r in results)
-        return _finalize(body, "search_web")
+            return {"summary": "未搜到结果。", "items": []}
+        items = [{"title": r.title, "url": r.url, "snippet": r.snippet} for r in results]
+        summary = _finalize(
+            "\n\n".join(f"{it['title']}\n{it['url']}\n{it['snippet']}" for it in items),
+            "search_web",
+        )
+        return {"summary": summary, "items": items}
 
     @copilot_tool(
         hint="检索长期记忆",
@@ -375,21 +438,24 @@ def build_tools(
         param_contract=MEMORY_KIND_CONTRACT,
         resource="db",
     )
-    async def search_memory(query: str, kind: str | None = None) -> str:
+    async def search_memory(query: str, kind: str | None = None) -> dict[str, Any]:
         """检索长期记忆。
         【用途】需要回忆之前记下的用户约束/偏好/事实/事件时使用。
         【区别】搜个人长期记忆；搜知识库用 search_knowledge_base，搜公网用 search_web。
         【参数】query 为检索问题；kind 可选 constraint/fact/preference/episodic，
         不传则事实+情节都查。
-        【约束】只读无副作用；kind 非法会永久失败。
-        【示例】search_memory("用户喜欢什么", "fact") → 命中记忆条目。"""
+        【约束】只读无副作用；返回结构化 dict——summary 给 LLM，items 数组给程序。
+        【示例】search_memory("用户喜欢什么", "fact") → {"summary":"…","items":[…]}。"""
         k = parse_kind(kind)
         hits = await memory_service.search_memory(query, k)
         if not hits:
-            return "未找到相关记忆。"
-        return _finalize(
-            "\n".join(f"- [{m.kind.value}] {m.content}" for m in hits), "search_memory"
+            return {"summary": "未找到相关记忆。", "items": []}
+        items = [{"kind": m.kind.value, "content": m.content} for m in hits]
+        summary = _finalize(
+            "\n".join(f"- [{it['kind']}] {it['content']}" for it in items),
+            "search_memory",
         )
+        return {"summary": summary, "items": items}
 
     @copilot_tool(
         hint="读落盘结果全文",
@@ -397,29 +463,29 @@ def build_tools(
         source="tool_result",
         latency_ms=100,
     )
-    async def read_tool_result(path: str, grep_pattern: str | None = None) -> str:
+    async def read_tool_result(path: str, grep_pattern: str | None = None) -> dict[str, Any]:
         """读取之前落盘（spill）的工具结果全文。
         【用途】当某工具返回「结果已落盘」占位符、需要查看完整内容时使用。
         【区别】读的是「已落盘的临时结果」；读文档原文用 read_document，读笔记原文用 read_note。
         【参数】path 为占位符里的文件名；grep_pattern 可选，命中则返回含该子串的行。
-        【约束】只读无副作用；path 无效会返回「未找到」，不会重试；返回内容有长度上限，
-        超限截断，可用 grep_pattern 缩小范围。
-        【示例】read_tool_result("<path>") → 落盘全文。"""
+        【约束】只读无副作用；返回结构化 dict——summary 给 LLM（截断），content 给程序（完整全文）。
+        【示例】read_tool_result("<path>") → {"summary":"…","content":"…"}。"""
         content = spill_store.read(path)
         if content is None:
-            return "未找到该落盘结果，path 无效。"
+            return {"summary": "未找到该落盘结果，path 无效。", "content": None}
         if grep_pattern:
             lines = [ln for ln in content.splitlines() if grep_pattern in ln]
             content = "\n".join(lines) or "（无匹配行）"
         # 资源契约（硬上限）：read_tool_result 是唯一可返回无界正文的工具——落盘全文/宽 grep
-        # 结果可能极大，直接灌回模型会撑爆上下文（文档「画面三」）。这里截断而非 _finalize：
-        # 对 spill 结果再 spill 会无限套娃；超限提示用更精确的 grep_pattern 缩小范围。
+        # 结果可能极大，直接灌回模型会撑爆上下文（文档「画面三」）。这里 summary 截断而非
+        # _finalize（对 spill 结果再 spill 会无限套娃）；content 给程序、不截断。
+        summary = content
         if len(content) > max_result_chars:
-            content = (
+            summary = (
                 clip(content, max_result_chars)
                 + "\n（结果过长已截断，请用 grep_pattern 缩小范围后重查）"
             )
-        return content
+        return {"summary": summary, "content": content}
 
     # --- 写：create_note / write_memory / update_profile（副作用在描述里声明） ---
 
@@ -434,14 +500,14 @@ def build_tools(
     )
     async def create_note(
         title: str, content: str, kb_id: str | None = None, idempotency_key: str | None = None
-    ) -> str:
+    ) -> dict[str, Any]:
         """新建一篇笔记。
         【用途】当用户要求「总结成笔记」「写一份报告/文档」等产出成文内容时使用。
         【区别】产出持久化成文内容（笔记），是唯一会建笔记的写工具；写长期记忆用 write_memory，
         改档案/人设用 update_profile。
         【参数】title 为标题；content 为 markdown 正文；kb_id 可选（指定则同时挂到该知识库）。
         【约束】写操作（会真的建笔记）；同正文内容去重（幂等），不会重复建。
-        【示例】create_note("会议纪要", "# 纪要\n...") → 已创建笔记 <id>。"""
+        【示例】create_note("会议纪要", "# 纪要\n...") → {"summary":"…","id":..,"title":..}。"""
         if idempotency_key:
             cached = await _dedup(
                 "create_note",
@@ -456,9 +522,13 @@ def build_tools(
             if idempotency_key:
                 await idempotency.fail("create_note", idempotency_key, str(exc))
             raise _deny(str(exc), "请检查知识库 id 是否合法后重试。", "create_failed") from exc
-        result = f"已创建笔记 {note.id}（标题：{note.title}）"
+        result = {
+            "summary": f"已创建笔记 {note.id}（标题：{note.title}）",
+            "id": str(note.id),
+            "title": note.title,
+        }
         if idempotency_key:
-            await idempotency.succeed("create_note", idempotency_key, result)
+            await idempotency.succeed("create_note", idempotency_key, json.dumps(result))
         return result
 
     @copilot_tool(
@@ -473,7 +543,7 @@ def build_tools(
     )
     async def write_memory(
         kind: str, content: str, entity_id: str | None = None, idempotency_key: str | None = None
-    ) -> str:
+    ) -> dict[str, Any]:
         """写一条长期积累记忆。
         【用途】当对话出现值得长期记住的用户约束/偏好/事实/事件时使用。
         【区别】写积累型记忆（走冲突判定去重）；产出一篇成文笔记用 create_note，
@@ -482,7 +552,7 @@ def build_tools(
         episodic（事件）；content 为记忆内容；entity_id 可选（fact 的稳定实体键，
         同实体覆盖）。服务端写入前会确定性分类兜底，kind 可能被纠正。
         【约束】写操作（会真的写入记忆库）；fact 同 entity_id 覆盖、其余走冲突判定。
-        【示例】write_memory("constraint", "禁止泄露用户隐私数据") → 已写入记忆。"""
+        【示例】write_memory("constraint", "禁止泄露用户隐私数据") → {"summary":"…","id":..}。"""
         if idempotency_key:
             cached = await _dedup(
                 "write_memory",
@@ -494,9 +564,12 @@ def build_tools(
         k = parse_kind(kind)
         assert k is not None  # MEMORY_KIND_CONTRACT 已保证合法，此处不可达
         memory = await memory_service.write_memory(k, content, entity_id)
-        result = f"已写入 {kind} 记忆 {memory.id}。"
+        result = {
+            "summary": f"已写入 {kind} 记忆 {memory.id}。",
+            "id": str(memory.id),
+        }
         if idempotency_key:
-            await idempotency.succeed("write_memory", idempotency_key, result)
+            await idempotency.succeed("write_memory", idempotency_key, json.dumps(result))
         return result
 
     @copilot_tool(
@@ -507,16 +580,16 @@ def build_tools(
         param_contract=PROFILE_KIND_CONTRACT,
         resource="file",
     )
-    async def update_profile(kind: str, content: str) -> str:
+    async def update_profile(kind: str, content: str) -> dict[str, Any]:
         """更新个人档案 / 人设文件（soul 或 user）。
         【用途】当用户明确要求记住「我的偏好/背景」或「AI 的说话风格/人设」时使用。
         【区别】覆盖写稳定的 profile 文件；产出一篇成文笔记用 create_note，
         写长期积累记忆用 write_memory。
         【参数】kind 为 soul 或 user；content 为要覆盖写入的内容。
         【约束】写操作（会覆盖对应文件）；覆盖写天然幂等。
-        【示例】update_profile("user", "用户是后端工程师") → 已更新 user 档案。"""
+        【示例】update_profile("user", "用户是后端工程师") → {"summary":"…","kind":"user"}。"""
         await memory_store.write(kind, content)
-        return f"已更新 {kind} 档案。"
+        return {"summary": f"已更新 {kind} 档案。", "kind": kind}
 
     @copilot_tool(
         hint="列出 skill",
@@ -526,18 +599,22 @@ def build_tools(
         param_contract=LIST_PARAM_CONTRACT,
         resource="file",
     )
-    async def list_skills(limit: int = LIST_LIMIT_DEFAULT, offset: int = 0) -> str:
+    async def list_skills(
+        limit: int = LIST_LIMIT_DEFAULT, offset: int = 0
+    ) -> dict[str, Any]:
         """列出已安装的自定义 skill（经验技巧）。
         【用途】需要查看有哪些可复用的经验/技巧时使用。
         【区别】列出自定义 skill（沉淀的「怎么做」经验）；官方内置工具由系统注入、无需列出。
         【参数】limit 每页条数（默认 50，上限 100）；offset 偏移量。
-        【约束】只读无副作用；条数超过一页会提示继续列。
-        【示例】list_skills() → 每行「name：description」。"""
+        【约束】只读无副作用；返回结构化 dict——summary 给 LLM，items 数组给程序。
+        【示例】list_skills() → {"summary":"…","items":[{name,description}]}。"""
         skills, total = await skill_store.list_skills(limit, offset)
-        if not skills:
-            return "（无自定义 skill）"
-        lines = [f"- {s.name}：{s.description or '（无描述）'}" for s in skills]
-        return _finalize(with_has_more(lines, offset, total, "skill"), "list_skills")
+        rows = [{"name": s.name, "description": s.description or ""} for s in skills]
+        if not rows:
+            return {"summary": "（无自定义 skill）", "items": []}
+        lines = [f"- {r['name']}：{r['description'] or '（无描述）'}" for r in rows]
+        summary = with_has_more(lines, offset, total, "skill")
+        return {"summary": _finalize(summary, "list_skills"), "items": rows}
 
     @copilot_tool(
         hint="加载 skill 到会话",
@@ -546,20 +623,24 @@ def build_tools(
         latency_ms=100,
         resource="file",
     )
-    async def get_skill(name: str) -> str:
+    async def get_skill(name: str) -> dict[str, Any]:
         """加载某个自定义 skill 的全文到本会话（渐进式加载，跨轮次持续生效）。
         【用途】看到系统提示里的「可用 Skills」列表后，需要应用某个经验/技巧时先加载它。
         【区别】get_skill 把全文加载进 L3（跨轮次持久，后续每轮持续注入）。
         【参数】name 为 skill 名（「可用 Skills」列表里有）。
         【约束】只读无副作用；名字不存在会失败（不要重试同一名字）。
-        【示例】get_skill("写周报") → 已加载 skill「写周报」，后续持续遵守其指引。"""
+        【示例】get_skill("写周报") → {"summary":"已加载…","name":..,"content":..}。"""
         skill = await skill_store.read_skill(name)
         if skill is None:
             raise _deny(
                 f"skill「{name}」不存在", "请先用 list_skills 拿到存在的名字。", "not_found"
             )
         invoked_skills[name] = skill.content
-        return f"已加载 skill「{name}」，本会话后续会持续遵守其指引。"
+        return {
+            "summary": f"已加载 skill「{name}」，本会话后续会持续遵守其指引。",
+            "name": name,
+            "content": skill.content,
+        }
 
     @copilot_tool(
         hint="写/覆盖 skill",
@@ -568,15 +649,15 @@ def build_tools(
         latency_ms=100,
         resource="file",
     )
-    async def write_skill(name: str, description: str, content: str) -> str:
+    async def write_skill(name: str, description: str, content: str) -> dict[str, Any]:
         """创建或覆盖一个自定义 skill（经验技巧）。
         【用途】对话中出现值得沉淀的「怎么做」经验/技巧时，把它写成一个 skill。
         【区别】写 skill 是「怎么做」的可复用经验；写偏好/事实/事件用 write_memory。
         【参数】name 为 skill 名；description 一句话说明；content 为正文（markdown）。
         【约束】写操作（会覆盖同名 skill）；覆盖写天然幂等。
-        【示例】write_skill("写周报", "写周报用这个模板", "1. 本周完成 ...") → 已写入 skill。"""
+        【示例】write_skill("写周报", "写周报用这个模板", "1. 本周完成 ...") → {"summary":"…"}。"""
         await skill_store.write_skill(name, description, content)
-        return f"已写入 skill「{name}」。"
+        return {"summary": f"已写入 skill「{name}」。", "name": name}
 
     @copilot_tool(
         hint="删除 skill",
@@ -585,19 +666,18 @@ def build_tools(
         latency_ms=100,
         resource="file",
     )
-    async def delete_skill(name: str) -> str:
+    async def delete_skill(name: str) -> dict[str, Any]:
         """删除一个自定义 skill（只能删用户安装的 skill，不可逆，需用户确认）。
         【用途】用户明确要求删除某个经验/技巧时使用。
         【区别】只能删自定义 skill；官方内置工具不可删。
         【参数】name 为 skill 名（先用 list_skills 拿名字）。
-        【约束】高危写操作（删了不可恢复，会触发审批确认）；名字不存在会失败。
-        【示例】delete_skill("写周报") → 已删除 skill。"""
+        【约束】高危写操作（删了不可恢复，会触发审批确认）；幂等——不存在也当删除完成。
+        【示例】delete_skill("写周报") → {"summary":"已删除…","name":..}。"""
         deleted = await skill_store.delete_skill(name)
         if not deleted:
-            raise _deny(
-                f"skill「{name}」不存在", "请先用 list_skills 拿到存在的名字。", "not_found"
-            )
-        return f"已删除 skill「{name}」。"
+            # 幂等：已删除（或本来就不存在）都当删除完成，不报错，避免崩溃重试误判失败。
+            return {"summary": f"skill「{name}」不存在或已删除。", "name": name}
+        return {"summary": f"已删除 skill「{name}」。", "name": name}
 
     # RAG 子 Agent（SubAgent）：复用主循环图（对等完整版），独立窗口检索、只回结论。
     # 装配原料（model/reviewer/runtime/...）由调用方经 ``rag_subagent_factory`` 提供
@@ -618,15 +698,15 @@ def build_tools(
         source="tool_result",
         latency_ms=30000,
     )
-    async def spawn_rag(task: str) -> str:
+    async def spawn_rag(task: str) -> dict[str, Any]:
         """派一个检索子 Agent 检索知识库，只返回结论（保护主 Agent 上下文）。
         【用途】需要检索知识库并综合成结论时使用，避免把大段原文塞进主对话。
         【区别】spawn_rag 派子 Agent 独立检索、只回结论；直接检索用 search_knowledge_base。
         【参数】task 为检索子任务描述（含目标与约束）。
         【约束】只读无副作用；子 Agent 独立窗口、多轮检索，延迟较高。
-        【示例】spawn_rag("检索项目架构并总结要点") → 结论文本。"""
+        【示例】spawn_rag("检索项目架构并总结要点") → {"summary":"结论"}。"""
         constraints = (constraint_holder or {}).get("constraints", "")
-        return str(await rag_subagent.run(task, constraints=constraints))
+        return {"summary": str(await rag_subagent.run(task, constraints=constraints))}
 
     tools = [t for t, _ in collected]
     registry: ToolRegistry = {t.name: meta for t, meta in collected}
