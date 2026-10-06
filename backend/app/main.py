@@ -31,6 +31,7 @@ from app.integrations import (
     get_llm_client,
     get_reranker_client,
 )
+from app.integrations.tracing import get_observability
 from app.integrations.web import start_browser, stop_browser
 from app.repositories.breaker import SqlAlchemyBreakerStore
 from app.repositories.copilot import SqlAlchemyCopilotMemoryRepository
@@ -202,6 +203,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # LLM 网关：所有 LLM 出口的统一门禁/记账/快照（决策 D1/D6/D7，见 docs/llm-gateway.md）。
     # 复用上面的 daily_budget / breaker 作跨 run 日预算与 LLM 熔断。快照恒落（不可关）。
     snapshot_store = SqlAlchemySnapshotStore(async_session_factory)
+    observability = get_observability(settings)
     app.state.copilot_gateway = LLMGateway(
         config=GatewayConfig(
             timeout=settings.copilot_llm_gateway_timeout_seconds,
@@ -223,6 +225,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         reranker=get_reranker_client(settings),
         pricing=pricing,
         cost_store=cost_store,
+        observability=observability,
     )
     document_worker_task = asyncio.create_task(
         build_document_worker(app.state.copilot_gateway, daily_budget).run()
@@ -248,6 +251,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             pass
     if checkpointer_cm is not None:
         await checkpointer_cm.__aexit__(None, None, None)
+    observability.flush()
     await stop_browser()
 
 

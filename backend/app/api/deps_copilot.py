@@ -8,7 +8,6 @@ import asyncio
 from typing import Annotated, cast
 
 from fastapi import Depends, Request
-from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,7 +39,6 @@ from app.core.memory_store import FileMemoryStore, MemoryFileStore
 from app.core.skill_store import FileSkillStore, SkillFileStore
 from app.integrations.agent_llm import get_agent_model
 from app.integrations.search import WebSearchClient
-from app.integrations.tracing import get_langfuse_handler
 from app.rag.repository import SqlAlchemyRetrievalRepository
 from app.rag.retriever import RagRetriever
 from app.repositories.approval import ApprovalStore, SqlAlchemyApprovalStore
@@ -172,18 +170,6 @@ def get_agent_model_dep(
     return get_agent_model(settings)
 
 
-def get_langfuse_handler_dep(
-    settings: Annotated[Settings, Depends(get_settings_dep)],
-) -> BaseCallbackHandler:
-    """LangFuse callback（必须在场）；未配置 LangFuse 直接报错（可观测不可静默关闭）。"""
-    handler = get_langfuse_handler(settings)
-    if handler is None:
-        raise RuntimeError(
-            "LangFuse 未配置（可观测必须在场）：请设 langfuse_provider=cloud 及对应 key"
-        )
-    return handler
-
-
 def get_copilot_rag_retriever(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     gateway: Annotated[LLMGateway, Depends(get_llm_gateway)],
@@ -200,7 +186,6 @@ def get_copilot_rag_retriever(
 def get_copilot_runtime(
     request: Request,
     model: Annotated[BaseChatModel, Depends(get_agent_model_dep)],
-    tracer: Annotated[BaseCallbackHandler, Depends(get_langfuse_handler_dep)],
     rag_retriever: Annotated[RagRetriever, Depends(get_copilot_rag_retriever)],
     kb_service: Annotated[KnowledgeBaseService, Depends(get_kb_service)],
     note_service: Annotated[NoteService, Depends(get_note_service)],
@@ -227,7 +212,6 @@ def get_copilot_runtime(
         model=model,
         gateway=gateway,
         checkpointer=request.app.state.copilot_checkpointer,
-        tracer=tracer,
         rag_retriever=rag_retriever,
         kb_service=kb_service,
         note_service=note_service,

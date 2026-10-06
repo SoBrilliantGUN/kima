@@ -60,6 +60,7 @@ from app.core.exceptions import DomainError
 from app.integrations.embedding import EmbeddingClient
 from app.integrations.llm import ChatMessage, ChatResult, LLMClient
 from app.integrations.rerank import RerankerClient, RerankResult
+from app.integrations.tracing import Observability, Observation
 from app.repositories.llm_cost import CostStore
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,7 @@ class LLMGateway:
         reranker: RerankerClient,
         pricing: PricingService,
         cost_store: CostStore,
+        observability: Observability,
     ) -> None:
         self._llm = llm
         self._daily_budget = daily_budget
@@ -156,6 +158,7 @@ class LLMGateway:
         self._reranker = reranker
         self._pricing = pricing
         self._cost_store = cost_store
+        self._observability = observability
         self._timeout = config.timeout
         self._soft_threshold = config.soft_threshold
         self._dlp_redact = config.dlp_redact
@@ -178,6 +181,13 @@ class LLMGateway:
         """熔断 key 按 ``kind:vendor:model`` 拆分，不同上游服务各自熔断、互不拖累。"""
         vendor, model = self._vendor_model(kind)
         return f"{kind}:{vendor}:{model}"
+
+    def _observe_start(self, node: str, kind: str, run_id: str) -> Observation:
+        """建一条可观测 observation（vendor/model 从 kind 派生）。"""
+        vendor, model = self._vendor_model(kind)
+        return self._observability.start(
+            node=node, kind=kind, vendor=vendor, model=model, run_id=run_id
+        )
 
     # --- 门禁 ---
 
@@ -215,8 +225,10 @@ class LLMGateway:
         usage: Usage,
         count_turn: bool,
         encode_result: dict[str, Any],
-    ) -> None:
+    ) -> float:
         """调用成功后的记账/快照/成本明细落库（``_invoke`` 与 ``stream`` 共用）。
+
+        返回本次调用算好的成本（CNY），供上层可观测埋点回填（成本只在网关算一次）。
 
         ``encode_result`` 是已编码的结果 payload（供快照落库），``usage`` 是本次调用用量；
         ``count_turn`` 仅 agent 主循环计 turn，辅助/生成调用不计。
@@ -258,6 +270,7 @@ class LLMGateway:
                 usage=usage,
                 cost_cny=cost_cny,
             )
+        return cost_cny
 
     async def _invoke(
         self,
@@ -281,16 +294,27 @@ class LLMGateway:
         if cached is not None:
             # 命中：复用已成功调用，不重跑、不计账（纯函数记忆化）
             logger.debug("LLM 快照命中 node=%s", node)
+            self._observe_start(node, kind, run_id).end(cache_hit=True)
             return decode(cached)
 
-        result = await self._retry_call(call, kind)
-        usage = extract(result)
-        await self._account(
-            call_key=call_key,
-            kind=kind,
-            usage=usage,
-            count_turn=count_turn,
-            encode_result=encode(result),
+        obs = self._observe_start(node, kind, run_id)
+        try:
+            result = await self._retry_call(call, kind)
+            usage = extract(result)
+            cost_cny = await self._account(
+                call_key=call_key,
+                kind=kind,
+                usage=usage,
+                count_turn=count_turn,
+                encode_result=encode(result),
+            )
+        except Exception as exc:  # noqa: BLE001 - 失败路径上报错误后原样上抛
+            obs.end(error=str(exc))
+            raise
+        obs.end(
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_cny=cost_cny,
         )
         return result
 
@@ -408,9 +432,11 @@ class LLMGateway:
         if cached is not None:
             # 命中：复用已成功落盘的全文，作为单个 chunk yield（不重跑、不计账）
             logger.debug("LLM 快照命中 node=%s", node)
+            self._observe_start(node, "chat", run_id).end(cache_hit=True)
             yield dict_to_chat_result(cached).content
             return
 
+        obs = self._observe_start(node, "chat", run_id)
         parts: list[str] = []
         try:
             # 秒轴硬熔断包住整个流式消费（LLM 挂起保护，与 _retry_call 的恒生效语义一致）
@@ -420,8 +446,9 @@ class LLMGateway:
                 ):
                     parts.append(delta)
                     yield delta
-        except Exception:  # noqa: BLE001 - 流式无重试，记录失败后上抛
+        except Exception as exc:  # noqa: BLE001 - 流式无重试，记录失败后上抛
             self._breaker.record_failure(self._breaker_key("chat"))
+            obs.end(error=str(exc))
             raise
 
         text = "".join(parts)
@@ -429,12 +456,17 @@ class LLMGateway:
             input_tokens=estimate_text_tokens([m.content for m in messages]),
             output_tokens=estimate_text_tokens([text]),
         )
-        await self._account(
+        cost_cny = await self._account(
             call_key=call_key,
             kind="chat",
             usage=usage,
             count_turn=False,
             encode_result=chat_result_to_dict(ChatResult(content=text)),
+        )
+        obs.end(
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_cny=cost_cny,
         )
 
     # --- 嵌入 / 精排（决策 D1：模块 5 也纳入网关） ---

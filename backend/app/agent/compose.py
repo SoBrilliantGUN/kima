@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any
 
-from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
@@ -57,7 +56,6 @@ class CopilotRuntime:
     model_name: str
     gateway: LLMGateway
     checkpointer: Any
-    tracer: BaseCallbackHandler
     runtime: RuntimeConfig
     chat_repository: ChatRepository
     event_repository: CopilotEventRepository
@@ -93,7 +91,6 @@ def build_runtime(
     model: BaseChatModel,
     gateway: LLMGateway,
     checkpointer: Any,
-    tracer: BaseCallbackHandler,
     rag_retriever: RagRetriever,
     kb_service: KnowledgeBaseService,
     note_service: NoteService,
@@ -125,7 +122,6 @@ def build_runtime(
         "model": model,
         "gateway": gateway,
         "checkpointer": checkpointer,
-        "tracer": tracer,
         "rag_retriever": rag_retriever,
         "kb_service": kb_service,
         "note_service": note_service,
@@ -217,7 +213,6 @@ def build_runtime(
         model_name=getattr(model, "model_name", "") or "unknown",
         gateway=gateway,
         checkpointer=checkpointer,
-        tracer=tracer,
         runtime=runtime,
         chat_repository=chat_repository,
         event_repository=event_repository,

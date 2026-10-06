@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -34,6 +33,7 @@ from app.integrations.embedding import EmbeddingClient, FakeEmbeddingClient
 from app.integrations.llm import ChatMessage, ChatResult, LLMClient
 from app.integrations.parser import ParsedDocument, ParserError, SourceType
 from app.integrations.rerank import FakeRerankerClient, RerankerClient
+from app.integrations.tracing import NoopObservability, Observability
 from app.models.copilot import CopilotEvent, CopilotMemory, MemoryKind
 from app.models.document import MAX_RETRIES, Document, DocumentChunk, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase
@@ -626,7 +626,6 @@ def make_copilot_defaults(
         "db_lock": db_lock,
         "verifier": verifier or DbSideEffectVerifier(note_service, memory_service, db_lock),
         "checkpointer": InMemorySaver(),
-        "tracer": BaseCallbackHandler(),
         "planner": FakePlanner(),
         "breaker": CircuitBreaker(),
         "security_breaker": SecurityBreaker(),
@@ -647,6 +646,7 @@ def make_gateway(
     reranker: RerankerClient | None = None,
     pricing: PricingService | None = None,
     cost_store: CostStore | None = None,
+    observability: Observability | None = None,
 ) -> LLMGateway:
     """构造一个全协作者就位的 ``LLMGateway``（默认全 fake/no-op），可按需覆盖任一协作者。
 
@@ -665,6 +665,7 @@ def make_gateway(
         reranker=reranker or FakeRerankerClient(),
         pricing=pricing or FakePricingService(),
         cost_store=cost_store or InMemoryCostStore(),
+        observability=observability or NoopObservability(),
     )
 
 

@@ -26,7 +26,7 @@
 | 5 | Copilot SSE 流式：`meta` → `step` → `delta` → `done`/`error`；**思维链经 checkpoint（`AsyncPostgresSaver`）+ 事件日志（`copilot_events`）双落库，可断点续跑** |
 | 6 | worker 偷懒：无新文档/笔记时 idle 不空转，新增文档/更新笔记后立即唤醒；`recover_stuck` 兜底不丢 |
 | 7 | 后端 `ruff` + `mypy(strict)` + `pytest` 全绿；前端 `eslint` + `tsc --noEmit` + `vite build` 全绿；测试不起真库/真网/真 LLM |
-| 8 | LangFuse 可观测：配 key 后 agent run / LLM / 工具调用三层 trace 上报；无 key 时 handler=None 不阻塞 |
+| 8 | LangFuse 可观测：网关层每次 LLM/embedding/rerank 调用上报 observation（session_id=run_id 聚合）；无 key 时 no-op 降级 |
 
 **追加验收**（随 §4 落地）：
 
@@ -580,13 +580,14 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 
 ## 8. 可观测性（LangFuse）
 
-> 运营侧可观测：trace 每次 agent 运行、每个 LLM 调用、每个工具调用，看成本/延迟/错误。与 §7 的 `copilot_events`（领域审计 + 崩溃重放）互补——这是「运营仪表盘」，不是「可重放状态」。接 LangFuse Cloud 免费档，可选、无 key 即关闭。
+> 运营侧可观测：每次 LLM / embedding / rerank 调用上报一条 observation，看成本/延迟/错误，按 run 聚合。与 §7 的 `copilot_events`（领域审计 + 崩溃重放）互补——这是「运营仪表盘」，不是「可重放状态」。接 LangFuse Cloud 免费档，可选、无 key 即 no-op。
 
-- 依赖：`langfuse` + `langfuse-langchain`（LangChain/LangGraph 原生 callback，`ChatDeepSeek` + react agent 自动被追踪，无需手写埋点）。
-- `app/integrations/tracing.py`：`get_langfuse_handler(settings) -> CallbackHandler | None`——无 `langfuse_public_key`/`langfuse_secret_key` 时返回 `None`（默认关闭，不阻塞本地开发/测试）。
-- 接入：`graph.astream(..., config={"callbacks": [handler], "metadata": {"run_id", "conversation_id", "question"}})`，自动产出三层 span：agent run（顶层）→ LLM 调用（model/token/延迟/成本）→ 工具调用（name/args/延迟/错误）。
-- 配置：`langfuse_provider`（空/`cloud`）、`langfuse_public_key`/`langfuse_secret_key`/`langfuse_host`；不进 `0002` 迁移（LangFuse 存自己服务端）。
-- **成本归因（不依赖 LangFuse）**：`copilot_events` 的 `done` payload 自带 `intent`/`model`/`accounting`（cost/tokens/cache_hit_rate/turn/tool_call），无 key 也能事后按 run 查「这次任务烧了多少钱、缓存命中多少」。与 LangFuse 的实时 trace 互补——LangFuse 看过程，`done` 事件看单位成本结论。
+- 依赖：仅 `langfuse`（v3，基于 OTel）。**不再用** `langfuse-langchain` callback——旧方案只能捕获 LangChain 生态调用，而网关形态 A（planner/分类器/审查/摘要）、形态 C（最终生成）、embed/rerank 全走裸 httpx，callback 看不到。
+- `app/integrations/tracing.py`：`Observability` Protocol + `NoopObservability`（无 key）+ `LangfuseObservability`（有 key）+ `get_observability(settings)` 工厂。`provider != "cloud"` 或缺 key 返回 no-op，不实例化 SDK。
+- 埋点位置：`app/agent/gateway.py` 的 `_invoke`（覆盖 complete/invoke_model/embed/rerank）与 `stream`（最终生成）——start/end 模型，duration 由 OTel span 自动计时；成功路径回填 usage/cost，失败路径记 error，快照命中记 cache_hit。
+- 结构：每个网关调用 = 一条 observation，`session_id = run_id`（LangFuse UI 按 session 聚合一个 run 的全部调用），不做嵌套 trace 树（async 下 OTel context 传播有已知断裂问题）。
+- 配置：`langfuse_provider`（空/`cloud`）、`langfuse_public_key`/`langfuse_secret_key`/`langfuse_host`。自托管只需把 `langfuse_host` 指到自托管地址，代码零改动。
+- **成本归因（不依赖 LangFuse）**：`copilot_events` 的 `done` payload 自带 `intent`/`model`/`accounting`（cost/tokens/cache_hit_rate/turn/tool_call），无 key 也能事后按 run 查「这次任务烧了多少钱、缓存命中多少」。与 LangFuse 的实时 observation 互补——LangFuse 看过程，`done` 事件看单位成本结论。
 
 ---
 
@@ -685,7 +686,7 @@ Fakes 增补：`FakeCopilotMemoryRepository`、脚本化 agent 模型、fake 计
 16. **会话**：复用 `chat_conversations`（`kind` 区分 qa/copilot），`chat_messages` 加 `steps`（工具轨迹投影）；完整思维链走 checkpoint + 事件日志。
 17. **worker 偷懒**：document/note worker 改事件驱动（`asyncio.Event` 唤醒 + 长超时兜底 recover_stuck），并进本模块。
 18. **默认值**：容量各 200、episodic ttl 30 天、recall floor 0.05、recency 窗 7 天、结果截断 4000 字、LLM 冲突候选 top-10——初值，实现后可调。
-19. **可观测性**：接 LangFuse Cloud 免费档（`langfuse-langchain` callback，无 key 默认关），trace agent run / LLM / 工具调用，与 `copilot_events` 互补。
+19. **可观测性**：接 LangFuse Cloud 免费档（网关层 observation 埋点，无 key no-op），覆盖 LLM/embedding/rerank 调用，与 `copilot_events` 互补。
 
 **决策（生产级运行时）**
 

@@ -85,7 +85,6 @@ async def resume(
     resume_input: Any = single_decision if n == 1 else resume_map
     tracker = make_tracker(rt)
     config: dict[str, Any] = {"configurable": {"thread_id": run_id}}
-    config["callbacks"] = [rt.tracer]
 
     # planner 模式：plan 状态在 PlannerState 里，走 plan_graph + stream_plan_graph 续跑
     if await _is_plan_run(rt, run_uuid):
@@ -162,7 +161,6 @@ async def resume_after_crash(
         return
     tracker = make_tracker(rt)
     config: dict[str, Any] = {"configurable": {"thread_id": run_id}}
-    config["callbacks"] = [rt.tracer]
 
     # planner 模式：崩溃恢复同样走 plan_graph（checkpointer 续跑）
     if await _is_plan_run(rt, run_uuid):

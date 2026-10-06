@@ -90,7 +90,6 @@ def make_config(
             "question": question,
         },
     }
-    config["callbacks"] = [rt.tracer]
     return config
 
 
