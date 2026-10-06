@@ -6,13 +6,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
 from app.agent.compose import CopilotRuntime, build_runtime
 from app.agent.events import CopilotDoneEvent, CopilotStepEvent
 from app.agent.orchestrate import make_config, make_tracker
-from app.agent.runtime.plan_graph import build_plan_graph, stream_plan_graph
+from app.agent.runtime.plan_graph import (
+    _aggregate_for,
+    _expand_for,
+    build_plan_graph,
+    stream_plan_graph,
+)
+from app.agent.runtime.plan_model import Plan, PlanStep, StepStatus
 from app.agent.runtime.planner import LLMPlanner
 from app.core.memory_store import FileMemoryStore
 from app.core.skill_store import FileSkillStore
@@ -224,3 +231,129 @@ async def test_stream_plan_graph_streams_events(tmp_path: Path) -> None:
     ]
     assert any(isinstance(e, CopilotStepEvent) for e in events)
     assert any(isinstance(e, CopilotDoneEvent) for e in events)
+
+
+def _plan(*steps: PlanStep) -> Plan:
+    return Plan(steps=list(steps))
+
+
+def _completed(plan: Plan, step_id: str, output_ref: Any) -> None:
+    step = plan.get_step(step_id)
+    assert step is not None
+    step.status = StepStatus.COMPLETED
+    step.output_ref = output_ref
+
+
+def _step(plan: Plan, step_id: str) -> PlanStep:
+    step = plan.get_step(step_id)
+    assert step is not None
+    return step
+
+
+def test_resolve_params_field() -> None:
+    """参数链：{{step_id.output.field}} 取上游产物的单个顶层字段。"""
+    plan = _plan(
+        PlanStep(step_id="s1", action="list_notes"),
+        PlanStep(
+            step_id="s2", action="read_note", params={"note_id": "{{s1.output.id}}"},
+            depends_on=("s1",),
+        ),
+    )
+    _completed(plan, "s1", {"id": "note-1", "title": "标题"})
+    assert plan.resolve_params(_step(plan, "s2")) == {"note_id": "note-1"}
+
+
+def test_resolve_params_whole_output() -> None:
+    """{{step_id}} / {{step_id.output}} 引用整个产物，保持原始类型（list/dict）。"""
+    plan = _plan(
+        PlanStep(step_id="s1", action="list_documents"),
+        PlanStep(
+            step_id="s2", action="for", params={"items": "{{s1.output}}"},
+            depends_on=("s1",),
+        ),
+    )
+    _completed(plan, "s1", {"summary": "…", "items": [{"id": "a"}, {"id": "b"}]})
+    assert plan.resolve_params(_step(plan, "s2")) == {
+        "items": {"summary": "…", "items": [{"id": "a"}, {"id": "b"}]}
+    }
+
+
+def test_resolve_params_invalid_template() -> None:
+    """非法模板（数组索引）fail-closed 抛 ValueError。"""
+    plan = _plan(
+        PlanStep(step_id="s1", action="list_notes"),
+        PlanStep(
+            step_id="s2", action="read_note", params={"id": "{{s1.output[0]}}"},
+            depends_on=("s1",),
+        ),
+    )
+    _completed(plan, "s1", {"output": [1]})
+    with pytest.raises(ValueError):
+        plan.resolve_params(_step(plan, "s2"))
+
+
+def test_resolve_params_uncompleted_dep() -> None:
+    """引用未完成的步骤抛 ValueError。"""
+    plan = _plan(
+        PlanStep(step_id="s1", action="list_notes"),
+        PlanStep(
+            step_id="s2", action="read_note", params={"id": "{{s1.output.id}}"},
+            depends_on=("s1",),
+        ),
+    )
+    with pytest.raises(ValueError):
+        plan.resolve_params(_step(plan, "s2"))
+
+
+def test_expand_for() -> None:
+    """for 展开：解析 items 生成 N 个虚拟步骤，item 经 item_params 映射注入 body 参数。"""
+    plan = _plan(
+        PlanStep(step_id="s1", action="list_documents"),
+        PlanStep(
+            step_id="loop",
+            action="for",
+            params={
+                "items": "{{s1.output.items}}",
+                "body": "read_document",
+                "item_params": {"id": "document_id"},
+                "extra_params": {"full_text": True},
+            },
+            depends_on=("s1",),
+        ),
+    )
+    _completed(
+        plan,
+        "s1",
+        {"summary": "…", "items": [{"id": "a", "title": "A"}, {"id": "b", "title": "B"}]},
+    )
+    _expand_for(plan, _step(plan, "loop"))
+    loop = _step(plan, "loop")
+    assert loop.status is StepStatus.RUNNING
+    children = [s for s in plan.steps if s.step_id.startswith("loop@")]
+    assert [c.step_id for c in children] == ["loop@0", "loop@1"]
+    assert children[0].action == "read_document"
+    assert children[0].params == {"document_id": "a", "full_text": True}
+    assert children[1].params == {"document_id": "b", "full_text": True}
+
+
+def test_aggregate_for() -> None:
+    """for 聚合：所有虚拟步骤完成后聚合成功结果，失败项被过滤。"""
+    plan = _plan(
+        PlanStep(
+            step_id="loop", action="for",
+            params={"items": [], "body": "read_document", "item_params": {}},
+        )
+    )
+    plan.add_step(PlanStep(step_id="loop@0", action="read_document", params={}))
+    plan.add_step(PlanStep(step_id="loop@1", action="read_document", params={}))
+    _step(plan, "loop").status = StepStatus.RUNNING
+    c0 = _step(plan, "loop@0")
+    c0.status = StepStatus.COMPLETED
+    c0.output_ref = {"id": "a"}
+    c1 = _step(plan, "loop@1")
+    c1.status = StepStatus.FAILED
+    _aggregate_for(plan, _step(plan, "loop"))
+    loop = _step(plan, "loop")
+    assert loop.status is StepStatus.COMPLETED
+    assert loop.output_ref == [{"id": "a"}]
+    assert all(s.status is StepStatus.OBSOLETE for s in plan.steps if s.step_id.startswith("loop@"))

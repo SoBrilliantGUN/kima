@@ -9,6 +9,7 @@ from langchain_core.outputs import ChatResult
 from langchain_core.tools import BaseTool, tool
 from pydantic import Field
 
+from app.agent.handoff import HandoffPacket
 from app.agent.resilience.circuit_breaker import CircuitBreaker
 from app.agent.resilience.security_breaker import SecurityBreaker
 from app.agent.runtime.rag_subagent import RagSubagent
@@ -79,7 +80,7 @@ async def test_rag_subagent_multi_turn_returns_conclusion() -> None:
         ]
     )
     sub = _make_subagent(model, [echo])
-    result = await sub.run("检索并总结")
+    result = await sub.run(HandoffPacket(task_description="检索并总结"))
     assert result == "结论：检索到 1 条。"
     assert len(model.received) == 2
 
@@ -88,7 +89,7 @@ async def test_rag_subagent_truncates_long_result() -> None:
     """契约截断：超长结论按 max_result_chars 截断。"""
     model = _RecordingModel(responses=[AIMessage(content="X" * 5000)])
     sub = _make_subagent(model, [], max_result_chars=100)
-    result = await sub.run("任务")
+    result = await sub.run(HandoffPacket(task_description="任务"))
     assert len(result) <= 101  # 100 字符 + 省略号
     assert result.endswith("…")
 
@@ -97,6 +98,6 @@ async def test_rag_subagent_injects_system_prompt() -> None:
     """子图每轮注入 RAG system 提示（独立窗口）。"""
     model = _RecordingModel(responses=[AIMessage(content="done")])
     sub = _make_subagent(model, [])
-    await sub.run("任务")
+    await sub.run(HandoffPacket(task_description="任务"))
     assert len(model.received) == 1
     assert model.received[0][0].type == "system"

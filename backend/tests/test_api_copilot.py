@@ -197,7 +197,7 @@ async def test_copilot_skills_endpoint(api_client: AsyncClient) -> None:
     response = await api_client.get("/api/copilot/skills")
     assert response.status_code == 200
     items = response.json()["items"]
-    assert len(items) == 16
+    assert len(items) == 19
     write_names = {item["name"] for item in items if item["has_side_effect"]}
     assert write_names == {
         "create_note",
