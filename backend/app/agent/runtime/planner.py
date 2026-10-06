@@ -38,9 +38,18 @@ class LLMPlanner:
         "2. 每个写操作前必须有校验步骤，后必须有补偿步骤。\n"
         "3. 每个写操作必须包含 idempotency_key。\n"
         "4. 不可逆操作前必须有 human_approval 步骤。\n"
-        f'5. 最后必须有一个合成步骤：action="{SYNTHESIZE_ACTION}"、terminal=true、'
-        "depends_on 所有其他步骤、params 留空。系统会自动收集它依赖步骤的结果整理成最终回答，"
-        "不要在 params 里写任何引用。\n"
+        "5. 当一个步骤要用到更早步骤产出的值（如 list 出来的 id），在 params 里用参数链引用，"
+        "并把该步骤加进 depends_on。参数链严格限定三种形式：\n"
+        "   {{step_id}} —— 整个返回值；\n"
+        "   {{step_id.output}} —— 同上；\n"
+        "   {{step_id.output.field}} —— 取返回值的单个顶层字段。\n"
+        "   禁止数组索引、嵌套路径、函数调用。\n"
+        "6. 遍历列表用 for 步骤：action=\"for\"，params 含 items（参数链引用数组）、"
+        "body（循环体工具名）、item_params（item 字段→body 参数的映射，如 "
+        "{\"id\":\"document_id\"}）、extra_params（固定额外参数）。for 会对 items 每个元素"
+        "执行一次 body。\n"
+        f'7. 最后必须有一个合成步骤：action="{SYNTHESIZE_ACTION}"、terminal=true、'
+        "depends_on 所有其他步骤、params 留空。系统会自动收集它依赖步骤的结果整理成最终回答。\n"
     ) + format_instructions(PlanModel)
 
     def __init__(self, gateway: LLMGateway) -> None:

@@ -8,6 +8,7 @@
 环依赖都在契约边界被拦下，而不是拖到 executor 执行时才报错。
 """
 
+import re
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -52,8 +53,8 @@ class PlanStep:
 
     # 运行时状态（系统填写，非 LLM）
     status: StepStatus = StepStatus.PENDING
-    # 上游产物：通常是字符串（文件路径/裁剪后的文本），也可是 dict（结构化产物）。
-    output_ref: str | dict[str, Any] | None = None
+    # 上游产物：字符串（裁剪文本）/ dict（结构化产物）/ list（for 聚合结果）。
+    output_ref: Any = None
     error: str | None = None
     version_created: int = 1
     replaces_step_id: str | None = None
@@ -99,6 +100,17 @@ class Plan:
             ):
                 ready.append(step)
         return ready
+
+    def resolve_params(self, step: PlanStep) -> dict[str, Any]:
+        """解析步骤 params 里的参数链引用（``{{step_id.output.field}}``），替换成上游产物。
+
+        步骤间靠参数链显式传递「运行时才知道的值」（如 list 出的 id）——这是参数依赖任务
+        （骨架确定、参数引用前值）能在一次性 DAG 里跑通的关键。只支持三种合法形式：
+        ``{{step_id}}`` / ``{{step_id.output}}`` / ``{{step_id.output.field}}``；数组索引、
+        嵌套路径、函数调用等非法模板 fail-closed 抛 ``ValueError``（不静默透传成字面量）。
+        """
+        result = _resolve_refs(step.params, step, self)
+        return result if isinstance(result, dict) else {}
 
     # --- 变更 ---
 
@@ -218,6 +230,10 @@ class Plan:
             steps_map[ns.step_id] = ns
         if _has_cycle(steps_map):
             raise ValueError("新步骤引入循环依赖")
+
+    def add_step(self, step: PlanStep) -> None:
+        """运行时追加步骤（for 展开的虚拟步骤），不做撞车改名/环检测/版本号递增。"""
+        self._add_step(step)
 
     # --- 内部 ---
 
@@ -419,3 +435,62 @@ def validate_plan(plan: Plan, tool_names: Sequence[str]) -> list[str]:
     if not errors and plan.steps and _has_cycle({s.step_id: s for s in plan.steps}):
         errors.append("计划存在循环依赖")
     return errors
+
+
+_TEMPLATE_RE = re.compile(r"\{\{\s*([\w.]+)\s*\}\}")
+_LOOSE_TEMPLATE_RE = re.compile(r"\{\{[^}]*\}\}")
+
+
+def _resolve_refs(value: Any, step: PlanStep, plan: Plan) -> Any:
+    """递归解析参数链引用：dict/list 逐层下探，str 里的 ``{{...}}`` 换成上游产物。"""
+    if isinstance(value, dict):
+        return {k: _resolve_refs(v, step, plan) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_resolve_refs(v, step, plan) for v in value]
+    if not isinstance(value, str):
+        return value
+
+    matches = list(_TEMPLATE_RE.finditer(value))
+    if not matches:
+        if _LOOSE_TEMPLATE_RE.search(value):
+            invalid = _LOOSE_TEMPLATE_RE.findall(value)
+            raise ValueError(
+                f"参数链：步骤 {step.step_id!r} 含不支持的模板语法 {invalid[0]!r}。"
+                "仅支持 {{step_id}} / {{step_id.output}} / {{step_id.output.field}}"
+                "（单个顶层字段，禁止数组索引/嵌套路径/函数调用）。"
+            )
+        return value
+    if len(matches) == 1 and matches[0].span() == (0, len(value)):
+        # 整个字符串就是一个引用：原样返回上游值（保持类型，如 list/dict）
+        return _lookup_ref(matches[0].group(1), step, plan)
+    # 引用嵌在普通文本里：替换成字符串拼接
+    return _TEMPLATE_RE.sub(lambda m: str(_lookup_ref(m.group(1), step, plan)), value)
+
+
+def _lookup_ref(ref: str, step: PlanStep, plan: Plan) -> Any:
+    """解析单个引用 ``step_id[.output][.field]`` 为上游步骤的产物（或其字段）。"""
+    parts = ref.split(".")
+    dep_id = parts[0]
+    rest = parts[1:]
+    if rest and rest[0] == "output":
+        rest = rest[1:]
+
+    dep = plan.get_step(dep_id)
+    if dep is None:
+        raise ValueError(f"参数链：步骤 {step.step_id!r} 引用不存在的步骤 {dep_id!r}")
+    if dep.status is not StepStatus.COMPLETED:
+        raise ValueError(
+            f"参数链：步骤 {step.step_id!r} 引用 {dep_id!r}，但它是 {dep.status.value!r}"
+            " 而非 completed"
+        )
+    if not rest:
+        return dep.output_ref
+    if len(rest) != 1:
+        raise ValueError(
+            f"参数链：步骤 {step.step_id!r} 仅支持单个字段引用（{{step_id.field}}），"
+            f"不支持嵌套路径 {ref!r}"
+        )
+    key = rest[0]
+    if not isinstance(dep.output_ref, dict) or key not in dep.output_ref:
+        raise ValueError(f"参数链：步骤 {dep_id!r} 的产物没有字段 {key!r}")
+    return dep.output_ref[key]
