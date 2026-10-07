@@ -33,7 +33,7 @@
 | # | 验收项 |
 |---|---|
 | 9 | 手写 `StateGraph`（reactive：agent ⇄ tools ⇄ review 进图）替换 `create_agent`，现有行为等价（轨迹断言证明） |
-| 10 | 意图路由（仅注入/投诉安全检测）+ 多 Agent spawn（rag/reactive/plan 子 agent） |
+| 10 | 意图路由（规则拒绝 + LLM 判 plan/qa/task）+ 多 Agent spawn（rag/reactive/plan 子 agent） |
 | 11 | 四轴预算（真算 cost + `asyncio.wait_for` 硬熔断）+ 死循环/幽灵循环检测 |
 | 12 | 四道闸（入口/检索/工具参数/输出，fail-closed）+ 写工具 HITL（interrupt/resume） |
 | 13 | 错误分级重试 + 工具熔断 + 结果 spill |
@@ -209,7 +209,7 @@ app/agent/
     plan_graph.py           # supervisor-worker 五节点图装配（plan/supervisor/worker/finalize/review，Send 扇出 + for 展开）
     chain_optimizer.py      # 计划审查层（关键路径 + 四维报告 + 分级熔断 Safe/Warn/Emergency）
     workflow.py             # 确定性手写流程（complaint）
-    router.py               # 意图路由（仅注入/投诉安全检测）
+    router.py               # 意图路由（规则拒绝 + intent_classifier LLM 分流）
   guardrail/
     trust.py                # 零信任评分：红线 + 三维度（内容/来源/行为）加权 + 五档处置
     injection.py            # 红线正则语料 + 祈使句浓度（信任评分的检测原语）
@@ -239,7 +239,7 @@ app/agent/
   helpers.py                # 共享小工具（_bounded_call 预算包裹 / _clip / 历史截断 / _tool_source）
   compose.py                # CopilotRuntime 聚合依赖 + build_runtime 装配收敛（工具/图装配成品，入口只收成品）
   orchestrate.py            # 共用编排纯函数（stream_graph / commit_assistant / assemble_context / finalize_answer / log / reject_run）
-  run.py                    # 对话运行时主入口 run()（意图路由仅安全检测 → 上下文组装 → reactive）
+  run.py                    # 对话运行时主入口 run()（规则拒绝 → LLM 分流 → plan/reactive）
   resume.py                 # HITL 恢复 / 崩溃恢复入口 resume() / resume_after_crash() + list_pending_approvals（planner/reactive 统一，原 `resume_plan` 并入）
 
 backend/eval/agent/         # 评测闭环
@@ -252,11 +252,11 @@ backend/eval/agent/         # 评测闭环
 
 ### 4.3 多 Agent 运行时（主 reactive + 子 agent）
 
-主 agent 默认 reactive（不再按意图硬编码路由到 plan）；复杂任务由 reactive loop 里的 spawn 子 agent 表达「要不要规划/隔离/并行」。每个 agent = `mode` + `tools` + `budget` 三参数，无固定类型：
+入口先规则第一刀判注入/投诉拒绝，再经 LLM 意图分类判 plan/qa/task——plan 走 planner 图（按步数放大资源预算），其余走 reactive；复杂任务仍可经 `spawn_plan` 子 agent 表达。每个 agent = `mode` + `tools` + `budget` 三参数，无固定类型：
 
 | agent | mode | tools | 用途 |
 |---|---|---|---|
-| 主 agent | reactive | 全工具（读+写+spawn） | 顶层入口，简单任务自己干 |
+| 主 agent | reactive / plan | 全工具（读+写+spawn） | 顶层入口，LLM 判 plan 走 planner 图、其余 reactive |
 | spawn_rag | reactive | 只读检索 | 检索子任务，只回结论 |
 | spawn_reactive | reactive | 全工具（读+写+spawn） | 灵活子任务 |
 | spawn_plan | plan | 全工具（读+写+spawn，含 for） | 规划/遍历任务（如读全库总结） |
@@ -265,9 +265,9 @@ backend/eval/agent/         # 评测闭环
 
 **中断持久化**：主循环流式执行用 `try/except asyncio.CancelledError` 捕获前端 abort，`asyncio.shield` 兜底落库「已累计的部分回答」（`RunState.INTERRUPTED`），刷新后不丢内容。
 
-### 4.4 意图路由（仅安全检测）
+### 4.4 意图路由（规则拒绝 + LLM 分流）
 
-意图路由退化为「仅注入/投诉安全检测」：`classify_intent` 只判 `INJECTION`/`COMPLAINT`（拒绝分支，不碰工具/不写记忆），不再判 `PLAN`/`QA` 决定执行模式——主 agent 统一走 reactive，plan 能力经 `spawn_plan` 子 agent 表达。
+规则第一刀（`classify_by_rules`）只判注入/投诉拒绝分支（不碰工具/不写记忆/不调 LLM）；其余请求经 `LLMIntentClassifier`（`runtime/intent_classifier.py`，`temperature=0`）判 `plan`/`qa`/`task`——`plan` 走 planner 图（`run_plan`，planner 出计划后按步数放大四轴预算），`qa`/`task` 走 reactive（`qa` 限只读工具集）。分类失败/解析失败回退 `task`（reactive），绝不静默升级成 plan。
 
 ### 4.5 零信任评分（三维度 + 五节点 + 分级处置）+ HITL + review
 
@@ -664,7 +664,7 @@ src/pages/Home/components/CopilotPane/   # 主区 Copilot 对话，右上角 [�
 | 文件 | `test_memory_store.py` | Soul/User 文件读写、幂等初始化 |
 | worker 偷懒 | `test_worker.py` 增补 | 事件唤醒、无工作 idle、超时兜底 recover_stuck |
 | API | `test_api_copilot.py` | SSE 冒烟 + `GET /copilot/memory` + `kind` 过滤 |
-| 意图路由 | `test_copilot_router.py` | 注入/投诉安全检测（不再四类意图分派） |
+| 意图路由 | `test_copilot_router.py` / `test_intent_classifier.py` | 注入/投诉规则拒绝 + LLM 判 plan/qa/task 分流 |
 | 预算/防循环 | `test_copilot_budget.py` / `test_copilot_loop_guard.py` | 四轴熔断、死循环指纹、幽灵循环 hash |
 | 零信任评分/脱敏/写库闸 | `test_copilot_guardrail.py` / `test_worker.py` | 红线、三维度评分、`<data>` 隔离、误报回归语料、敏感脱敏、投毒文档拒绝 |
 | HITL | `test_copilot_approval.py` / `test_approval_policy.py` | 写工具 interrupt → resume 重放同一调用；分级裁决（MEDIUM 自动放行 / HIGH 打断 + 证据载荷）、`ApprovalPolicy`/`resolve_approval_decision`、审批单超时 fail-close |
@@ -714,8 +714,8 @@ Fakes 增补：`FakeCopilotMemoryRepository`、脚本化 agent 模型、fake 计
 **决策（生产级运行时）**
 
 20. **编排拓扑**：手写 `StateGraph`，理由 = prebuilt 固定回环装不下「意图路由 / 自检回环 / 注入闸」三类控制流；工具执行仍 `ToolNode`、模型仍 `ChatDeepSeek`、checkpoint 仍 `AsyncPostgresSaver`。
-21. **多 Agent 运行时**：主 agent reactive（默认，简单任务自己干）+ spawn 子 agent（rag/reactive/plan，复杂/隔离任务）；workflow（确定性流程，complaint）。
-22. **意图路由**：仅判注入/投诉两类安全检测（injection 在 L1 即拒、模型不见指令）；主 agent 统一走 reactive，plan/qa 不再靠意图分派。
+21. **多 Agent 运行时**：主 agent 按意图走 reactive 或 plan（LLM 判 plan 走 planner 图）+ spawn 子 agent（rag/reactive/plan，复杂/隔离任务）；workflow（确定性流程，complaint）。
+22. **意图路由**：规则第一刀判注入/投诉拒绝（injection 在 L1 即拒、模型不见指令）；其余经 LLM 判 plan/qa/task——plan 走 planner 图（按步数放大预算），qa/task 走 reactive。
 23. **零信任评分**：给每份数据打 0-100 可信度分；红线（硬正则）一票毙，其余三维度（内容/来源/行为）加权平均（0.5/0.3/0.2，假设值）；五节点（输入/检索/上下文/工具调用/输出）重新评估、分数只减不增；按分五档处置（放行/观察/隔离 `<data>`/脱敏/阻断）；写库闸按分拦截、敏感值脱敏。
 24. **HITL（分级审批）**：写工具 → `interrupt()` 挂起 → checkpoint → 前端确认 → resume 重放同一调用（不重问 LLM）；写工具判定来自 `ToolRegistry`（`has_side_effect`），非硬编码名单。**规则化分级**（`ApprovalPolicy`，Policy-as-Code）：`SideEffectLevel` → 三档 `ALLOW`/`NOTIFY`/`REQUIRE_APPROVAL`，`update_profile` 定为 `HIGH`（覆盖人设档案、同步审批）、`create_note`/`write_memory` 保持 `MEDIUM`（自动放行 + 事后审计）；配审批单第一类实体（`copilot_approvals`）+ 超时 fail-close + 证据包。见 §4.15。
 25. **四轴预算 + 防循环**：turns/seconds/tokens(计费=总减 cache)/cost 真算，`asyncio.wait_for` 硬熔断；死循环（工具+参数指纹去 volatile 键）+ 幽灵循环（上下文 hash），窗口存 state（checkpoint 续跑不丢循环记忆）。
