@@ -2,7 +2,7 @@
 
 > 状态：已实现。本文记录决策、主/子 Agent 差异与实现要点。
 >
-> **演进注记（2026-10）**：本方案落地后，Copilot 进一步重构为「多 Agent 运行时」——主 agent 默认 reactive（去掉意图路由的 QA/PLAN 分派），`spawn_rag` 之外新增 `spawn_reactive`（reactive + 全工具）与 `spawn_plan`（plan + 全工具，含 for）。本文的「对等子 Agent」设计（工具白名单 / 共享成本 / 独立 turn / 防递归）被三个子 agent 全部复用，`RagSubagent` 加 `system_prompt` 参数后同时支撑 `spawn_rag` 与 `spawn_reactive`。详见 `docs/module-6-copilot.md` §4.3。
+> **演进注记（2026-10）**：本方案落地后，Copilot 进一步重构为「多 Agent 运行时」——主 agent 默认 reactive（去掉意图路由的 QA/PLAN 分派），`spawn_rag` 之外新增 `spawn_reactive`（reactive + 全工具）与 `spawn_plan`（plan + 全工具，含 for）。本文的「对等子 Agent」设计（工具白名单 / 共享成本 / 独立 turn）被三个子 agent 全部复用，`RagSubagent` 加 `system_prompt` 参数后同时支撑 `spawn_rag` 与 `spawn_reactive`；「防递归」改为「允许递归派子 agent，靠 max_spawn 计数 + 四轴预算兜底」（rag 子 agent 仍只读）。详见 `docs/module-6-copilot.md` §4.3。
 
 ## 1. 背景与目标
 
@@ -26,7 +26,7 @@
 | 3 | 实现形态 | 一套实现（复用 `build_reactive_graph`），不抽两套循环 |
 | 4 | 子 Agent 定位 | 对等完整版（含 review / 约束 / 安全闸） |
 | 5 | 约束传递 | 父显式下传（强隔离，唯一通道是派发参数） |
-| 6 | 子 Agent 工具 | 检索五件套（不含 `spawn_rag`，防递归） |
+| 6 | 子 Agent 工具 | 检索五件套（只读定位，不含 `spawn_rag`） |
 | 7 | 子 Agent 预算 | 共享成本 + 独立 turn |
 | 8 | 子 Agent 输出 | 内部 review 回环，预算耗尽给「还行结果」或报错，最终只回结论 |
 | 9 | QA 预算 | 与 TASK 一致（默认 `HardBudget`） |
@@ -102,10 +102,11 @@ def format_subagent_constraints(recalled: RecalledMemories) -> str:
 - token / cost 汇入主循环同一个 `BudgetTracker`（一张账本，done 事件归因完整）。
 - 子 Agent 的 turn 单独计数（`count_turn=False`），修掉原「子 Agent 挤占主循环 `max_turns`」的缺陷。
 
-### 4.5 防递归
+### 4.5 只读子 Agent 不递归
 
-子 Agent 工具集 `_RAG_SUBAGENT_TOOL_NAMES` 不含 `spawn_rag`，天然禁止子 Agent 再派子 Agent。
-不引入子 Agent 递归深度上限（RAG 检索子 Agent 场景不需要）。
+rag 子 Agent 工具集 `_RAG_SUBAGENT_TOOL_NAMES`（只读检索五件套）不含 `spawn_rag`，天然不能
+派子 Agent——这是**只读定位**，非全局防递归。reactive / plan 子 Agent 可递归派子 Agent，
+靠 `max_spawn` 计数 + 四轴预算兜底。
 
 ## 5. 改动清单
 
@@ -125,4 +126,4 @@ def format_subagent_constraints(recalled: RecalledMemories) -> str:
 - `tests/test_copilot_subagent.py`：子 Agent 复用主循环图后仍「多轮检索 + 只回结论 + 截断 + 注入 system prompt」。
 - `tests/test_copilot_context.py`：`format_subagent_constraints` 只含红线 + 硬约束，不含偏好/事实/情节。
 - `tests/test_copilot_router.py`：QA 走主循环（有 review 事件）；`QA_TOOL_NAMES` 含 `spawn_rag` 而
-  `_RAG_SUBAGENT_TOOL_NAMES` 不含（防递归）；QA 只读无写工具。
+  `_RAG_SUBAGENT_TOOL_NAMES` 不含（只读定位）；QA 只读无写工具。

@@ -21,7 +21,7 @@
 |---|---|
 | 1 | `alembic upgrade head` 成功（`0002_copilot`：记忆/事件/预算/快照/审批/熔断/幂等/计费全量表 + chat/notes/documents 回改，原 0002~0017 已合并） |
 | 2 | Agent 循环经 `langchain-deepseek`（`ChatDeepSeek`）+ LangGraph `create_agent` 跑通工具回环（fake 下确定性测试） |
-| 3 | 19 个工具复用现有服务层，带**副作用分层**（14 只读 / 5 写）+ 描述工程 + 结果截断 |
+| 3 | 20 个工具复用现有服务层，带**副作用分层**（14 只读 / 6 写）+ 描述工程 + 结果截断 |
 | 4 | 记忆四型（约束/事实/偏好/情节）：分路召回（约束硬召回 + 混合召回）+ 激活衰减遗忘 + LLM 冲突判定 + `superseded` 留痕；Soul/User 存 MD 文件 |
 | 5 | Copilot SSE 流式：`meta` → `step` → `delta` → `done`/`error`；**思维链经 checkpoint（`AsyncPostgresSaver`）+ 事件日志（`copilot_events`）双落库，可断点续跑** |
 | 6 | worker 偷懒：无新文档/笔记时 idle 不空转，新增文档/更新笔记后立即唤醒；`recover_stuck` 兜底不丢 |
@@ -229,7 +229,7 @@ app/agent/
   gateway_context.py        # 网关 run 期上下文注入（ContextVar：当前 tracker + run_id）
   gateway_codec.py          # 网关序列化/指纹/出站 DLP 脱敏纯函数
   snapshot.py               # 调用级快照协议 + 内存实现（Postgres 实现见 repositories/llm_snapshot.py）
-  tools.py                  # 19 工具闭包（组装 + 六要素描述 + 四层守卫 + spawn_rag/spawn_reactive/spawn_plan）
+  tools.py                  # 20 工具闭包（组装 + 六要素描述 + 四层守卫 + spawn_rag/spawn_reactive/spawn_plan）
   tools_helpers.py          # 工具集模块级 helper + 参数契约
   tools_registry.py         # ToolMeta 注册表（build_registry：工具名 → 元数据单一真源）
   memory.py                 # system prompt 拼装（宪法加载 + L2 记忆块，见 §4.18 上下文窗口分层）
@@ -246,7 +246,7 @@ backend/eval/agent/         # 评测闭环
   dataset.py / trajectory.py / runner.py
 ```
 
-「内容 vs 框架」边界：四型记忆（`services/copilot.py`，召回/写入拆为 `copilot_recall.py`/`copilot_write.py` mixin、共享常量/融合在 `copilot_common.py`；分类器 `memory_classifier.py`）、19 工具、review 的对账逻辑、事件日志、checkpoint 是**内容**，原样组装；新写的是 runtime/guardrail/resilience/evaluation 四层骨架 + 装配。
+「内容 vs 框架」边界：四型记忆（`services/copilot.py`，召回/写入拆为 `copilot_recall.py`/`copilot_write.py` mixin、共享常量/融合在 `copilot_common.py`；分类器 `memory_classifier.py`）、20 工具、review 的对账逻辑、事件日志、checkpoint 是**内容**，原样组装；新写的是 runtime/guardrail/resilience/evaluation 四层骨架 + 装配。
 
 > 代码按组合化组织：`compose.py`（`CopilotRuntime` 聚合依赖 + `build_runtime` 装配收敛，工具/图装配成品只出现一次）、`orchestrate.py`（共用编排纯函数）、`run.py` / `resume.py`（三条入口函数 `run`/`resume`/`resume_after_crash`）、`runtime/plan_graph.py` + `runtime/planner_state.py` + `runtime/chain_optimizer.py`（planner 执行引擎）。`qa_mode` 并入 reactive 主循环（限只读工具集 `QA_TOOL_NAMES`）。只读查询（技能清单 / 记忆快照）在 `routes/copilot.py` 直接依赖底层 store/service。
 
@@ -258,10 +258,12 @@ backend/eval/agent/         # 评测闭环
 |---|---|---|---|
 | 主 agent | reactive | 全工具（读+写+spawn） | 顶层入口，简单任务自己干 |
 | spawn_rag | reactive | 只读检索 | 检索子任务，只回结论 |
-| spawn_reactive | reactive | 全工具（读+写，不含 spawn） | 灵活子任务 |
-| spawn_plan | plan | 全工具（读+写，含 for） | 规划/遍历任务（如读全库总结） |
+| spawn_reactive | reactive | 全工具（读+写+spawn） | 灵活子任务 |
+| spawn_plan | plan | 全工具（读+写+spawn，含 for） | 规划/遍历任务（如读全库总结） |
 
-`spawn_rag`/`spawn_reactive` 共用 `RagSubagent`（reactive 图 + 工具集参数化，`system_prompt` 区分），`spawn_plan` 用 `PlanSubagent`（`runtime/plan_subagent.py`，复用 plan 图 + for）。子 agent 工具集不含 spawn（防递归），单层 spawn。
+`spawn_rag`/`spawn_reactive` 共用 `RagSubagent`（reactive 图 + 工具集参数化，`system_prompt` 区分），`spawn_plan` 用 `PlanSubagent`（`runtime/plan_subagent.py`，复用 plan 图 + for）。子 agent 工具集含 spawn（可递归派子 agent），递归靠 `max_spawn` 计数 + 四轴预算兜底，不再禁止子 agent 递归；`spawn_rag` 仍是只读检索五件套（只读定位，不派能写的子 agent）。spawn 工具均 `enforced_idempotent`（`idempotency_key_fields=("task",)`，同 task 重复 spawn 不重跑子 agent 烧钱）。
+
+**中断持久化**：主循环流式执行用 `try/except asyncio.CancelledError` 捕获前端 abort，`asyncio.shield` 兜底落库「已累计的部分回答」（`RunState.INTERRUPTED`），刷新后不丢内容。
 
 ### 4.4 意图路由（仅安全检测）
 
@@ -365,7 +367,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 
 ### 4.13 契约交互（约束显式携带 + 上行契约 + planner 输出自检）
 
-> 核心命题：多 Agent 系统里「信息跨过边界」这一动作（下发/回传/转交）就是故障源——噪音、幻觉、约束、错误结论都在过境时流动。kima 已演进为多 Agent（主 reactive + 3 子 agent，见 §4.3），agent 之间交互统一走「交棒包」（task_description + constraints + available_tools + input_refs，引用而非内联，prior_output 由 `max_result_chars` 截断），子 agent 工具集在装配层筛好（不含 spawn 防递归，单层）。三条补丁把「过境」这道关收口。
+> 核心命题：多 Agent 系统里「信息跨过边界」这一动作（下发/回传/转交）就是故障源——噪音、幻觉、约束、错误结论都在过境时流动。kima 已演进为多 Agent（主 reactive + 3 子 agent，见 §4.3），agent 之间交互统一走「交棒包」（task_description + constraints + available_tools + input_refs，引用而非内联，prior_output 由 `max_result_chars` 截断），子 agent 工具集在装配层筛好（含 spawn，可递归派子 agent，靠 max_spawn 计数 + 四轴预算兜底）。三条补丁把「过境」这道关收口。
 
 **① 约束显式携带（failure #3「约束蒸发」）**——「绝不能删除数据」这类约束若只写在 reactive 的 system prompt 里，spawn 子 agent 时约束就被整条旁路、在交接中蒸发。为此：`assemble_context(question, run_id)` 把「读 soul/user + `recall()` + 组装 system_prompt/memory_block」抽成单一入口、上移到意图路由之后、执行模式**之前**；planner 各节点（`PlannerState.system_prompt`/`memory_block`）、`resume_after_crash` 都显式携带 `system_prompt` + `memory_block`；`LLMPlanner.generate` 加 `constraints=""` 参数、spawn 子 agent 经 `run(task, constraints)` 显式下传——规划器下行任务包带约束。
 
@@ -489,7 +491,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 
 ---
 
-## 5. 工具集（19 个，六要素描述 + 副作用分层 + 幂等 + 元数据）
+## 5. 工具集（20 个，六要素描述 + 副作用分层 + 幂等 + 元数据）
 
 | 工具 | 复用 / 行为 | 副作用 |
 |---|---|---|
@@ -501,6 +503,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 | `search_web(query)` | `WebSearchClient.search`（博查） | 只读 |
 | `search_memory(query, kind?)` | 语义检索记忆，回写 access_count | 只读 |
 | `read_tool_result(path, grep_pattern?)` | 读落盘的工具结果全文（spill 后按需查） | 只读 |
+| `create_knowledge_base(name, description?, color?, idempotency_key?)` | `KnowledgeBaseService.create`；**幂等**：name 唯一 + 业务意图幂等键（§4.17） | 写（MEDIUM） |
 | `create_note(title, content, kb_id?, idempotency_key?)` | `NoteService.create_with_content`；**幂等**：content hash 去重 + 业务意图幂等键（§4.17） | 写（MEDIUM） |
 | `write_memory(kind, content, entity_id?, idempotency_key?)` | 写记忆条目（写入分类器兜底 + 冲突判定去重）；kind ∈ constraint/fact/preference/episodic | 写（MEDIUM） |
 | `update_profile(kind, content)` | 覆盖写 `soul.md` / `user.md`；kind ∈ soul/user | 写（HIGH） |
@@ -546,9 +549,13 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 
 ## 6. API 端点（`api/routes/copilot.py`）
 
-### 6.1 `POST /api/copilot/chat`（SSE）
+### 6.1 流式对话（run 与请求解耦）
 
-请求 `CopilotRequest{conversation_id?, question}`。
+`POST /api/copilot/chat` 请求 `CopilotRequest{conversation_id?, question}`。**run 与 HTTP 请求解耦**：本端点只同步 `prepare_run`（建会话 + 落用户消息 + assistant 空占位 + 生成 `run_id`），随即启动后台任务（`RunManager`，app.state 单例），并**立即返回 JSON**：
+
+`CopilotChatStarted{conversation_id, user_message_id, assistant_message_id, run_id}`
+
+前端据此显示占位、再打开订阅流 `GET /api/copilot/runs/{assistant_message_id}/stream?after=<seq>` 收事件。订阅流先按 `seq` 回放已持久化的前端事件、再 tail 新事件直到终态（`done`/`error`），支持**刷新后续上之前没接收到的内容**。
 
 | 事件 | 载荷 | 说明 |
 |---|---|---|
@@ -556,18 +563,22 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 | `step` | `{tool_name, args}` | 每次工具调用 |
 | `delta` | `{text}` | 最终回答逐 token |
 | `approval` | `{approval_id, run_id, tool, args, summary, level}` | 高危写需人工确认（证据包：`approval_id` 供逐单回传裁决 + 人话摘要 + 风险等级 + 原始参数，见 §4.15） |
-| `done` | `{assistant_message_id}` | 结束，**思维链经 checkpoint + 事件日志落库** |
+| `done` | `{assistant_message_id}` | 终态结束，**思维链经 checkpoint + 事件日志落库** |
 | `error` | `{code, message}` | 失败 |
 
-### 6.2 记忆 / 技能 / 审批端点
+> **终态 ≠ `done` 出现即终态**：run 在「挂起审批」时也会 `commit_assistant(run_state=suspended)` 落一条 `done`——那是阶段边界，不是终态。后台驱动按「是否出现 `approval` 事件」判挂起、抑制挂起 done，只把 `completed/failed/interrupted` 三态当终态。终态后 `copilot_stream_events` 整段删除（最终内容已固化进 `chat_messages`），订阅流随即关闭。
+
+### 6.2 记忆 / 技能 / 审批 / 订阅端点
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | `/api/copilot/runs/{assistant_message_id}/stream` | 订阅一轮 run：回放（> after）+ tail 新事件直到终态；心跳保活（挂起等审批/长工具调用） |
+| POST | `/api/copilot/runs/{assistant_message_id}/cancel` | 前端「停止」：取消后台 run（触发 `run_reactive` finally 回填部分内容，`run_state=interrupted`），保持「停止即停止」 |
 | GET | `/api/copilot/memory` | `{soul, user, memories:[...]}`（按 kind 分组，面板只读） |
-| GET | `/api/copilot/skills` | 内置工具清单（19 工具 name/description/副作用） |
+| GET | `/api/copilot/skills` | 内置工具清单（20 工具 name/description/副作用） |
 | GET | `/api/copilot/custom-skills` | 自定义 Skill 清单 `{items:[{name, description, content}]}`（技能层，见 §2.6） |
 | GET | `/api/copilot/approvals/pending` | 待审审批单列表（找回挂起审批；惰性失效已过期单；一个 run 多张并行 pending，D11） |
-| POST | `/api/copilot/approve` | HITL 审批回执：`{run_id, decisions: [{approval_id, decision}], conversation_id, assistant_message_id}` 续跑（一张单一个 decision，按 `interrupt_id` 精确路由，D11） |
+| POST | `/api/copilot/approve` | HITL 审批回执（**触发式**）：`{run_id, decisions: [{approval_id, decision}], conversation_id, assistant_message_id}` 把裁决回填给后台任务续跑；续跑事件从已开的订阅流来（返回 `{ok}`，不再是 SSE） |
 | POST | `/api/copilot/resume` | 崩溃恢复（planner/reactive 统一）：按 run_id 从 checkpoint 续跑（无待审批 interrupt 的宕机恢复，见 §4.16；原 `/plan/resume` 已并入，D10） |
 
 ### 6.3 会话
@@ -584,6 +595,7 @@ preflight（熔断 + 预算硬停 + 80% 软提示）→ 快照复用（命中已
 - **调用级快照（LLM 调用不重跑）**：checkpoint 是**节点级**——宕机在节点内时，该节点会整体重跑（重发那次 LLM 调用 = 重付一次钱）。网关的 `copilot_llm_snapshots`（§4.11/§3 迁移 `0002_copilot`）把每次 LLM 调用当纯函数：以「node + 规范化输入」内容哈希为键，成功后落 output，恢复时命中缓存直接复用、**不重跑已完成的 LLM 调用**。与 checkpoint 互补：checkpoint 决定「从哪个节点续跑」，快照决定「节点内的调用是否真发」。`resume_after_crash(run_id)` 提供崩溃续跑入口（重放语义 at-least-once）。
 - **计划检查点（planner 路径崩溃恢复与 reactive 统一）**：崩溃恢复统一走 LangGraph checkpointer（`AsyncPostgresSaver`），统一走 `POST /api/copilot/resume`。
 - **事件日志（思维链可观测）**：append-only `copilot_events` 表 `{seq, run_id, type, payload, created_at}`，`type ∈ {tool_call, tool_result, llm_delta, done, error}`，单调 `seq` 可重放。这是不可变的完整思维链，喂前端工具链 UI 与调试/审计。
+- **SSE 前端事件流（刷新续上）**：append-only `copilot_stream_events` 表 `{seq, run_id, assistant_message_id, type, payload}`，`type ∈ {meta, step, delta, review, approval, done, error}`——存**推给前端的原始 SSE 事件**。后台任务每落一条事件就 `events.set()` 唤醒订阅者；订阅端点先按 `seq` 回放、再 tail。run 到终态（completed/failed/interrupted）后整段删除（最终内容已固化进 `chat_messages`），故「事件流只活在 run 进行中、完成即删」。与 `copilot_events`（思维链审计，append-only 不删）职责分离。
 - **幂等写**：Loop 给写工具注入**业务意图幂等键** `idempotency_key = "{run_id}:{tool_name}:sha256(key_fields)"`（内容派生，见 §4.17），工具执行层走持久化幂等表 `copilot_idempotency` 去重（原子抢占 processing→succeeded，命中缓存不重放副作用，同键不同参数拒绝）；`create_note` 另以 content hash 唯一索引兜底、`write_memory` 走冲突判定去重。崩溃重放不重复产生副作用。
 - **`chat_messages`**：存 user/assistant 最终消息（会话历史）+ `steps`（工具轨迹，事件日志的轻量投影，供前端快读）；完整思维链以事件日志 + checkpoint 为准。
 
