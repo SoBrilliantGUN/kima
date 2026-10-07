@@ -26,6 +26,7 @@ from app.agent.runtime.budget import BudgetTracker, DailyBudget, HardBudget, Usa
 from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.plan_model import Plan, PlanStep
 from app.agent.runtime.reactive import build_reactive_graph
+from app.agent.runtime.router import Intent
 from app.agent.side_effect import DbSideEffectVerifier
 from app.agent.snapshot import InMemorySnapshotStore, SnapshotStore
 from app.agent.toolmeta import ToolRegistry
@@ -549,6 +550,20 @@ class FakeMemoryClassifier:
         return None
 
 
+class FakeIntentClassifier:
+    """脚本化意图分类器：按给定 intents 逐次回放（不足回退 None→run.py 按 TASK），记录调用。"""
+
+    def __init__(self, intents: list[Intent | None] | None = None) -> None:
+        self._intents = list(intents or [])
+        self.calls: list[str] = []
+
+    async def classify(self, text: str) -> Intent | None:
+        self.calls.append(text)
+        if self._intents:
+            return self._intents.pop(0)
+        return None
+
+
 class FakeOutputReviewer:
     """脚本化输出审查器：按给定 results 逐次回放（不足回退 ok），记录调用。"""
 
@@ -662,6 +677,7 @@ def make_copilot_defaults(
         "verifier": verifier or DbSideEffectVerifier(note_service, memory_service, lock=db_lock),
         "checkpointer": InMemorySaver(),
         "planner": FakePlanner(),
+        "intent_classifier": FakeIntentClassifier(),
         "breaker": CircuitBreaker(),
         "security_breaker": SecurityBreaker(),
         "approval_store": InMemoryApprovalStore(),

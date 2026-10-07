@@ -16,7 +16,7 @@ from langchain_core.tools import tool
 from app.agent.gateway import GatewayConfig, run_budget
 from app.agent.guardrail.sensitive import redact_sensitive
 from app.agent.resilience.security_breaker import SecurityBreaker, SecurityBreakerTripped
-from app.agent.runtime.budget import BudgetExceeded, BudgetTracker, HardBudget
+from app.agent.runtime.budget import BudgetExceeded, BudgetTracker, HardBudget, Usage
 from app.agent.toolmeta import (
     ParamContract,
     SideEffectLevel,
@@ -133,10 +133,10 @@ def test_tracker_tool_call_unlimited_by_default() -> None:
     assert tracker.tool_call_count == 1000
 
 
-def test_tracker_scale_tool_calls_for_plan_raises() -> None:
+def test_tracker_scale_budget_for_plan_raises() -> None:
     """计划步数上调 tool_calls 上限：100 步 → 310，超过则超限。"""
     tracker = BudgetTracker(HardBudget(max_tool_calls=50))
-    tracker.scale_tool_calls_for_plan(100)  # 100*3+10=310 > 50 → 上调到 310
+    tracker.scale_budget_for_plan(100)  # 100*3+10=310 > 50 → 上调到 310
     for _ in range(310):
         tracker.record_tool_calls(1)  # 310 恰好到上限，放行
     with pytest.raises(BudgetExceeded):
@@ -146,11 +146,19 @@ def test_tracker_scale_tool_calls_for_plan_raises() -> None:
 def test_tracker_scale_never_lowers() -> None:
     """小计划不降低全局下限：4 步推导 22 < 50，仍以 50 为上限。"""
     tracker = BudgetTracker(HardBudget(max_tool_calls=50))
-    tracker.scale_tool_calls_for_plan(4)  # 4*3+10=22，不降
+    tracker.scale_budget_for_plan(4)  # 4*3+10=22，不降
     for _ in range(50):
         tracker.record_tool_calls(1)  # 50 恰好到上限，放行
     with pytest.raises(BudgetExceeded):
         tracker.record_tool_calls(1)  # 51 > 50 → 超限
+
+
+def test_tracker_scale_budget_expands_resource_axes() -> None:
+    """按步数上调资源轴：10 步 → tokens 200k，scale 后 150k 放行（未 scale 会超 100k）。"""
+    tracker = BudgetTracker(HardBudget(max_tokens=100_000))
+    tracker.scale_budget_for_plan(10)  # tokens = 10*20k = 200k > 100k → 上调
+    tracker.record(Usage(input_tokens=150_000), cost_cny=0.0, count_turn=False)
+    tracker.check()  # 150k < 200k → 放行（未 scale 会 BudgetExceeded）
 
 
 # --- 防线④：安全熔断（手动恢复） ---

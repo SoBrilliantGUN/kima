@@ -1,9 +1,12 @@
 """Copilot Agent 循环：脚本化模型跑工具回环 + 事件顺序 + 事件日志落库。"""
 
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
@@ -17,6 +20,7 @@ from app.agent.events import (
 from app.agent.run import run
 from app.agent.runtime.budget import HardBudget
 from app.agent.runtime.config import RuntimeConfig
+from app.agent.runtime.router import Intent
 from app.core.memory_store import FileMemoryStore
 from app.core.skill_store import FileSkillStore
 from app.integrations.embedding import FakeEmbeddingClient
@@ -36,6 +40,7 @@ from tests.fakes import (
     FakeCopilotMemoryRepository,
     FakeDocumentRepository,
     FakeFileStore,
+    FakeIntentClassifier,
     FakeKnowledgeBaseRepository,
     FakeMemoryClassifier,
     FakeNoteRepository,
@@ -230,3 +235,32 @@ async def test_done_event_records_accounting_and_attribution(tmp_path: Path) -> 
     assert accounting["turn_count"] == 1
     assert accounting["cost_cny"] == 0.0
     assert accounting["cache_hit_rate"] == 0.0
+
+
+async def test_run_routes_plan_intent_to_planner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PLAN 意图走 run_plan（planner 图），不走 run_reactive。"""
+    model = ScriptedAgentModel(responses=[AIMessage(content="好")])
+    rt, _, _ = make_service(tmp_path, model)
+    rt.intent_classifier = FakeIntentClassifier(intents=[Intent.PLAN])
+    calls = {"plan": 0, "reactive": 0}
+
+    async def _fake_run_plan(rt: CopilotRuntime, **kwargs: Any) -> AsyncIterator[None]:
+        calls["plan"] += 1
+        if False:
+            yield
+
+    async def _fake_run_reactive(rt: CopilotRuntime, **kwargs: Any) -> AsyncIterator[None]:
+        calls["reactive"] += 1
+        if False:
+            yield
+
+    monkeypatch.setattr("app.agent.run.run_plan", _fake_run_plan)
+    monkeypatch.setattr("app.agent.run.run_reactive", _fake_run_reactive)
+
+    async for _ in run(rt, CopilotRequest(question="遍历知识库所有文档总结成笔记")):
+        pass
+
+    assert calls["plan"] == 1
+    assert calls["reactive"] == 0
