@@ -1,4 +1,5 @@
 .inputBox {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: var(--space-2);
@@ -15,13 +16,33 @@
     flex: 1;
     border: none;
     outline: none;
-    resize: none;
-    max-height: 120px;
+    resize: none;       // 拖拽调整高度由顶部 dragHandle 统一控制
+    min-height: 40px;   // 最小 2 行
+    max-height: 240px;  // 最大高度
     overflow-y: auto;
     background: transparent;
     color: var(--color-text);
     font: inherit;
     line-height: 1.5;
+  }
+}
+
+// 顶部拖拽手柄：按住上下拖动，调整输入框高度（向上拉增大、向下拉缩小）
+.dragHandle {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 32px;
+  height: 4px;
+  border-radius: 2px;
+  background: #d0d3d8;
+  cursor: ns-resize;
+  touch-action: none; // 禁触摸滚动，让 pointer 拖拽生效
+  transition: background 0.15s;
+
+  &:hover {
+    background: #b0b4ba;
   }
 }
 

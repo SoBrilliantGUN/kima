@@ -74,7 +74,11 @@ export function ContentListPane({
         </span>
         <div className={styles.heading}>
           <h2 className={styles.name}>{kb.name}</h2>
-          {kb.description ? <p className={styles.description}>{kb.description}</p> : null}
+          {kb.description ? (
+            <p className={styles.description} title={kb.description}>
+              {kb.description}
+            </p>
+          ) : null}
         </div>
         {!qaOpen ? (
           <button type="button" className={styles.askButton} onClick={onOpenQa}>
