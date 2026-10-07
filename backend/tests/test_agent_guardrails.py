@@ -25,7 +25,9 @@ from app.agent.runtime.reactive_helpers import collect_trace
 from app.agent.side_effect import DbSideEffectVerifier
 from app.integrations.embedding import FakeEmbeddingClient
 from app.integrations.llm import loads_json_repair
+from app.schemas.knowledge_base import KnowledgeBaseCreate
 from app.services.copilot import CopilotMemoryService
+from app.services.knowledge_base import KnowledgeBaseService
 from app.services.note import NoteService
 from tests.fakes import (
     FakeConflictJudge,
@@ -316,6 +318,7 @@ async def test_review_node_unverified_correction() -> None:
 
 async def test_side_effect_verifier_note() -> None:
     kb_repo = FakeKnowledgeBaseRepository()
+    kb_service = KnowledgeBaseService(kb_repo)
     note_service = NoteService(FakeNoteRepository(), kb_repo)
     memory_service = CopilotMemoryService(
         repository=FakeCopilotMemoryRepository(),
@@ -326,7 +329,7 @@ async def test_side_effect_verifier_note() -> None:
         recency_window_days=7,
         conflict_top_k=10,
     )
-    verifier = DbSideEffectVerifier(note_service, memory_service)
+    verifier = DbSideEffectVerifier(note_service, memory_service, kb_service)
 
     # 不存在的 id → 判副作用缺失
     missing = await verifier.verify(
@@ -350,6 +353,7 @@ async def test_side_effect_verifier_note() -> None:
 
 async def test_side_effect_verifier_memory_missing() -> None:
     kb_repo = FakeKnowledgeBaseRepository()
+    kb_service = KnowledgeBaseService(kb_repo)
     note_service = NoteService(FakeNoteRepository(), kb_repo)
     memory_service = CopilotMemoryService(
         repository=FakeCopilotMemoryRepository(),
@@ -360,7 +364,7 @@ async def test_side_effect_verifier_memory_missing() -> None:
         recency_window_days=7,
         conflict_top_k=10,
     )
-    verifier = DbSideEffectVerifier(note_service, memory_service)
+    verifier = DbSideEffectVerifier(note_service, memory_service, kb_service)
 
     missing = await verifier.verify(
         "write_memory",
@@ -374,3 +378,34 @@ async def test_side_effect_verifier_memory_missing() -> None:
         "update_profile", {"kind": "soul", "content": "x"}, "已更新 soul 档案。"
     )
     assert skipped is None
+
+
+async def test_side_effect_verifier_kb() -> None:
+    kb_repo = FakeKnowledgeBaseRepository()
+    kb_service = KnowledgeBaseService(kb_repo)
+    note_service = NoteService(FakeNoteRepository(), kb_repo)
+    memory_service = CopilotMemoryService(
+        repository=FakeCopilotMemoryRepository(),
+        gateway=make_gateway(embedder=FakeEmbeddingClient(dimension=8)),
+        judge=FakeConflictJudge(),
+        classifier=FakeMemoryClassifier(),
+        episodic_ttl_days=30,
+        recency_window_days=7,
+        conflict_top_k=10,
+    )
+    verifier = DbSideEffectVerifier(note_service, memory_service, kb_service)
+
+    # 不存在的 id → 判副作用缺失
+    missing = await verifier.verify(
+        "create_knowledge_base",
+        {"name": "k"},
+        f"已创建知识库「k」（{uuid.uuid4()}）",
+    )
+    assert missing is not None
+
+    # 真实落库的知识库 → 确认通过
+    kb = await kb_service.create(KnowledgeBaseCreate(name="落库"))
+    ok = await verifier.verify(
+        "create_knowledge_base", {"name": "落库"}, f"已创建知识库「落库」（{kb.id}）"
+    )
+    assert ok is None

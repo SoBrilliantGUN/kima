@@ -113,6 +113,15 @@ class FakeChatRepository:
         self._messages.setdefault(message.conversation_id, []).append(message)
         return message
 
+    async def update_message(self, message_id, *, content, steps):
+        for msgs in getattr(self, "_messages", {}).values():
+            for m in msgs:
+                if m.id == message_id:
+                    m.content = content
+                    m.steps = steps
+                    return m
+        return ChatMessage(id=message_id, content=content, steps=steps)
+
     async def list_messages(self, conversation_id: uuid.UUID) -> list[ChatMessage]:
         return list(self._messages.get(conversation_id, []))
 
@@ -205,7 +214,7 @@ async def test_injection_routes_to_reject(tmp_path: Path) -> None:
 
 
 def test_qa_tool_names_prevents_subagent_recursion() -> None:
-    """QA 可派 spawn_rag 子 Agent，但子 Agent 工具集不含 spawn_rag（防无限递归）。"""
+    """QA 可派 spawn_rag 子 Agent，但 rag 子 Agent 是只读检索五件套，不含 spawn_rag。"""
     assert "spawn_rag" in QA_TOOL_NAMES
     assert "spawn_rag" not in _RAG_SUBAGENT_TOOL_NAMES
     # QA 只读：不含任何写工具

@@ -239,3 +239,15 @@ async def test_spawn_reactive_exists(tmp_path: Path) -> None:
     tools, _, _, _ = make_tools(tmp_path)
     spawn_reactive = _tool(tools, "spawn_reactive")
     assert spawn_reactive.name == "spawn_reactive"
+
+
+async def test_create_knowledge_base(tmp_path: Path) -> None:
+    """create_knowledge_base 建库；同名再建抛冲突错误。"""
+    tools, _, kb_repo, _ = make_tools(tmp_path)
+    create_kb = _tool(tools, "create_knowledge_base")
+    first = await create_kb.ainvoke({"name": "学习笔记"})
+    assert first["name"] == "学习笔记"
+    with pytest.raises(ToolFailure):
+        await create_kb.ainvoke({"name": "学习笔记"})  # 同名冲突
+    _, total = await kb_repo.list(limit=10, offset=0)
+    assert total == 1

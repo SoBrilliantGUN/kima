@@ -68,9 +68,25 @@ def test_has_terminal_event() -> None:
     run_id = uuid.uuid4()
     # 空日志 → 非终态
     assert not asyncio.run(_has_terminal_event(_rt(repo), run_id))
-    # 落一条 done → 终态
-    asyncio.run(repo.add_event(CopilotEvent(run_id=run_id, type="done", payload={})))
+    # 落一条终态 done（run_state=completed）→ 终态
+    asyncio.run(
+        repo.add_event(
+            CopilotEvent(run_id=run_id, type="done", payload={"run_state": "completed"})
+        )
+    )
     assert asyncio.run(_has_terminal_event(_rt(repo), run_id))
+
+
+def test_has_terminal_event_suspended_is_not_terminal() -> None:
+    """挂起审批的 done（run_state=suspended）是阶段边界，不应判为终态。"""
+    repo = FakeCopilotEventRepository()
+    run_id = uuid.uuid4()
+    asyncio.run(
+        repo.add_event(
+            CopilotEvent(run_id=run_id, type="done", payload={"run_state": "suspended"})
+        )
+    )
+    assert not asyncio.run(_has_terminal_event(_rt(repo), run_id))
 
 
 async def test_stream_graph_marks_suspended_on_interrupt() -> None:
@@ -141,7 +157,9 @@ async def test_resume_refuses_terminal_run() -> None:
     """已落 done 事件的 run 不应再续跑（防重复副作用）。"""
     repo = FakeCopilotEventRepository()
     run_id = uuid.uuid4()
-    await repo.add_event(CopilotEvent(run_id=run_id, type="done", payload={}))
+    await repo.add_event(
+        CopilotEvent(run_id=run_id, type="done", payload={"run_state": "completed"})
+    )
     rt = _rt(repo)
     events = [e async for e in resume(rt, str(run_id), [], uuid.uuid4(), uuid.uuid4())]
     # 短路：只推一段 delta，无 done 事件、无二次副作用

@@ -34,7 +34,7 @@ from app.integrations.llm import ChatMessage, ChatResult, LLMClient
 from app.integrations.parser import ParsedDocument, ParserError, SourceType
 from app.integrations.rerank import FakeRerankerClient, RerankerClient
 from app.integrations.tracing import NoopObservability, Observability
-from app.models.copilot import CopilotEvent, CopilotMemory, MemoryKind
+from app.models.copilot import CopilotEvent, CopilotMemory, CopilotStreamEvent, MemoryKind
 from app.models.document import MAX_RETRIES, Document, DocumentChunk, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase
 from app.models.note import Note
@@ -486,6 +486,41 @@ class FakeCopilotEventRepository:
         return [e for e in self.events if e.run_id == run_id]
 
 
+class FakeCopilotStreamEventRepository:
+    """内存版 SSE 前端事件流仓库：自增 seq，支持按 assistant_message_id 回放/删除。"""
+
+    def __init__(self) -> None:
+        self.events: list[CopilotStreamEvent] = []
+        self._seq = 0
+
+    async def add_event(self, event: CopilotStreamEvent) -> CopilotStreamEvent:
+        self._seq += 1
+        event.seq = self._seq
+        event.id = uuid.uuid4()
+        event.created_at = datetime.now(UTC)
+        self.events.append(event)
+        return event
+
+    async def list_events(self, assistant_message_id: uuid.UUID) -> list[CopilotStreamEvent]:
+        return [
+            e for e in self.events if e.assistant_message_id == assistant_message_id
+        ]
+
+    async def list_events_after(
+        self, assistant_message_id: uuid.UUID, after_seq: int
+    ) -> list[CopilotStreamEvent]:
+        return [
+            e
+            for e in self.events
+            if e.assistant_message_id == assistant_message_id and e.seq > after_seq
+        ]
+
+    async def delete_events(self, assistant_message_id: uuid.UUID) -> int:
+        before = len(self.events)
+        self.events = [e for e in self.events if e.assistant_message_id != assistant_message_id]
+        return before - len(self.events)
+
+
 class FakeConflictJudge:
     """确定性冲突判定：按给定 verdicts 逐条回放（不足补 none），记录调用。"""
 
@@ -624,7 +659,7 @@ def make_copilot_defaults(
     db_lock = asyncio.Lock()
     return {
         "db_lock": db_lock,
-        "verifier": verifier or DbSideEffectVerifier(note_service, memory_service, db_lock),
+        "verifier": verifier or DbSideEffectVerifier(note_service, memory_service, lock=db_lock),
         "checkpointer": InMemorySaver(),
         "planner": FakePlanner(),
         "breaker": CircuitBreaker(),

@@ -1,6 +1,5 @@
 """Copilot API 集成：SSE 冒烟 + 记忆/技能只读端点 + 会话 kind 过滤（注入 Fake）。"""
 
-import json
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -15,6 +14,7 @@ from app.agent.compose import CopilotRuntime, build_runtime
 from app.api.deps_copilot import (
     get_copilot_memory_service,
     get_copilot_runtime,
+    get_copilot_stream_event_repository,
     get_memory_file_store,
 )
 from app.api.deps_core import get_chat_service
@@ -25,6 +25,7 @@ from app.integrations.rerank import FakeRerankerClient
 from app.integrations.search import FakeWebSearchClient
 from app.main import app
 from app.models.chat import ChatConversation, ChatMessage
+from app.models.copilot import CopilotStreamEvent
 from app.rag.retriever import RagRetriever
 from app.rag.schema import RetrievedChunk
 from app.services.chat import ChatService
@@ -36,6 +37,7 @@ from tests.fakes import (
     FakeConflictJudge,
     FakeCopilotEventRepository,
     FakeCopilotMemoryRepository,
+    FakeCopilotStreamEventRepository,
     FakeDocumentRepository,
     FakeFileStore,
     FakeKnowledgeBaseRepository,
@@ -51,6 +53,25 @@ from tests.fakes import (
 class ScriptedAgentModel(FakeMessagesListChatModel):
     def bind_tools(self, tools: object, **kwargs: object) -> "ScriptedAgentModel":
         return self
+
+
+class _StubRunManager:
+    """HTTP 冒烟用桩：不真正跑后台任务，只记录 start / submit_decision 调用。"""
+
+    def __init__(self) -> None:
+        self.started: list = []
+
+    def start(self, prepared: object, request: object) -> None:
+        self.started.append(prepared)
+
+    def get(self, assistant_message_id: uuid.UUID) -> object | None:
+        return None
+
+    def submit_decision(self, assistant_message_id: uuid.UUID, decisions: list) -> bool:
+        return True
+
+    def cancel(self, assistant_message_id: uuid.UUID) -> bool:
+        return True
 
 
 class _EmptyRetrievalRepo:
@@ -102,6 +123,15 @@ class FakeChatRepository:
         message.created_at = datetime.now(UTC)
         self._messages.setdefault(message.conversation_id, []).append(message)
         return message
+
+    async def update_message(self, message_id, *, content, steps):
+        for msgs in getattr(self, "_messages", {}).values():
+            for m in msgs:
+                if m.id == message_id:
+                    m.content = content
+                    m.steps = steps
+                    return m
+        return ChatMessage(id=message_id, content=content, steps=steps)
 
     async def list_messages(self, conversation_id: uuid.UUID) -> list[ChatMessage]:
         return list(self._messages.get(conversation_id, []))
@@ -159,29 +189,67 @@ async def api_client(tmp_path: Path) -> AsyncIterator[AsyncClient]:
         FakeKnowledgeBaseRepository(),
         None,  # type: ignore[arg-type]
     )
+    run_manager = _StubRunManager()
+    app.state.copilot_run_manager = run_manager
+    app.state.stub_run_manager = run_manager  # 供断言 start 调用
+    stream_repo = FakeCopilotStreamEventRepository()
+    app.dependency_overrides[get_copilot_stream_event_repository] = lambda: stream_repo
+    app.state.fake_stream_repo = stream_repo
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
     app.dependency_overrides.clear()
 
 
-async def test_copilot_chat_sse(api_client: AsyncClient) -> None:
-    events: list[tuple[str | None, object]] = []
-    async with api_client.stream(
-        "POST", "/api/copilot/chat", json={"question": "帮我看看"}
-    ) as response:
+async def test_copilot_chat_returns_ids(api_client: AsyncClient) -> None:
+    """POST /chat 解耦后：同步准备 + 起后台任务，立即返回四个 id（非 SSE）。"""
+    response = await api_client.post("/api/copilot/chat", json={"question": "帮我看看"})
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"conversation_id", "user_message_id", "assistant_message_id", "run_id"}
+    # 后台任务已登记（桩记录 start 调用）
+    assert len(app.state.stub_run_manager.started) == 1
+
+
+async def test_copilot_run_stream_replays(api_client: AsyncClient) -> None:
+    """GET /runs/{id}/stream 回放已持久化事件（无活 run → 回放完即关）。"""
+    assistant_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    stream_repo = app.state.fake_stream_repo
+    # 预置事件：meta → delta → done
+    meta_payload = {
+        "conversation_id": str(uuid.uuid4()),
+        "user_message_id": str(uuid.uuid4()),
+        "assistant_message_id": str(assistant_id),
+    }
+    for type_, payload in [
+        ("meta", meta_payload),
+        ("delta", {"text": "你好"}),
+        ("done", {"assistant_message_id": str(assistant_id)}),
+    ]:
+        event = CopilotStreamEvent(
+            run_id=run_id, assistant_message_id=assistant_id, type=type_, payload=payload
+        )
+        await stream_repo.add_event(event)
+
+    names: list[str] = []
+    async with api_client.stream("GET", f"/api/copilot/runs/{assistant_id}/stream") as response:
         assert response.status_code == 200
         current_event: str | None = None
         async for line in response.aiter_lines():
             if line.startswith("event: "):
                 current_event = line[len("event: ") :]
             elif line.startswith("data: "):
-                events.append((current_event, json.loads(line[len("data: ") :])))
+                names.append(current_event or "")
 
-    names = [name for name, _ in events]
-    assert names[0] == "meta"
-    assert "delta" in names
-    assert names[-1] == "done"
+    assert names == ["meta", "delta", "done"]
+
+
+async def test_copilot_run_cancel(api_client: AsyncClient) -> None:
+    """POST /runs/{id}/cancel 触发后台 run 取消（桩返回 ok）。"""
+    response = await api_client.post(f"/api/copilot/runs/{uuid.uuid4()}/cancel")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
 
 
 async def test_copilot_memory_endpoint(api_client: AsyncClient) -> None:
@@ -197,9 +265,10 @@ async def test_copilot_skills_endpoint(api_client: AsyncClient) -> None:
     response = await api_client.get("/api/copilot/skills")
     assert response.status_code == 200
     items = response.json()["items"]
-    assert len(items) == 19
+    assert len(items) == 20
     write_names = {item["name"] for item in items if item["has_side_effect"]}
     assert write_names == {
+        "create_knowledge_base",
         "create_note",
         "write_memory",
         "update_profile",

@@ -67,6 +67,15 @@ class FakeChatRepository:
             conversation.updated_at = datetime.now(UTC)
         return message
 
+    async def update_message(self, message_id, *, content, steps):
+        for msgs in getattr(self, "_messages", {}).values():
+            for m in msgs:
+                if m.id == message_id:
+                    m.content = content
+                    m.steps = steps
+                    return m
+        return ChatMessage(id=message_id, content=content, steps=steps)
+
     async def list_messages(self, conversation_id: uuid.UUID) -> list[ChatMessage]:
         return list(self._messages.get(conversation_id, []))
 
