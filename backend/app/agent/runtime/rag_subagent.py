@@ -1,7 +1,7 @@
 """RAG 子 Agent：复用主循环图（``build_reactive_graph``）的独立窗口检索子 Agent。
 
 子 Agent 与主 Agent 是「对等完整版」——**同一套 agent ⇄ tools ⇄ review 图**，仅靠调用参数
-区分：工具白名单（只读检索五件套、不含 ``spawn_rag`` 防递归）、独立初始 state、共享成本 +
+区分：工具白名单（只读检索五件套）、独立初始 state、共享成本 +
 独立 turn（``count_turn=False``，不挤占主循环 ``max_turns``）。
 
 图在 ``run`` 时动态构建：需从 ContextVar 取主循环的 tracker/run_id（共享成本 + 同一 run
@@ -23,6 +23,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from app.agent.gateway import LLMGateway
 from app.agent.gateway_context import current
 from app.agent.guardrail.review import OutputReviewer, SideEffectVerifier
+from app.agent.handoff import HandoffPacket
 from app.agent.resilience.circuit_breaker import CircuitBreaker
 from app.agent.resilience.security_breaker import SecurityBreaker
 from app.agent.runtime.budget import BudgetTracker
@@ -34,6 +35,11 @@ from app.agent.toolmeta import ToolRegistry
 _RAG_SYSTEM = (
     "你是知识库检索子 Agent。根据任务，检索知识库、阅读文档/笔记，必要时多轮检索补充，"
     "最后给出简明结论。只输出结论，不要解释检索过程。"
+)
+
+REACTIVE_SUBAGENT_SYSTEM = (
+    "你是通用任务子 Agent。根据任务，用给定工具逐步完成，必要时多轮操作，"
+    "最后给出简明结论。只输出结论，不要解释过程。"
 )
 
 
@@ -59,6 +65,7 @@ class RagSubagent:
         gateway: LLMGateway,
         max_turns: int = 4,
         max_result_chars: int = 2000,
+        system_prompt: str = _RAG_SYSTEM,
     ) -> None:
         self._model = model
         self._tools = tools
@@ -72,9 +79,11 @@ class RagSubagent:
         self._gateway = gateway
         self._max_turns = max_turns
         self._max_result_chars = max_result_chars
+        self._system_prompt = system_prompt
 
-    async def run(self, task: str, constraints: str = "") -> str:
+    async def run(self, packet: HandoffPacket) -> str:
         """复用主循环图跑子任务（共享主循环 tracker/run_id、独立 turn），截断后回结论。"""
+        task = packet.to_task_prompt()
         try:
             ctx = current()  # spawn_rag 工具在 run_budget 里，此处即主循环 run context
             tracker = ctx.tracker
@@ -100,7 +109,7 @@ class RagSubagent:
             tracker=tracker,  # 共享成本：记入主循环 tracker
             count_turn=False,  # 独立 turn：不挤占主循环 max_turns
         )
-        system_prompt = _RAG_SYSTEM + (f"\n\n{constraints}" if constraints else "")
+        system_prompt = self._system_prompt
         result = await graph.ainvoke(
             {
                 "messages": [HumanMessage(content=task)],

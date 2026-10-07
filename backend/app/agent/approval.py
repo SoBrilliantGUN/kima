@@ -105,6 +105,8 @@ def approval_summary(tool: str, args: dict[str, Any] | None) -> str:
     args = args or {}
     if tool == "create_note":
         return f"新建笔记《{args.get('title', '未命名')}》"
+    if tool == "create_knowledge_base":
+        return f"新建知识库《{args.get('name', '未命名')}》"
     if tool == "write_memory":
         kind = str(args.get("kind", ""))
         return f"写入一条{_KIND_LABEL.get(kind, '')}记忆"

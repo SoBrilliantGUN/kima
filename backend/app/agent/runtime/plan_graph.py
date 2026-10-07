@@ -14,14 +14,13 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-from app.agent.compose import CopilotRuntime
 from app.agent.events import (
     CopilotApprovalEvent,
     CopilotDeltaEvent,
@@ -32,7 +31,7 @@ from app.agent.gateway import run_budget
 from app.agent.guardrail.review import ReviewResult, ReviewVerdict
 from app.agent.guardrail.review_node import format_trace, write_side_effects_from_trace
 from app.agent.guardrail.trust import sanitize_content
-from app.agent.helpers import TOOL_RESULT_CHARS, bounded_call, clip, tool_source
+from app.agent.helpers import TOOL_RESULT_CHARS, bounded_call, clip, extract_llm_text, tool_source
 from app.agent.memory import format_skills_block
 from app.agent.orchestrate import (
     SKILL_BLOCK_MAX_TOKENS,
@@ -55,7 +54,58 @@ from app.agent.toolmeta import (
     validate_param_contract,
 )
 
+if TYPE_CHECKING:
+    from app.agent.compose import CopilotRuntime
+
 logger = logging.getLogger(__name__)
+
+
+def _is_virtual(step_id: str) -> bool:
+    """for 展开的虚拟步骤 id 形如 ``loop1@0``（for 步骤 id + @ + 下标）。"""
+    return "@" in step_id
+
+
+def _deps_completed(plan: Plan, step: PlanStep) -> bool:
+    return all(
+        (dep := plan.get_step(d)) is not None and dep.status is StepStatus.COMPLETED
+        for d in step.depends_on
+    )
+
+
+def _expand_for(plan: Plan, step: PlanStep) -> None:
+    """把 for 步骤展开成 N 个虚拟步骤（循环体=单工具，item 经 item_params 映射注入）。"""
+    try:
+        resolved = plan.resolve_params(step)
+    except ValueError as exc:
+        step.status = StepStatus.FAILED
+        step.error = str(exc)
+        return
+    items = resolved.get("items")
+    if not isinstance(items, list):
+        step.status = StepStatus.FAILED
+        step.error = f"for 的 items 不是数组：{items!r}"
+        return
+    body = resolved.get("body", "")
+    item_params = resolved.get("item_params", {})
+    extra = resolved.get("extra_params", {})
+    for i, item in enumerate(items):
+        params = dict(extra)
+        for item_field, body_param in item_params.items():
+            params[body_param] = item.get(item_field) if isinstance(item, dict) else item
+        plan.add_step(PlanStep(step_id=f"{step.step_id}@{i}", action=body, params=params))
+    step.status = StepStatus.RUNNING
+
+
+def _aggregate_for(plan: Plan, step: PlanStep) -> None:
+    """所有虚拟步骤完成后，聚合成功结果回 for 产物（失败项自然被过滤）。"""
+    children = [s for s in plan.steps if s.step_id.startswith(f"{step.step_id}@")]
+    if not children:
+        return
+    if all(s.status in (StepStatus.COMPLETED, StepStatus.FAILED) for s in children):
+        step.output_ref = [s.output_ref for s in children if s.status is StepStatus.COMPLETED]
+        step.status = StepStatus.COMPLETED
+        for s in children:
+            s.status = StepStatus.OBSOLETE
 
 
 def build_plan_graph(rt: CopilotRuntime, tracker: BudgetTracker) -> Any:
@@ -66,8 +116,9 @@ def build_plan_graph(rt: CopilotRuntime, tracker: BudgetTracker) -> Any:
     names = [tool.name for tool in rt.tools]
     resources = {name: meta.resource for name, meta in rt.registry.items()}
     tool_names = rt.breaker.available(names, resources)
-    # 合成步骤是保留动作（不注册进工具集），加入规划器可用动作白名单，避免被 validate_plan 判幻觉。
-    tool_names = list(tool_names) + [SYNTHESIZE_ACTION]
+    # 合成步骤 / for 是保留动作（不注册进工具集），加入规划器可用动作白名单，
+    # 避免被 validate_plan 判「幻觉工具」。
+    tool_names = list(tool_names) + [SYNTHESIZE_ACTION, "for"]
 
     async def plan_node(state: PlannerState, config: RunnableConfig) -> dict[str, Any]:
         run_id = str(config.get("configurable", {}).get("thread_id", ""))
@@ -122,10 +173,13 @@ def build_plan_graph(rt: CopilotRuntime, tracker: BudgetTracker) -> Any:
                 step.status = StepStatus.COMPLETED
                 step.output_ref = results[step.step_id]
         # 2. 从 failures 推导 FAILED + 增量 replan（有界：replan 失败即终止）
+        # 虚拟步骤（for 展开的 @i）失败只标记、跳过 replan——聚合时自然过滤失败项。
         for step in plan.steps:
             if step.step_id in failures and step.status is StepStatus.RUNNING:
                 step.status = StepStatus.FAILED
                 step.error = failures[step.step_id]
+                if _is_virtual(step.step_id):
+                    continue
                 plan.mark_downstream_obsolete(step.step_id)
                 try:
                     with run_budget(tracker, run_id=run_id):
@@ -144,14 +198,27 @@ def build_plan_graph(rt: CopilotRuntime, tracker: BudgetTracker) -> Any:
                         return {"plan": plan.to_dict(), "plan_error": failures[step.step_id]}
                 except ValueError:
                     return {"plan": plan.to_dict(), "plan_error": failures[step.step_id]}
-        # 3. 算 ready，标记 RUNNING（供 dispatch Send 派发）
+        # 3. for 控制流：PENDING 且依赖完成 → 展开成虚拟步骤；RUNNING 且全部完成 → 聚合
+        for step in list(plan.steps):
+            if step.action == "for":
+                if step.status is StepStatus.PENDING and _deps_completed(plan, step):
+                    _expand_for(plan, step)
+                elif step.status is StepStatus.RUNNING:
+                    _aggregate_for(plan, step)
+        # 4. 算 ready，标记 RUNNING（供 dispatch Send 派发）
         for step in plan.get_parallel_ready():
             step.status = StepStatus.RUNNING
         return {"plan": plan.to_dict()}
 
     def route_after_supervisor(state: PlannerState) -> list[Send] | str:
         plan = Plan.from_dict(state["plan"])
-        running = [s for s in plan.steps if s.status is StepStatus.RUNNING]
+        # for 是控制流步骤，不派给 worker（worker 只执行工具步骤）；它在 supervisor 里
+        # 展开，不进入 RUNNING 的 dispatch 列表。
+        running = [
+            s
+            for s in plan.steps
+            if s.status is StepStatus.RUNNING and s.action != "for"
+        ]
         if running:
             # Send 的 arg 是 worker 的完整输入（非 merge 进共享 state），须自带 plan。
             plan_dict = state["plan"]
@@ -166,7 +233,7 @@ def build_plan_graph(rt: CopilotRuntime, tracker: BudgetTracker) -> Any:
         for dep_id in step.depends_on:
             dep = plan.get_step(dep_id)
             if dep is not None and dep.output_ref is not None:
-                parts.append(f"[{dep_id}] {dep.output_ref}")
+                parts.append(f"[{dep_id}] {extract_llm_text(dep.output_ref)}")
         summary = "\n".join(parts)
         task = state.get("task", "")
         user_content = f"任务：{task}\n\n工具执行结果：\n{summary}\n\n请给出最终回答。"
@@ -218,7 +285,23 @@ def build_plan_graph(rt: CopilotRuntime, tracker: BudgetTracker) -> Any:
         # 合成步骤：不调工具，走调 LLM 合成分支（产物即最终回答，写入 results）。
         if name == SYNTHESIZE_ACTION:
             return await _synthesize_step(plan, step, state, run_id, run_uuid)
-        params = step.params
+        # 参数链解析：{{step_id.output.field}} 换成上游产物；非法引用 fail-closed 返回
+        # failures（触发 replan 而非脏参数执行）。
+        try:
+            params = plan.resolve_params(step)
+        except ValueError as exc:
+            return {
+                "failures": {step_id: str(exc)},
+                "trace": [
+                    {
+                        "tool": name,
+                        "args": step.params,
+                        "result": str(exc),
+                        "ok": False,
+                        "step_id": step_id,
+                    }
+                ],
+            }
         meta = rt.registry.get(name)
         # 防线② 参数级校验：违规 fail-closed 返回 failures（触发 replan 而非脏参数执行）
         violation = validate_param_contract(
@@ -282,10 +365,8 @@ def build_plan_graph(rt: CopilotRuntime, tracker: BudgetTracker) -> Any:
         tracker.record_tool_calls(1)
         try:
             with run_budget(tracker, run_id=run_id):
-                raw = str(
-                    await bounded_call(
-                        tool.ainvoke(params), tracker, lambda _r: Usage(), label=name
-                    )
+                raw = await bounded_call(
+                    tool.ainvoke(params), tracker, lambda _r: Usage(), label=name
                 )
         except Exception as exc:  # noqa: BLE001 - 崩溃现场分类标签随 failures 回传
             last_error = {"message": str(exc), "kind": classify_error(exc), "tool": name}
@@ -303,8 +384,10 @@ def build_plan_graph(rt: CopilotRuntime, tracker: BudgetTracker) -> Any:
                 ],
                 "last_error": last_error,
             }
-        # 工具结果零信任处置：sanitize（trace 用完整），output_contract 裁剪（results 用）
-        sanitized = sanitize_content(raw, tool_source(name, rt.registry))
+        # 表现层分离：raw 是原始结构化返回值（存 results 供参数链/for 引用），
+        # rendered 是给 LLM 的文本（dict 取 summary 字段），再走零信任 + 契约。
+        rendered = extract_llm_text(raw)
+        sanitized = sanitize_content(rendered, tool_source(name, rt.registry))
         result = apply_output_contract(
             name, sanitized, meta.output_contract if meta is not None else None
         )
@@ -315,7 +398,7 @@ def build_plan_graph(rt: CopilotRuntime, tracker: BudgetTracker) -> Any:
             {"tool_name": name, "content": clip(result, TOOL_RESULT_CHARS)},
         )
         return {
-            "results": {step_id: result},
+            "results": {step_id: raw},
             "trace": [
                 {
                     "tool": name,

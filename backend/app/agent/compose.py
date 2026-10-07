@@ -28,6 +28,7 @@ from app.agent.resilience.circuit_breaker import CircuitBreaker
 from app.agent.resilience.security_breaker import SecurityBreaker
 from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.context import ContextManager
+from app.agent.runtime.plan_subagent import PlanSubagent
 from app.agent.runtime.planner import Planner
 from app.agent.runtime.rag_subagent import RagSubagent
 from app.agent.runtime.reactive import build_reactive_graph
@@ -170,6 +171,13 @@ def build_runtime(
         max_turns=4,  # 子 Agent 最大轮次（原 build_tools.subagent_max_turns 默认值）
     )
 
+    # plan 子 Agent 的 holder：rt 构造后才能实例化（PlanSubagent 依赖完整 rt），
+    # build_tools 里的 spawn_plan 工具经此 holder 延迟引用（同 constraint_holder 手法）。
+    plan_subagent_holder: dict[str, PlanSubagent] = {}
+
+    # spawn 计数（成本控制：单 run 最多 spawn N 次，防无限 spawn 烧钱）
+    spawn_state: dict[str, int] = {"count": 0}
+
     tools, registry = build_tools(
         rag_retriever=rag_retriever,
         kb_service=kb_service,
@@ -186,6 +194,9 @@ def build_runtime(
         breaker=breaker,
         idempotency_store=idempotency_store,
         rag_subagent_factory=rag_subagent_factory,
+        plan_subagent_holder=plan_subagent_holder,
+        spawn_state=spawn_state,
+        max_spawn=runtime.max_spawn,
     )
     tool_map = {tool.name: tool for tool in tools}
     write_tool_names = frozenset(name for name, meta in registry.items() if meta.has_side_effect)
@@ -208,7 +219,7 @@ def build_runtime(
         invoked_skills=invoked_skills,
     )
 
-    return CopilotRuntime(
+    rt = CopilotRuntime(
         model=model,
         model_name=getattr(model, "model_name", "") or "unknown",
         gateway=gateway,
@@ -235,3 +246,11 @@ def build_runtime(
         invoked_skills=invoked_skills,
         constraints=constraints,
     )
+
+    # rt 构造后实例化 plan 子 Agent（依赖完整 rt），塞进 holder 供 spawn_plan 工具延迟引用。
+    # 工具集 = 全套（含 spawn，递归靠 max_spawn 计数 + 四轴预算兜底），与 reactive 子 Agent 一致。
+    plan_subagent_holder["plan"] = PlanSubagent(
+        rt, tools=tools, registry=registry, max_result_chars=runtime.max_result_chars
+    )
+
+    return rt

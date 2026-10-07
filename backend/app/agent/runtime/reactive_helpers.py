@@ -5,6 +5,7 @@ reactive 的 tool_node 与 planner 的 worker 共用同一批防线纯函数，�
 ``resolve_approvals``（写工具 HITL interrupt 审批）从 reactive 闭包抽出，供两模式复用。
 """
 
+import json
 import logging
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -14,7 +15,7 @@ from langgraph.types import interrupt
 
 from app.agent.approval import ApprovalDecision, approval_summary, resolve_approval_decision
 from app.agent.guardrail.trust import is_red_line, sanitize_content
-from app.agent.helpers import tool_source
+from app.agent.helpers import extract_llm_text, tool_source
 from app.agent.resilience.result import ToolFailure
 from app.agent.runtime.loop_guard import fingerprint
 from app.agent.runtime.state import AgentState
@@ -137,7 +138,7 @@ def evaluate_tool_results(
             sanitized.append(msg)
             continue
         name = name_by_id.get(msg.tool_call_id, "")
-        content = str(msg.content)
+        content = _content_to_llm_text(msg.content)
         if is_red_line(content):
             logger.warning("L2 红线阻断（tool_result:%s）", name)
         sanitized.append(
@@ -147,6 +148,18 @@ def evaluate_tool_results(
             )
         )
     return {"messages": sanitized}
+
+
+def _content_to_llm_text(content: Any) -> str:
+    """ToolNode 会把 dict 返回值 JSON 序列化成 str，这里还原并提取 summary 给 LLM。"""
+    if isinstance(content, str):
+        try:
+            data = json.loads(content)
+        except (ValueError, TypeError):
+            return content
+        if isinstance(data, dict):
+            return extract_llm_text(data)
+    return extract_llm_text(content)
 
 
 def resolve_approvals(

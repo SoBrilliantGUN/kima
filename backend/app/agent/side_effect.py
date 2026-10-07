@@ -12,6 +12,7 @@ from typing import Any
 
 from app.core.exceptions import DomainError
 from app.services.copilot import CopilotMemoryService
+from app.services.knowledge_base import KnowledgeBaseService
 from app.services.note import NoteService
 
 # 写工具返回串里的落库 id（create_note / write_memory）
@@ -27,15 +28,19 @@ class DbSideEffectVerifier:
         self,
         note_service: NoteService,
         memory_service: CopilotMemoryService,
+        kb_service: KnowledgeBaseService | None = None,
         lock: asyncio.Lock | None = None,
     ) -> None:
         self._note_service = note_service
         self._memory_service = memory_service
+        self._kb_service = kb_service
         self._lock = lock
 
     async def verify(self, tool_name: str, args: dict[str, Any], result: str) -> str | None:
         if tool_name == "create_note":
             return await self._verify_note(result)
+        if tool_name == "create_knowledge_base":
+            return await self._verify_kb(result)
         if tool_name == "write_memory":
             return await self._verify_memory(result)
         if tool_name == "update_profile":
@@ -50,6 +55,18 @@ class DbSideEffectVerifier:
             await self._note_service.get(uuid.UUID(match.group(0)))
         except DomainError:
             return "create_note 返回了 id，但笔记未真正落库（副作用缺失）"
+        return None
+
+    async def _verify_kb(self, result: str) -> str | None:
+        if self._kb_service is None:
+            return None  # 无 kb_service（测试默认），不做对账，交给 LLM 审查器
+        match = _UUID_RE.search(result)
+        if match is None:
+            return None  # 失败（红绿灯文本无 id）交给 LLM 审查器
+        try:
+            await self._kb_service.get(uuid.UUID(match.group(0)))
+        except DomainError:
+            return "create_knowledge_base 返回了 id，但知识库未真正落库（副作用缺失）"
         return None
 
     async def _verify_memory(self, result: str) -> str | None:

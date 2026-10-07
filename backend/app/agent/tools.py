@@ -1,4 +1,4 @@
-"""Copilot 工具集（16 个）：副作用分层（11 只读 / 5 写）+ 六要素描述 + 元数据注册。
+"""Copilot 工具集（19 个）：副作用分层（14 只读 / 5 写）+ 六要素描述 + 元数据注册。
 
 工具闭包捕获请求作用域的仓储/服务（每个请求独立 session），故在 `build_tools` 内定义。
 每个工具用 ``@copilot_tool`` 一个装饰器同时声明「四层执行守卫（熔断 → 重试 → 超时 →
@@ -19,12 +19,14 @@ from typing import Any, cast
 from langchain_core.tools import BaseTool, tool
 
 from app.agent.guardrail.trust import quarantine_content
+from app.agent.handoff import HandoffPacket
 from app.agent.helpers import clip
 from app.agent.resilience.circuit_breaker import CircuitBreaker, with_circuit_breaker
 from app.agent.resilience.result import ToolFailure, ToolOutcome
 from app.agent.resilience.retry import DEFAULT_RETRY_POLICY, with_retry
 from app.agent.resilience.spill import SpillStore
 from app.agent.resilience.timeout import with_timeout
+from app.agent.runtime.rag_subagent import REACTIVE_SUBAGENT_SYSTEM
 from app.agent.toolmeta import (
     MAX_VISIBLE_TOOLS,
     SYNTHESIS_RESULT_CHARS,
@@ -61,6 +63,7 @@ from app.repositories.idempotency import (
     IdempotencyOutcome,
     IdempotencyStore,
 )
+from app.schemas.knowledge_base import KnowledgeBaseCreate
 from app.services.copilot import CopilotMemoryService
 from app.services.document import DocumentService
 from app.services.knowledge_base import KnowledgeBaseService
@@ -97,7 +100,10 @@ def build_tools(
     spill_store: SpillStore | None = None,
     breaker: CircuitBreaker,
     idempotency_store: IdempotencyStore,
-    rag_subagent_factory: Callable[[list[BaseTool], ToolRegistry], Any],
+    rag_subagent_factory: Callable[..., Any],
+    plan_subagent_holder: dict[str, Any] | None = None,
+    spawn_state: dict[str, int] | None = None,
+    max_spawn: int = 8,
 ) -> tuple[list[BaseTool], ToolRegistry]:
     """构建工具集 + 元数据注册表（闭包捕获请求作用域服务）。
 
@@ -487,7 +493,53 @@ def build_tools(
             )
         return {"summary": summary, "content": content}
 
-    # --- 写：create_note / write_memory / update_profile（副作用在描述里声明） ---
+    # --- 写工具（副作用在描述里声明） ---
+
+    @copilot_tool(
+        hint="新建知识库",
+        side_effect_level=SideEffectLevel.MEDIUM,
+        source="tool_result",
+        latency_ms=500,
+        enforced_idempotent=True,
+        idempotency_key_fields=("name",),
+        resource="db",
+    )
+    async def create_knowledge_base(
+        name: str,
+        description: str | None = None,
+        color: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """新建一个知识库。
+        【用途】当用户要求「新建一个知识库」「把笔记放到一个新库」时使用。
+        【区别】新建的是「知识库容器」；写笔记内容用 create_note。
+        【参数】name 为知识库名称（唯一）；description 可选描述；color 可选封面色（hex）。
+        【约束】写操作（会真的建库）；同名去重（幂等），不会重复建。
+        【示例】create_knowledge_base("学习笔记", "要点总结") → {"summary":"…","id":..}。"""
+        if idempotency_key:
+            cached = await _dedup(
+                "create_knowledge_base",
+                idempotency_key,
+                request_hash_for({"name": name, "description": description, "color": color}),
+            )
+            if cached is not None:
+                return cached
+        try:
+            kb = await kb_service.create(
+                KnowledgeBaseCreate(name=name, description=description, color=color)
+            )
+        except DomainError as exc:
+            if idempotency_key:
+                await idempotency.fail("create_knowledge_base", idempotency_key, str(exc))
+            raise _deny(str(exc), "知识库名称已存在，请换一个名字。", "create_failed") from exc
+        result = {
+            "summary": f"已创建知识库「{kb.name}」（{kb.id}）",
+            "id": str(kb.id),
+            "name": kb.name,
+        }
+        if idempotency_key:
+            await idempotency.succeed("create_knowledge_base", idempotency_key, json.dumps(result))
+        return result
 
     @copilot_tool(
         hint="新建笔记",
@@ -679,9 +731,9 @@ def build_tools(
             return {"summary": f"skill「{name}」不存在或已删除。", "name": name}
         return {"summary": f"已删除 skill「{name}」。", "name": name}
 
-    # RAG 子 Agent（SubAgent）：复用主循环图（对等完整版），独立窗口检索、只回结论。
-    # 装配原料（model/reviewer/runtime/...）由调用方经 ``rag_subagent_factory`` 提供
-    # （见 compose.build_runtime 的 partial），此处只按只读白名单筛工具并实例化。
+    # 子 Agent 装配（复用主循环图，独立窗口）：rag（只读检索）+ reactive 全工具（读+写+spawn，
+    # 递归靠预算/计数兜底，不靠禁 spawn）。装配原料由调用方经 ``rag_subagent_factory`` 提供
+    # （见 compose.build_runtime 的 partial），此处只按工具集筛工具并实例化。
     readonly_tools = [
         t for t, meta in collected if meta.is_readonly and t.name in _RAG_SUBAGENT_TOOL_NAMES
     ]
@@ -692,21 +744,153 @@ def build_tools(
     }
     rag_subagent = rag_subagent_factory(readonly_tools, readonly_registry)
 
+    # reactive 全工具子 agent：读+写+spawn（递归靠 max_spawn 计数 + 四轴预算兜底）
+    reactive_tools = [t for t, _meta in collected]
+    reactive_registry = {t.name: meta for t, meta in collected}
+    reactive_subagent = rag_subagent_factory(
+        reactive_tools, reactive_registry, system_prompt=REACTIVE_SUBAGENT_SYSTEM
+    )
+
+    def _claim_spawn() -> str | None:
+        """spawn 预算检查：超 max_spawn 返回拒绝文案，否则计数 +1 返回 None（放行）。"""
+        if spawn_state is None:
+            return None
+        if spawn_state["count"] >= max_spawn:
+            return f"spawn 次数超限（{spawn_state['count']}/{max_spawn}），请自己完成剩余部分。"
+        spawn_state["count"] += 1
+        return None
+
     @copilot_tool(
         hint="派检索子 Agent，只回结论",
         side_effect_level=SideEffectLevel.LOW,
         source="tool_result",
         latency_ms=30000,
+        enforced_idempotent=True,
+        idempotency_key_fields=("task",),
     )
-    async def spawn_rag(task: str) -> dict[str, Any]:
+    async def spawn_rag(
+        task: str,
+        input_refs: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
         """派一个检索子 Agent 检索知识库，只返回结论（保护主 Agent 上下文）。
         【用途】需要检索知识库并综合成结论时使用，避免把大段原文塞进主对话。
         【区别】spawn_rag 派子 Agent 独立检索、只回结论；直接检索用 search_knowledge_base。
-        【参数】task 为检索子任务描述（含目标与约束）。
-        【约束】只读无副作用；子 Agent 独立窗口、多轮检索，延迟较高。
+        【参数】task 为检索子任务描述（含目标与约束）；input_refs 可选引用（如文档 id），
+        子 Agent 用工具解析，不要内联正文。
+        【约束】只读无副作用；同 task 幂等去重（不重复派子 Agent 烧钱）；子 Agent 独立窗口、
+        多轮检索，延迟较高。
         【示例】spawn_rag("检索项目架构并总结要点") → {"summary":"结论"}。"""
+        if (denied := _claim_spawn()) is not None:
+            return {"summary": denied}
+        if idempotency_key:
+            cached = await _dedup(
+                "spawn_rag",
+                idempotency_key,
+                request_hash_for({"task": task, "input_refs": input_refs}),
+            )
+            if cached is not None:
+                return cached
         constraints = (constraint_holder or {}).get("constraints", "")
-        return {"summary": str(await rag_subagent.run(task, constraints=constraints))}
+        packet = HandoffPacket(
+            task_description=task,
+            constraints=[constraints] if constraints else [],
+            available_tools=[t.name for t in readonly_tools],
+            input_refs=input_refs or {},
+        )
+        result = {"summary": str(await rag_subagent.run(packet))}
+        if idempotency_key:
+            await idempotency.succeed("spawn_rag", idempotency_key, json.dumps(result))
+        return result
+
+    @copilot_tool(
+        hint="派通用子 Agent 灵活执行",
+        side_effect_level=SideEffectLevel.LOW,
+        source="tool_result",
+        latency_ms=30000,
+        enforced_idempotent=True,
+        idempotency_key_fields=("task",),
+    )
+    async def spawn_reactive(
+        task: str,
+        input_refs: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """派一个通用 reactive 子 Agent 处理灵活子任务，只返回结论（保护主 Agent 上下文）。
+        【用途】需要「边走边判断」的子任务（含读和写）时使用，避免把过程塞进主对话。
+        【区别】spawn_reactive 派 reactive 全工具子 Agent；检索用 spawn_rag，
+        规划/遍历用 spawn_plan。
+        【参数】task 为子任务描述（含目标与约束）；input_refs 可选引用，子 Agent 用工具解析。
+        【约束】子 Agent 独立窗口、能读能写，延迟较高；同 task 幂等去重；可递归派子 Agent，
+        由 max_spawn 计数 + 预算兜底。
+        【示例】spawn_reactive("把这几篇笔记合并整理成一篇") → {"summary":"结论"}。"""
+        if (denied := _claim_spawn()) is not None:
+            return {"summary": denied}
+        if idempotency_key:
+            cached = await _dedup(
+                "spawn_reactive",
+                idempotency_key,
+                request_hash_for({"task": task, "input_refs": input_refs}),
+            )
+            if cached is not None:
+                return cached
+        constraints = (constraint_holder or {}).get("constraints", "")
+        packet = HandoffPacket(
+            task_description=task,
+            constraints=[constraints] if constraints else [],
+            available_tools=[t.name for t in reactive_tools],
+            input_refs=input_refs or {},
+        )
+        result = {"summary": str(await reactive_subagent.run(packet))}
+        if idempotency_key:
+            await idempotency.succeed("spawn_reactive", idempotency_key, json.dumps(result))
+        return result
+
+    @copilot_tool(
+        hint="派规划子 Agent 规划执行",
+        side_effect_level=SideEffectLevel.LOW,
+        source="tool_result",
+        latency_ms=30000,
+        enforced_idempotent=True,
+        idempotency_key_fields=("task",),
+    )
+    async def spawn_plan(
+        task: str,
+        input_refs: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """派一个 plan 子 Agent 规划并执行，只返回结论（保护主 Agent 上下文）。
+        【用途】需要「先规划再执行」的复杂子任务（如遍历知识库所有文档总结成笔记）时使用。
+        【区别】spawn_plan 派 plan 子 Agent（可 for 遍历）；检索用 spawn_rag，
+        灵活子任务用 spawn_reactive。
+        【参数】task 为子任务描述（含目标与约束）；input_refs 可选引用，子 Agent 用工具解析。
+        【约束】子 Agent 独立窗口、能读能写、能规划遍历，延迟较高；同 task 幂等去重；
+        可递归派子 Agent，由 max_spawn 计数 + 预算兜底。
+        【示例】spawn_plan("读知识库所有文档，总结每篇要点成笔记") → {"summary":"结论"}。"""
+        if (denied := _claim_spawn()) is not None:
+            return {"summary": denied}
+        if idempotency_key:
+            cached = await _dedup(
+                "spawn_plan",
+                idempotency_key,
+                request_hash_for({"task": task, "input_refs": input_refs}),
+            )
+            if cached is not None:
+                return cached
+        constraints = (constraint_holder or {}).get("constraints", "")
+        plan_subagent = (plan_subagent_holder or {}).get("plan")
+        if plan_subagent is None:
+            return {"summary": "plan 子 Agent 未就绪，请改用其他方式完成。"}
+        packet = HandoffPacket(
+            task_description=task,
+            constraints=[constraints] if constraints else [],
+            available_tools=[t.name for t in reactive_tools],
+            input_refs=input_refs or {},
+        )
+        result = {"summary": str(await plan_subagent.run(packet))}
+        if idempotency_key:
+            await idempotency.succeed("spawn_plan", idempotency_key, json.dumps(result))
+        return result
 
     tools = [t for t, _ in collected]
     registry: ToolRegistry = {t.name: meta for t, meta in collected}
