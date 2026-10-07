@@ -1,6 +1,6 @@
 import uuid
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,9 @@ class ChatRepository(Protocol):
     ) -> tuple[list[ChatConversation], int]: ...
     async def delete_conversation(self, conversation: ChatConversation) -> None: ...
     async def add_message(self, message: ChatMessage) -> ChatMessage: ...
+    async def update_message(
+        self, message_id: uuid.UUID, *, content: str, steps: list[dict[str, Any]] | None
+    ) -> ChatMessage: ...
     async def list_messages(self, conversation_id: uuid.UUID) -> list[ChatMessage]: ...
 
 
@@ -66,6 +69,19 @@ class SqlAlchemyChatRepository:
         conversation = await self._session.get(ChatConversation, message.conversation_id)
         if conversation is not None:
             conversation.updated_at = datetime.now(UTC)
+        await self._session.commit()
+        await self._session.refresh(message)
+        return message
+
+    async def update_message(
+        self, message_id: uuid.UUID, *, content: str, steps: list[dict[str, Any]] | None
+    ) -> ChatMessage:
+        """按 id 更新消息正文/轨迹（流式开始时落空占位、结束时回填）。"""
+        message = await self._session.get(ChatMessage, message_id)
+        if message is None:
+            raise ValueError(f"消息不存在：{message_id}")
+        message.content = content
+        message.steps = steps
         await self._session.commit()
         await self._session.refresh(message)
         return message

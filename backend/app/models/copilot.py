@@ -38,6 +38,9 @@ EMBEDDING_DIM = get_settings().embedding_dim
 # copilot_events.seq 用数据库序列保证全局单调递增（跨 run 重放排序）
 EVENT_SEQ = "copilot_events_seq"
 
+# copilot_stream_events.seq 同理：SSE 前端事件流（刷新回放 + 续订）按全局 seq 游标重放
+STREAM_EVENT_SEQ = "copilot_stream_events_seq"
+
 
 class MemoryKind(StrEnum):
     """四型记忆：约束（硬规则/红线）/事实（稳定事实）/偏好（软规则）/情节（具体事件）。
@@ -96,6 +99,30 @@ class CopilotEvent(Base):
         BigInteger, nullable=False, server_default=text(f"nextval('{EVENT_SEQ}')")
     )
     run_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
+    type: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CopilotStreamEvent(Base):
+    """SSE 前端事件流（刷新回放 / 续订）：``type ∈ {meta,step,delta,review,approval,done,error}``。
+
+    与 `CopilotEvent`（思维链审计日志）不同：本表存的是**推给前端的原始 SSE 事件**，用于
+    「刷新后续上没收到的内容」——订阅端点先按 ``seq`` 回放、再 tail 新事件。run 到终态
+    （completed/failed/interrupted）后整段删除（最终内容已固化进 ``chat_messages``）。
+    ``assistant_message_id`` 是回放键（前端从 meta/POST 响应即有），``run_id`` 仅作审计/join。
+    """
+
+    __tablename__ = "copilot_stream_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    seq: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text(f"nextval('{STREAM_EVENT_SEQ}')")
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
+    assistant_message_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(

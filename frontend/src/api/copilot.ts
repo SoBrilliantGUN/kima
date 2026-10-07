@@ -83,16 +83,21 @@ function parseSseBlock(block: string): CopilotSseEvent | null {
   }
 }
 
-/** 通用 SSE 流式：POST 到 url，逐事件 yield（meta/step/delta/review/approval/done/error）。 */
-async function* streamSse(
+export interface CopilotChatStarted {
+  conversation_id: string
+  user_message_id: string
+  assistant_message_id: string
+  run_id: string
+}
+
+/** 通用 SSE 流式：GET url，逐事件 yield（meta/step/delta/review/approval/done/error）。 */
+async function* streamSseGet(
   url: string,
-  body: unknown,
   signal?: AbortSignal,
 ): AsyncGenerator<CopilotSseEvent> {
   const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    method: 'GET',
+    headers: { Accept: 'text/event-stream' },
     signal,
   })
   if (!response.ok || !response.body) {
@@ -114,9 +119,41 @@ async function* streamSse(
   }
 }
 
-/** 流式 Copilot 对话：POST /api/copilot/chat。 */
-export function streamCopilot(request: CopilotRequest, signal?: AbortSignal) {
-  return streamSse('/api/copilot/chat', request, signal)
+/** 启动 Copilot 对话（run 与请求解耦：同步准备 + 后台任务，返回 ids）。 */
+export async function startCopilot(
+  request: CopilotRequest,
+  signal?: AbortSignal,
+): Promise<CopilotChatStarted> {
+  const response = await fetch('/api/copilot/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+    signal,
+  })
+  if (!response.ok) {
+    throw new Error(`请求失败（${response.status}）`)
+  }
+  return response.json()
+}
+
+/** 订阅一轮 run 的事件流：先回放已持久化事件，再 tail 新事件直到终态。 */
+export function streamCopilotRun(assistantMessageId: string, signal?: AbortSignal) {
+  return streamSseGet(`/api/copilot/runs/${assistantMessageId}/stream`, signal)
+}
+
+/** 取消后台 run（前端「停止」：真停止生成，触发 finally 回填部分内容）。 */
+export async function cancelCopilotRun(
+  assistantMessageId: string,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean }> {
+  const response = await fetch(`/api/copilot/runs/${assistantMessageId}/cancel`, {
+    method: 'POST',
+    signal,
+  })
+  if (!response.ok) {
+    throw new Error(`请求失败（${response.status}）`)
+  }
+  return response.json()
 }
 
 export interface CopilotDecision {
@@ -131,9 +168,21 @@ export interface CopilotApproveRequest {
   assistant_message_id: string
 }
 
-/** HITL 审批回执：POST /api/copilot/approve，续跑。 */
-export function approveCopilot(request: CopilotApproveRequest, signal?: AbortSignal) {
-  return streamSse('/api/copilot/approve', request, signal)
+/** HITL 审批回执：POST /api/copilot/approve（触发续跑，续跑事件从订阅流来）。 */
+export async function approveCopilot(
+  request: CopilotApproveRequest,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean }> {
+  const response = await fetch('/api/copilot/approve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+    signal,
+  })
+  if (!response.ok) {
+    throw new Error(`请求失败（${response.status}）`)
+  }
+  return response.json()
 }
 
 /** 只读记忆面板数据。 */
@@ -166,12 +215,23 @@ export const TOOL_LABELS: Record<string, string> = {
   search_knowledge_base: '正在检索知识库',
   list_knowledge_bases: '正在列出知识库',
   list_notes: '正在列出笔记',
+  list_documents: '正在列出文档',
   read_document: '正在读取文档',
   read_note: '正在读取笔记',
+  read_tool_result: '正在读取落盘结果',
   search_web: '正在联网搜索',
   search_memory: '正在读取记忆',
+  create_knowledge_base: '正在新建知识库',
   create_note: '正在新建笔记',
   write_memory: '正在写入记忆',
+  update_profile: '正在更新档案',
+  list_skills: '正在列出技能',
+  get_skill: '正在加载技能',
+  write_skill: '正在写入技能',
+  delete_skill: '正在删除技能',
+  spawn_rag: '正在派检索子任务',
+  spawn_reactive: '正在派子任务执行',
+  spawn_plan: '正在派子任务规划执行',
 }
 
 export function toolLabel(step: CopilotStep): string {

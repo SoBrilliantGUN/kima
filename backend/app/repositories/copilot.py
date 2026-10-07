@@ -12,7 +12,7 @@ from typing import Any, Protocol, cast
 from sqlalchemy import column, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.copilot import CopilotEvent, CopilotMemory, MemoryKind
+from app.models.copilot import CopilotEvent, CopilotMemory, CopilotStreamEvent, MemoryKind
 
 
 class CopilotMemoryRepository(Protocol):
@@ -55,6 +55,17 @@ class CopilotMemoryRepository(Protocol):
 class CopilotEventRepository(Protocol):
     async def add_event(self, event: CopilotEvent) -> CopilotEvent: ...
     async def list_events(self, run_id: uuid.UUID) -> list[CopilotEvent]: ...
+
+
+class CopilotStreamEventRepository(Protocol):
+    """SSE 前端事件流的存取原语：append、按 assistant_message_id 回放（可带游标）、终态删除。"""
+
+    async def add_event(self, event: CopilotStreamEvent) -> CopilotStreamEvent: ...
+    async def list_events(self, assistant_message_id: uuid.UUID) -> list[CopilotStreamEvent]: ...
+    async def list_events_after(
+        self, assistant_message_id: uuid.UUID, after_seq: int
+    ) -> list[CopilotStreamEvent]: ...
+    async def delete_events(self, assistant_message_id: uuid.UUID) -> int: ...
 
 
 class SqlAlchemyCopilotMemoryRepository:
@@ -285,3 +296,42 @@ class SqlAlchemyCopilotEventRepository:
             .order_by(CopilotEvent.seq.asc(), CopilotEvent.id.asc())
         )
         return list(rows)
+
+
+class SqlAlchemyCopilotStreamEventRepository:
+    """SSE 前端事件流 SQLAlchemy 实现（append-only，终态整段删除）。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add_event(self, event: CopilotStreamEvent) -> CopilotStreamEvent:
+        self._session.add(event)
+        await self._session.commit()
+        await self._session.refresh(event)
+        return event
+
+    async def list_events(self, assistant_message_id: uuid.UUID) -> list[CopilotStreamEvent]:
+        return await self.list_events_after(assistant_message_id, 0)
+
+    async def list_events_after(
+        self, assistant_message_id: uuid.UUID, after_seq: int
+    ) -> list[CopilotStreamEvent]:
+        rows = await self._session.scalars(
+            select(CopilotStreamEvent)
+            .where(
+                CopilotStreamEvent.assistant_message_id == assistant_message_id,
+                CopilotStreamEvent.seq > after_seq,
+            )
+            .order_by(CopilotStreamEvent.seq.asc(), CopilotStreamEvent.id.asc())
+        )
+        return list(rows)
+
+    async def delete_events(self, assistant_message_id: uuid.UUID) -> int:
+        """终态后整段删除该 run 的事件流（最终内容已固化进 chat_messages）。"""
+        result = await self._session.execute(
+            delete(CopilotStreamEvent).where(
+                CopilotStreamEvent.assistant_message_id == assistant_message_id
+            )
+        )
+        await self._session.commit()
+        return cast(Any, result).rowcount or 0

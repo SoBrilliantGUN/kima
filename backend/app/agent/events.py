@@ -66,3 +66,41 @@ CopilotStreamEvent = (
     | CopilotApprovalEvent
     | CopilotDoneEvent
 )
+
+
+def to_payload(event: CopilotStreamEvent) -> tuple[str, dict[str, Any]]:
+    """把事件投影成 ``(type, payload)``，SSE 序列化与事件流落库共用（单一真源）。
+
+    与前端 `CopilotSseEvent` 的解析字段一一对应；落库时 `payload` 就是 JSONB 载荷、
+    ``type`` 就是表里的事件类型。
+    """
+    if isinstance(event, CopilotMetaEvent):
+        return (
+            "meta",
+            {
+                "conversation_id": str(event.conversation_id),
+                "user_message_id": str(event.user_message_id),
+                "assistant_message_id": str(event.assistant_message_id),
+            },
+        )
+    if isinstance(event, CopilotStepEvent):
+        return "step", {"tool_name": event.tool_name, "args": event.args}
+    if isinstance(event, CopilotDeltaEvent):
+        return "delta", {"text": event.text}
+    if isinstance(event, CopilotReviewEvent):
+        return "review", {"verdict": event.verdict, "issues": event.issues}
+    if isinstance(event, CopilotApprovalEvent):
+        return (
+            "approval",
+            {
+                "approval_id": str(event.approval_id),
+                "run_id": event.run_id,
+                "tool": event.tool,
+                "args": event.args,
+                "summary": event.summary,
+                "level": event.level,
+            },
+        )
+    if isinstance(event, CopilotDoneEvent):
+        return "done", {"assistant_message_id": str(event.assistant_message_id)}
+    raise AssertionError(f"未知事件类型: {type(event)}")

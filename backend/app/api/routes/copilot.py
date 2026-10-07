@@ -1,38 +1,35 @@
 """Copilot 端点：流式对话（SSE）+ 只读记忆面板 + 内置技能清单。
 
-对话运行时入口（``run`` / ``resume``）收装配好的 ``CopilotRuntime``；只读查询
-（记忆面板 / 技能清单）不再经过对话运行时，直接依赖底层 store / service。
+run 与请求解耦：``POST /chat`` 只同步准备（建会话/消息占位）+ 启动后台任务并返回 ids；
+``GET /runs/{assistant_message_id}/stream`` 订阅——先按 seq 回放已持久化事件、再 tail 新
+事件直到终态；``POST /approve`` 只把裁决回填给后台任务（触发续跑，事件从订阅流来）。
+只读查询（记忆面板 / 技能清单 / 待审审批单）不再经过对话运行时，直接依赖底层 store/service。
 """
 
+import asyncio
 import json
+import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from app.agent.events import (
-    CopilotApprovalEvent,
-    CopilotDeltaEvent,
-    CopilotDoneEvent,
-    CopilotMetaEvent,
-    CopilotReviewEvent,
-    CopilotStepEvent,
-    CopilotStreamEvent,
-)
-from app.agent.resume import list_pending_approvals, resume
-from app.agent.run import run
+from app.agent.resume import list_pending_approvals
+from app.agent.run import prepare_run
+from app.agent.run_manager import HEARTBEAT_SECONDS, RunManager, is_terminal_state
 from app.api.deps import (
     CopilotMemoryServiceDep,
     CopilotRuntimeDep,
+    CopilotStreamEventRepositoryDep,
     MemoryFileStoreDep,
     SkillFileStoreDep,
 )
-from app.core.exceptions import DomainError
 from app.schemas.copilot import (
     CopilotApprovalList,
     CopilotApprovalRead,
     CopilotApproveRequest,
+    CopilotChatStarted,
     CopilotCustomSkillList,
     CopilotCustomSkillRead,
     CopilotMemoryList,
@@ -49,80 +46,81 @@ def _sse(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _event_to_sse(event: CopilotStreamEvent) -> str:
-    if isinstance(event, CopilotMetaEvent):
-        return _sse(
-            "meta",
-            {
-                "conversation_id": str(event.conversation_id),
-                "user_message_id": str(event.user_message_id),
-                "assistant_message_id": str(event.assistant_message_id),
-            },
-        )
-    if isinstance(event, CopilotStepEvent):
-        return _sse("step", {"tool_name": event.tool_name, "args": event.args})
-    if isinstance(event, CopilotDeltaEvent):
-        return _sse("delta", {"text": event.text})
-    if isinstance(event, CopilotReviewEvent):
-        return _sse("review", {"verdict": event.verdict, "issues": event.issues})
-    if isinstance(event, CopilotApprovalEvent):
-        return _sse(
-            "approval",
-            {
-                "approval_id": str(event.approval_id),
-                "run_id": event.run_id,
-                "tool": event.tool,
-                "args": event.args,
-                "summary": event.summary,
-                "level": event.level,
-            },
-        )
-    if isinstance(event, CopilotDoneEvent):
-        return _sse("done", {"assistant_message_id": str(event.assistant_message_id)})
-    raise AssertionError(f"未知事件类型: {type(event)}")
+def _get_run_manager(request: Request) -> RunManager:
+    manager = getattr(request.app.state, "copilot_run_manager", None)
+    if manager is None:
+        raise RuntimeError("RunManager 未装配（app.state.copilot_run_manager 必须在场）")
+    return cast(RunManager, manager)
 
 
-@router.post("/chat")
-async def copilot_chat(request: CopilotRequest, rt: CopilotRuntimeDep) -> StreamingResponse:
-    """Copilot 流式对话（SSE）：meta → step* → delta* → review? → done；失败发 error 事件。"""
+@router.post("/chat", response_model=CopilotChatStarted)
+async def copilot_chat(
+    request: CopilotRequest, rt: CopilotRuntimeDep, http: Request
+) -> CopilotChatStarted:
+    """启动一轮 Copilot 对话：同步准备会话/消息占位 + 起后台任务，立即返回 ids。"""
+    prepared = await prepare_run(rt, request)
+    _get_run_manager(http).start(prepared, request)
+    return CopilotChatStarted(
+        conversation_id=prepared.conversation_id,
+        user_message_id=prepared.user_message_id,
+        assistant_message_id=prepared.assistant_message_id,
+        run_id=prepared.run_id,
+    )
+
+
+@router.get("/runs/{assistant_message_id}/stream")
+async def copilot_run_stream(
+    assistant_message_id: uuid.UUID,
+    http: Request,
+    stream_repo: CopilotStreamEventRepositoryDep,
+    after: int = 0,
+) -> StreamingResponse:
+    """订阅一轮 run：先按 seq 回放已持久化事件（> after），再 tail 新事件直到终态。
+
+    刷新后续上：前端打开本流即可补上「之前没收到的内容」；run 已终态（事件流已删）时
+    立即关闭，前端据 ``chat_messages`` 已固化的最终内容兜底。
+    """
+    run_manager = _get_run_manager(http)
 
     async def stream() -> AsyncIterator[str]:
-        try:
-            async for event in run(rt, request):
-                yield _event_to_sse(event)
-        except DomainError as exc:
-            yield _sse("error", {"code": exc.code, "message": str(exc)})
-        except Exception as exc:  # noqa: BLE001 - 兜底：非业务异常也走 error 事件，不裸抛
-            yield _sse("error", {"code": "internal_error", "message": str(exc)})
+        cursor = after
+        while True:
+            events = await stream_repo.list_events_after(assistant_message_id, cursor)
+            for row in events:
+                cursor = row.seq
+                yield _sse(row.type, row.payload)
+                if row.type in ("done", "error"):
+                    return
+            handle = run_manager.get(assistant_message_id)
+            if handle is None or is_terminal_state(handle.state):
+                return
+            # 无新事件且非终态 → 等新事件（心跳保活）；清空+复读避免 lost-wakeup。
+            handle.events.clear()
+            if await stream_repo.list_events_after(assistant_message_id, cursor):
+                continue
+            try:
+                await asyncio.wait_for(handle.events.wait(), timeout=HEARTBEAT_SECONDS)
+            except TimeoutError:
+                yield ": ping\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 @router.post("/approve")
-async def copilot_approve(
-    request: CopilotApproveRequest, rt: CopilotRuntimeDep
-) -> StreamingResponse:
-    """HITL 审批回执：按 run_id 续跑，approve 重放写工具 / reject 返回拒绝。"""
+async def copilot_approve(request: CopilotApproveRequest, http: Request) -> dict[str, bool]:
+    """HITL 审批回执：把裁决回填给后台任务续跑（触发式，续跑事件从订阅流来）。"""
+    decisions = [
+        {"approval_id": d.approval_id, "decision": d.decision} for d in request.decisions
+    ]
+    ok = _get_run_manager(http).submit_decision(request.assistant_message_id, decisions)
+    return {"ok": ok}
 
-    async def stream() -> AsyncIterator[str]:
-        try:
-            decisions = [
-                {"approval_id": d.approval_id, "decision": d.decision} for d in request.decisions
-            ]
-            async for event in resume(
-                rt,
-                str(request.run_id),
-                decisions,
-                request.conversation_id,
-                request.assistant_message_id,
-            ):
-                yield _event_to_sse(event)
-        except DomainError as exc:
-            yield _sse("error", {"code": exc.code, "message": str(exc)})
-        except Exception as exc:  # noqa: BLE001
-            yield _sse("error", {"code": "internal_error", "message": str(exc)})
 
-    return StreamingResponse(stream(), media_type="text/event-stream")
+@router.post("/runs/{assistant_message_id}/cancel")
+async def copilot_run_cancel(assistant_message_id: uuid.UUID, http: Request) -> dict[str, bool]:
+    """前端「停止」：取消后台 run（触发 finally 回填部分内容），保持「停止即停止」语义。"""
+    ok = _get_run_manager(http).cancel(assistant_message_id)
+    return {"ok": ok}
 
 
 @router.get("/approvals/pending", response_model=CopilotApprovalList)

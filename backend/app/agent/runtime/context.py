@@ -68,6 +68,7 @@ class RunState(StrEnum):
     SUSPENDED = "suspended"  # HITL interrupt 挂起，等写工具审批
     COMPLETED = "completed"  # review 判终 / plan 完成 / 拒绝分支
     FAILED = "failed"  # 异常逃出图（熔断/预算/未知错误）
+    INTERRUPTED = "interrupted"  # 前端中断（abort），已落库部分回答
 
 
 @dataclass(frozen=True)

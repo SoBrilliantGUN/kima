@@ -17,6 +17,7 @@ from langgraph.types import Command
 from app.agent.compose import CopilotRuntime
 from app.agent.events import CopilotDeltaEvent, CopilotStreamEvent
 from app.agent.orchestrate import commit_assistant, finalize_answer, make_tracker, stream_graph
+from app.agent.runtime.context import RunState
 from app.agent.runtime.plan_graph import build_plan_graph, stream_plan_graph
 from app.agent.session import RunSession
 from app.models.copilot import CopilotApproval
@@ -28,9 +29,25 @@ async def list_pending_approvals(rt: CopilotRuntime) -> list[CopilotApproval]:
 
 
 async def _has_terminal_event(rt: CopilotRuntime, run_id: uuid.UUID) -> bool:
-    """该 run 是否已落终态事件（done/error）——已结束的 run 不应再续跑，防重复副作用。"""
+    """该 run 是否已落终态事件（done/error）——已结束的 run 不应再续跑，防重复副作用。
+
+    「done」不恒等于终态：run 在「挂起审批」时也会 ``commit_assistant(run_state=suspended)``
+    落一条 done，那只是阶段边界，run 仍可续跑。故只看 done 的 ``run_state`` 是否落在
+    completed/failed/interrupted 三态（error 无条件终态）。
+    """
     events = await rt.event_repository.list_events(run_id)
-    return any(e.type in ("done", "error") for e in events)
+    for event in events:
+        if event.type == "error":
+            return True
+        if event.type == "done":
+            run_state = (event.payload or {}).get("run_state")
+            if run_state in (
+                RunState.COMPLETED.value,
+                RunState.FAILED.value,
+                RunState.INTERRUPTED.value,
+            ):
+                return True
+    return False
 
 
 async def _is_plan_run(rt: CopilotRuntime, run_id: uuid.UUID) -> bool:

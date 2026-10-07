@@ -14,6 +14,7 @@ from app.agent.compose import CopilotRuntime
 from app.api.deps_copilot import (
     get_copilot_memory_service,
     get_copilot_runtime,
+    get_copilot_stream_event_repository,
     get_memory_file_store,
     get_skill_file_store,
 )
@@ -45,6 +46,7 @@ from app.integrations.rerank import RerankerClient
 from app.integrations.search import WebSearchClient
 from app.rag.service import RagService
 from app.repositories.chat import ChatRepository
+from app.repositories.copilot import CopilotStreamEventRepository
 from app.repositories.document import DocumentRepository
 from app.repositories.knowledge_base import KnowledgeBaseRepository
 from app.repositories.note import NoteRepository
@@ -72,6 +74,9 @@ ChatRepositoryDep = Annotated[ChatRepository, Depends(get_chat_repository)]
 RagServiceDep = Annotated[RagService, Depends(get_rag_service)]
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
 CopilotRuntimeDep = Annotated[CopilotRuntime, Depends(get_copilot_runtime)]
+CopilotStreamEventRepositoryDep = Annotated[
+    CopilotStreamEventRepository, Depends(get_copilot_stream_event_repository)
+]
 MemoryFileStoreDep = Annotated[MemoryFileStore, Depends(get_memory_file_store)]
 CopilotMemoryServiceDep = Annotated[CopilotMemoryService, Depends(get_copilot_memory_service)]
 SkillFileStoreDep = Annotated[SkillFileStore, Depends(get_skill_file_store)]
@@ -94,6 +99,7 @@ __all__ = [
     "RagServiceDep",
     "ChatServiceDep",
     "CopilotRuntimeDep",
+    "CopilotStreamEventRepositoryDep",
     "MemoryFileStoreDep",
     "CopilotMemoryServiceDep",
     "SkillFileStoreDep",

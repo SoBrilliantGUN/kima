@@ -22,6 +22,15 @@ class CopilotRequest(BaseModel):
         return value
 
 
+class CopilotChatStarted(BaseModel):
+    """POST /chat 的同步响应：四个 id（前端据此显示占位 + 打开订阅流）。"""
+
+    conversation_id: uuid.UUID
+    user_message_id: uuid.UUID
+    assistant_message_id: uuid.UUID
+    run_id: uuid.UUID
+
+
 class CopilotDecision(BaseModel):
     """单张审批单的裁决：approval_id 定位审批单，decision ∈ approve/reject。"""
 

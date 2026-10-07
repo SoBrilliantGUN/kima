@@ -8,6 +8,7 @@ from app.models.copilot import (
     CopilotIdempotency,
     CopilotLLMSnapshot,
     CopilotMemory,
+    CopilotStreamEvent,
     IdempotencyStatus,
     MemoryKind,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "ChatRole",
     "CopilotMemory",
     "CopilotEvent",
+    "CopilotStreamEvent",
     "CopilotDailyBudget",
     "CopilotLLMSnapshot",
     "CopilotApproval",

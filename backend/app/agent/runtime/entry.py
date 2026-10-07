@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -26,6 +28,8 @@ from app.agent.runtime.plan_graph import build_plan_graph, stream_plan_graph
 from app.agent.runtime.router import Intent
 from app.agent.session import RunSession
 from app.agent.tools import QA_TOOL_NAMES
+
+logger = logging.getLogger(__name__)
 
 
 def is_plan(intent: Intent) -> bool:
@@ -107,22 +111,48 @@ async def run_reactive(
         "compression_level": 0,
         "last_error": None,
     }
-    async for event in stream_graph(
-        rt, graph, config, run_id, initial_state, session, conversation_id, assistant_message_id
-    ):
-        yield event
-
-    session.flush_review()
-    final_answer = finalize_answer(rt, session.answer_parts, session.behavior_tracker.score())
-
-    yield await commit_assistant(
-        rt,
-        run_id,
-        conversation_id,
-        assistant_message_id,
-        final_answer,
-        session.all_steps,
-        tracker,
-        intent.value,
-        run_state=session.run_state,
-    )
+    committed = False
+    try:
+        async for event in stream_graph(
+            rt, graph, config, run_id, initial_state, session, conversation_id, assistant_message_id
+        ):
+            yield event
+        session.flush_review()
+        final_answer = finalize_answer(rt, session.answer_parts, session.behavior_tracker.score())
+        yield await commit_assistant(
+            rt,
+            run_id,
+            conversation_id,
+            assistant_message_id,
+            final_answer,
+            session.all_steps,
+            tracker,
+            intent.value,
+            run_state=session.run_state,
+        )
+        committed = True
+    finally:
+        # 中断（前端 abort → GeneratorExit / CancelledError）：兜底落库已累计的部分回答，
+        # 避免刷新后看不到之前的内容。
+        logger.info(
+            "[copilot] run_reactive 收尾 committed=%s parts=%d",
+            committed,
+            len(session.answer_parts),
+        )
+        if not committed and session.answer_parts:
+            session.flush_review()
+            partial = finalize_answer(rt, session.answer_parts, session.behavior_tracker.score())
+            if partial:
+                await asyncio.shield(
+                    commit_assistant(
+                        rt,
+                        run_id,
+                        conversation_id,
+                        assistant_message_id,
+                        partial,
+                        session.all_steps,
+                        tracker,
+                        intent.value,
+                        run_state=RunState.INTERRUPTED.value,
+                    )
+                )

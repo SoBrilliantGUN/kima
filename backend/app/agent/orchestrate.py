@@ -51,7 +51,7 @@ from app.agent.session import RunSession
 from app.chunking.base import estimate_tokens
 from app.core.exceptions import NotFoundError
 from app.core.skill_store import CustomSkill
-from app.models.chat import ChatConversation, ChatKind, ChatMessage, ChatRole
+from app.models.chat import ChatConversation, ChatKind, ChatRole
 from app.models.copilot import ApprovalStatus, CopilotApproval, CopilotEvent
 from app.schemas.copilot import CopilotRequest
 
@@ -126,16 +126,16 @@ async def commit_assistant(
     intent: str,
     run_state: str = RunState.COMPLETED.value,
 ) -> CopilotDoneEvent:
-    """落库 assistant 消息 + done 事件，返回 done 事件（reactive/plan/resume 共用收尾）。"""
+    """回填 assistant 消息（run 开始时已落空占位）+ done 事件，返回 done 事件。"""
     async with rt.db_lock:
-        await rt.chat_repository.add_message(
-            ChatMessage(
-                id=assistant_message_id,
-                conversation_id=conversation_id,
-                role=ChatRole.ASSISTANT,
-                content=answer,
-                steps=steps or None,
-            )
+        await rt.chat_repository.update_message(
+            assistant_message_id, content=answer, steps=steps or None
+        )
+        logger.info(
+            "[copilot] 回填 assistant msg=%s len=%d state=%s",
+            assistant_message_id,
+            len(answer),
+            run_state,
         )
     await log(
         rt, run_id, "done", done_payload(rt, assistant_message_id, tracker, intent, run_state)
@@ -463,7 +463,7 @@ async def stream_graph(
 async def reject_run(
     rt: CopilotRuntime,
     run_id: uuid.UUID,
-    conversation: ChatConversation,
+    conversation_id: uuid.UUID,
     assistant_message_id: uuid.UUID,
     response: str,
     question: str,
@@ -473,7 +473,7 @@ async def reject_run(
     yield CopilotDeltaEvent(response)
     await log(rt, run_id, "route", {"intent": intent.value, "question": question})
     yield await commit_assistant(
-        rt, run_id, conversation.id, assistant_message_id, response, None, None, intent.value
+        rt, run_id, conversation_id, assistant_message_id, response, None, None, intent.value
     )
 
 

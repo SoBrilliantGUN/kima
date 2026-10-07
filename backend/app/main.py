@@ -16,7 +16,9 @@ from app.agent.pricing import PricingService
 from app.agent.resilience.circuit_breaker import CircuitBreaker
 from app.agent.resilience.retry import RetryPolicy
 from app.agent.resilience.security_breaker import SecurityBreaker
+from app.agent.run_manager import RunManager
 from app.agent.runtime.budget import DailyBudget
+from app.agent.runtime.factory import build_copilot_runtime
 from app.api.routes import api_router, health_router
 from app.core.config import Settings, get_settings
 from app.core.db import async_session_factory
@@ -227,6 +229,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         cost_store=cost_store,
         observability=observability,
     )
+    # Copilot run 后台任务注册表：解耦「run 生命周期」与「HTTP 请求」。后台任务据此独立
+    # 构造 CopilotRuntime（fresh session，绕开请求作用域 DI 会话），并把 SSE 事件落库供订阅。
+    def make_runtime(session: Any) -> Any:
+        return build_copilot_runtime(
+            session=session,
+            gateway=app.state.copilot_gateway,
+            checkpointer=app.state.copilot_checkpointer,
+            breaker=app.state.copilot_breaker,
+            security_breaker=app.state.copilot_security_breaker,
+            daily_budget=app.state.copilot_daily_budget,
+            settings=settings,
+        )
+
+    app.state.copilot_run_manager = RunManager(make_runtime)
+
     document_worker_task = asyncio.create_task(
         build_document_worker(app.state.copilot_gateway, daily_budget).run()
     )

@@ -30,14 +30,29 @@ export function CopilotProvider({ children }: { children: ReactNode }) {
     small,
     smallOpen,
     popOut: () => {
-      small.hydrate(main.conversationId, main.messages)
-      main.startNew()
+      const convId = main.conversationId
+      const msgs = main.messages
+      const wasStreaming = main.streaming
+      const last = msgs[msgs.length - 1]
+      small.hydrate(convId, msgs) // 立即用快照显示
+      main.startNew() // 断主区流（后台 run 继续，不取消）
       setSmallOpen(true)
+      // 主区还在输出 → 小窗接续：开流回放 + tail，让 AI 继续在小窗里输出
+      if (convId && last && last.role === 'assistant' && wasStreaming) {
+        void small.resume(last.id, convId)
+      }
     },
     restoreToMain: () => {
-      main.hydrate(small.conversationId, small.messages)
+      const convId = small.conversationId
+      const msgs = small.messages
+      const wasStreaming = small.streaming
+      const last = msgs[msgs.length - 1]
+      main.hydrate(convId, msgs)
       small.reset()
       setSmallOpen(false)
+      if (convId && last && last.role === 'assistant' && wasStreaming) {
+        void main.resume(last.id, convId)
+      }
     },
     closeSmall: () => {
       small.reset()
