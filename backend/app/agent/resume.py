@@ -50,10 +50,18 @@ async def _has_terminal_event(rt: CopilotRuntime, run_id: uuid.UUID) -> bool:
     return False
 
 
-async def _is_plan_run(rt: CopilotRuntime, run_id: uuid.UUID) -> bool:
-    """该 run 是否 planner 模式（曾落 plan_created 事件）——resume 据此选图。"""
+async def _plan_step_count(rt: CopilotRuntime, run_id: uuid.UUID) -> int | None:
+    """该 run 的 plan 步数；非 planner 模式（无 plan_created 事件）返回 None。
+
+    resume 续跑时 plan 已存在（checkpoint 恢复、plan_node 不重跑），不会触发
+    ``scale_budget_for_plan``，故在此按初始计划步数补上调资源预算，避免崩溃恢复的
+    plan run 吃 reactive 预算被卡。
+    """
     events = await rt.event_repository.list_events(run_id)
-    return any(e.type == "plan_created" for e in events)
+    for event in events:
+        if event.type == "plan_created":
+            return len((event.payload or {}).get("steps", []))
+    return None
 
 
 async def resume(
@@ -103,8 +111,12 @@ async def resume(
     tracker = make_tracker(rt)
     config: dict[str, Any] = {"configurable": {"thread_id": run_id}}
 
-    # planner 模式：plan 状态在 PlannerState 里，走 plan_graph + stream_plan_graph 续跑
-    if await _is_plan_run(rt, run_uuid):
+    # planner 模式：plan 状态在 PlannerState 里，走 plan_graph + stream_plan_graph 续跑。
+    # 续跑时 plan_node 不重跑（checkpoint 恢复），按初始计划步数补上调资源预算。
+    n_steps = await _plan_step_count(rt, run_uuid)
+    if n_steps is not None:
+        if n_steps:
+            tracker.scale_budget_for_plan(n_steps)
         graph = build_plan_graph(rt, tracker)
         async for event in stream_plan_graph(
             rt,
@@ -179,8 +191,11 @@ async def resume_after_crash(
     tracker = make_tracker(rt)
     config: dict[str, Any] = {"configurable": {"thread_id": run_id}}
 
-    # planner 模式：崩溃恢复同样走 plan_graph（checkpointer 续跑）
-    if await _is_plan_run(rt, run_uuid):
+    # planner 模式：崩溃恢复同样走 plan_graph（checkpointer 续跑）；按初始计划步数补上调预算。
+    n_steps = await _plan_step_count(rt, run_uuid)
+    if n_steps is not None:
+        if n_steps:
+            tracker.scale_budget_for_plan(n_steps)
         graph = build_plan_graph(rt, tracker)
         async for event in stream_plan_graph(
             rt,

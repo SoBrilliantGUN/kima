@@ -143,8 +143,8 @@ def build_plan_graph(rt: CopilotRuntime, tracker: BudgetTracker) -> Any:
             )
         # 计划诊断：只落报告不打回（长参数链是合法形态，不因「串行链太长」砍断）。
         report = analyse_plan(plan, rt.registry) if plan.steps else None
-        # 执行预算随计划规模伸缩：tool_calls 轴按步数上调（turns/seconds/cost 轴全局兜底）。
-        tracker.scale_tool_calls_for_plan(len(plan.steps))
+        # 执行预算随计划规模伸缩：四轴按步数上调（复杂任务自动放大资源预算）。
+        tracker.scale_budget_for_plan(len(plan.steps))
         # 事件溯源：plan_created（供 resume 判断 run 模式）+ 诊断结论
         await log(
             rt,

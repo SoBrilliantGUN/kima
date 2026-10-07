@@ -28,6 +28,7 @@ from app.agent.resilience.circuit_breaker import CircuitBreaker
 from app.agent.resilience.security_breaker import SecurityBreaker
 from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.context import ContextManager
+from app.agent.runtime.intent_classifier import IntentClassifier
 from app.agent.runtime.plan_subagent import PlanSubagent
 from app.agent.runtime.planner import Planner
 from app.agent.runtime.rag_subagent import RagSubagent
@@ -64,6 +65,7 @@ class CopilotRuntime:
     memory_store: MemoryFileStore
     skill_store: SkillFileStore
     planner: Planner
+    intent_classifier: IntentClassifier
     approval_store: ApprovalStore
     reviewer: OutputReviewer
     verifier: SideEffectVerifier
@@ -105,6 +107,7 @@ def build_runtime(
     reviewer: OutputReviewer,
     runtime: RuntimeConfig,
     planner: Planner,
+    intent_classifier: IntentClassifier,
     breaker: CircuitBreaker,
     security_breaker: SecurityBreaker,
     verifier: SideEffectVerifier,
@@ -136,6 +139,7 @@ def build_runtime(
         "reviewer": reviewer,
         "runtime": runtime,
         "planner": planner,
+        "intent_classifier": intent_classifier,
         "breaker": breaker,
         "security_breaker": security_breaker,
         "verifier": verifier,
@@ -231,6 +235,7 @@ def build_runtime(
         memory_store=memory_store,
         skill_store=skill_store,
         planner=planner,
+        intent_classifier=intent_classifier,
         approval_store=approval_store,
         reviewer=reviewer,
         verifier=verifier,

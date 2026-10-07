@@ -41,10 +41,14 @@ class HardBudget:
     max_tool_calls: int | None = None
 
 
-# 计划执行预算的推导系数：每步允许尝试 _PLAN_STEP_TOOL_CALLS 次工具 + 固定 replan 余量。
-# 只上调 tool_calls 轴（执行轴随计划规模伸缩），turns/seconds/tokens/cost 轴保持全局兜底。
+# 计划执行预算的推导系数：每步允许尝试 _PLAN_STEP_TOOL_CALLS 次工具 + 固定 replan 余量，
+# 以及每步的资源预估（token/成本/时间）。四轴随计划规模伸缩，只上调不下降；
+# turns 轴不动（plan 图 worker 执行不计主循环 turn）。
 _PLAN_STEP_TOOL_CALLS = 3
 _PLAN_REPLAN_SLACK = 10
+_PLAN_STEP_TOKENS = 20_000  # 每步 token 预算（保守默认，可调）
+_PLAN_STEP_COST_CNY = 0.10  # 每步成本预算（元）
+_PLAN_STEP_SECONDS = 30  # 每步时间预算（秒）
 
 
 @dataclass(frozen=True)
@@ -184,19 +188,25 @@ class BudgetTracker:
                 f"tool_calls 超限：{self._tool_call_count}/{self._budget.max_tool_calls}"
             )
 
-    def scale_tool_calls_for_plan(self, n_steps: int) -> None:
-        """计划生成后按步数上调工具调用上限（执行预算随计划规模伸缩）。
+    def scale_budget_for_plan(self, n_steps: int) -> None:
+        """计划生成后按步数上调四轴预算（执行预算随计划规模伸缩）。
 
-        执行预算 = ``n_steps × _PLAN_STEP_TOOL_CALLS + _PLAN_REPLAN_SLACK``；只上调、不
-        下降（保留全局配置的防穷举下限）。turns/seconds/tokens/cost 轴不动——资源轴仍
-        全局兜底，长任务超时/超成本照样被砍，只是「执行次数」不再被固定上限误杀。
+        tool_calls = ``n_steps × _PLAN_STEP_TOOL_CALLS + _PLAN_REPLAN_SLACK``（执行次数）；
+        tokens/cost/seconds = ``n_steps × 每步值``（资源轴）。只上调、不下降（保留全局配置
+        的防穷举下限）——复杂任务按步数自动放大资源预算，简单任务不受影响。turns 轴不动：
+        plan 图 worker 执行不计主循环 turn，turns 语义仍是「进模型的轮次」。
         """
         if self._budget is None:
             return
-        derived = n_steps * _PLAN_STEP_TOOL_CALLS + _PLAN_REPLAN_SLACK
-        current = self._budget.max_tool_calls or 0
-        if derived > current:
-            self._budget = replace(self._budget, max_tool_calls=derived)
+        b = self._budget
+        derived_calls = n_steps * _PLAN_STEP_TOOL_CALLS + _PLAN_REPLAN_SLACK
+        self._budget = replace(
+            b,
+            max_tool_calls=max(derived_calls, b.max_tool_calls or 0),
+            max_tokens=max(n_steps * _PLAN_STEP_TOKENS, b.max_tokens),
+            max_cost_cny=max(n_steps * _PLAN_STEP_COST_CNY, b.max_cost_cny),
+            max_seconds=max(n_steps * _PLAN_STEP_SECONDS, b.max_seconds),
+        )
 
     def elapsed(self) -> float:
         return time.monotonic() - self._start

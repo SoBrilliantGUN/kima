@@ -20,14 +20,15 @@ from dataclasses import dataclass
 
 from app.agent.compose import CopilotRuntime
 from app.agent.events import CopilotMetaEvent, CopilotStreamEvent
+from app.agent.gateway import run_budget
 from app.agent.orchestrate import (
     assemble_context,
     get_or_create_conversation,
     make_tracker,
     reject_run,
 )
-from app.agent.runtime.entry import run_reactive
-from app.agent.runtime.router import Intent, classify_intent
+from app.agent.runtime.entry import run_plan, run_reactive
+from app.agent.runtime.router import Intent, classify_by_rules
 from app.agent.runtime.workflow import COMPLAINT_RESPONSE, REJECT_RESPONSE
 from app.models.chat import ChatMessage, ChatRole
 from app.schemas.copilot import CopilotRequest
@@ -81,10 +82,10 @@ async def stream_run(
         prepared.conversation_id, prepared.user_message_id, prepared.assistant_message_id
     )
 
-    # 意图路由：投诉/注入走确定性分支（不碰工具/不写记忆/不进模型循环）
-    intent = classify_intent(request.question)
-    if intent in (Intent.INJECTION, Intent.COMPLAINT):
-        response = REJECT_RESPONSE if intent == Intent.INJECTION else COMPLAINT_RESPONSE
+    # 规则第一刀：投诉/注入走确定性拒绝分支（不碰工具/不写记忆/不进模型循环/不调 LLM）。
+    rule_intent = classify_by_rules(request.question)
+    if rule_intent in (Intent.INJECTION, Intent.COMPLAINT):
+        response = REJECT_RESPONSE if rule_intent == Intent.INJECTION else COMPLAINT_RESPONSE
         async for event in reject_run(
             rt,
             prepared.run_id,
@@ -92,7 +93,7 @@ async def stream_run(
             prepared.assistant_message_id,
             response,
             request.question,
-            intent,
+            rule_intent,
         ):
             yield event
         return
@@ -101,14 +102,35 @@ async def stream_run(
     # 全接网关，须先建 tracker 供它们的 run_budget 使用；run 结束导出单位成本落 done 事件。
     tracker = make_tracker(rt)
 
+    # LLM 意图分类：规则第一刀只管拒绝分支，plan/qa/task 的正向分流交给 LLM——复杂任务
+    # 一开始就判 PLAN 走 planner 图（planner 出计划后按步数放大资源预算），避免「reactive
+    # 小预算 → 切 spawn_plan 被卡」。分类失败/未命中回退 TASK（reactive）。
+    with run_budget(tracker, run_id=str(prepared.run_id)):
+        intent = await rt.intent_classifier.classify(request.question)
+    if intent is None:
+        intent = Intent.TASK
+
     # 约束显式携带：召回 + 组装上移到执行模式之前，planner/qa/synthesizer 与 reactive
     # 共用同一份 soul/user 底线 + 召回约束。
     system_prompt, memory_block, reminder = await assemble_context(
         rt, request.question, prepared.run_id, tracker
     )
 
-    # 主 agent 默认 reactive（不再按意图硬编码路由到 plan）；复杂任务由 reactive loop 里
-    # 的 spawn 子 agent 表达「要不要规划」。
+    if intent == Intent.PLAN:
+        async for event in run_plan(
+            rt,
+            run_id=prepared.run_id,
+            conversation_id=prepared.conversation_id,
+            assistant_message_id=prepared.assistant_message_id,
+            tracker=tracker,
+            system_prompt=system_prompt,
+            memory_block=memory_block,
+            question=request.question,
+        ):
+            yield event
+        return
+
+    # QA/TASK 走 reactive 主循环（QA 在 run_reactive 内限只读检索工具集）。
     async for event in run_reactive(
         rt,
         run_id=prepared.run_id,

@@ -25,6 +25,7 @@ from app.agent.resilience.security_breaker import SecurityBreaker
 from app.agent.runtime.budget import DailyBudget, HardBudget
 from app.agent.runtime.config import RuntimeConfig
 from app.agent.runtime.context import ContextConfig
+from app.agent.runtime.intent_classifier import LLMIntentClassifier
 from app.agent.runtime.loop_guard import LoopGuard
 from app.agent.runtime.planner import LLMPlanner
 from app.agent.side_effect import DbSideEffectVerifier
@@ -107,6 +108,7 @@ def build_copilot_runtime(
     event_repository = SqlAlchemyCopilotEventRepository(session)
     reviewer = LLMOutputReviewer(gateway)
     planner = LLMPlanner(gateway)
+    intent_classifier = LLMIntentClassifier(gateway)
     approval_store = SqlAlchemyApprovalStore(async_session_factory)
     idempotency_store = SqlAlchemyIdempotencyStore(
         async_session_factory, ttl_seconds=settings.copilot_idempotency_ttl_seconds
@@ -159,6 +161,7 @@ def build_copilot_runtime(
         reviewer=reviewer,
         runtime=runtime,
         planner=planner,
+        intent_classifier=intent_classifier,
         breaker=breaker,
         security_breaker=security_breaker,
         verifier=verifier,
