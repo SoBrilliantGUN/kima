@@ -1,7 +1,7 @@
 # kima — 项目需求与技术方案
 
-> 状态：需求已锁定；模块 1（基础设施）、模块 2（知识库管理）、模块 3（笔记/编辑器）、模块 4（文档解析与归档）、模块 5（AI 智能问答）已实现
-> 本文档记录完整结论，作为逐模块实现的需求基线
+> 状态：需求已锁定，全量实现
+> 本文档记录完整结论，作为实现的需求基线
 
 ---
 
@@ -53,14 +53,11 @@
 | Rerank | SiliconFlow（bge-reranker） |
 | RAG 编排 | **Advanced RAG**（查询改写 + 混合检索 + RRF + rerank + 生成引用） |
 | 词法检索 | PostgreSQL 中文全文检索扩展（pg_jieba，备选 zhparser），与 pgvector 同库 |
-| Agentic 编排 | **LangGraph（后补）**，不使用 LlamaIndex |
+| Agentic 编排 | LangGraph |
 
 ### 2.5 文档解析
 
-- **MinerU**，走**托管 API**（后端保持轻量，不本地跑 GB 级模型），可配置渠道：
-  - mineru.net（官方托管，免费额度）
-  - Gitee AI 模力方舟（0.02 元/页）
-  - 自托管 mineru-api（可选回退）
+- **MinerU**，走**托管 API**（后端保持轻量，不本地跑 GB 级模型）
 - 抽象为可配置解析客户端，注入 `MINERU_API_BASE_URL` + `MINERU_API_TOKEN`
 
 ---
@@ -102,14 +99,14 @@ kima/
 
 依赖关系：知识库是地基 → 文档/笔记填内容 → 向量化产出检索能力 → 问答消费它。
 
-| # | 模块 | 说明 | 状态 |
-|---|---|---|---|
-| 1 | **基础设施** | 前后端脚手架、Docker 起 Postgres(pgvector)、Alembic、LLM/Embedding/MinerU 三个抽象接口、前端布局骨架 | ✅ 完成 |
-| 2 | **知识库管理** | 知识库 CRUD + 前端页面 | ✅ 完成 |
-| 3 | **笔记/编辑器** | 笔记 CRUD + TipTap Markdown 编辑器（空白笔记 + 添加到知识库 + 知识库内容列表） | ✅ 完成 |
-| 4 | **文档解析与归档** | 上传 PDF/URL/Word → 解析 → 内容感知父子分块 → 向量化入库（详见 `docs/module-4-documents.md`） | ✅ 完成 |
-| 5 | **AI 智能问答** | Advanced RAG（查询改写 + 混合检索 + RRF + rerank + 生成引用），预留 Agent 接口 | ✅ 完成 |
-| 6 | **Copilot（知识 Agent）** | 双形态 Agent（首页「我的Copilot」普通对话 + 跨 Tab 小窗）：LangGraph 工具调用（检索/读/写/联网/记忆）+ 四型记忆（约束/事实/偏好/情节）+ checkpoint/事件日志 + LangFuse 可观测 + LLM 网关（统一门禁/记账/调用级快照/json_repair，详见 `docs/module-6-copilot.md`） | ✅ 已实现 |
+| # | 模块 | 说明 |
+|---|---|---|
+| 1 | **基础设施** | 前后端脚手架、Docker 起 Postgres(pgvector)、Alembic、LLM/Embedding/MinerU 三个抽象接口、前端布局骨架 |
+| 2 | **知识库管理** | 知识库 CRUD + 前端页面 |
+| 3 | **笔记/编辑器** | 笔记 CRUD + TipTap Markdown 编辑器（空白笔记 + 添加到知识库 + 知识库内容列表） |
+| 4 | **文档解析与归档** | 上传 PDF/URL/Word → 解析 → 内容感知父子分块 → 向量化入库（详见 `docs/module-4-documents.md`） |
+| 5 | **AI 智能问答** | Advanced RAG（查询改写 + 混合检索 + RRF + rerank + 生成引用），预留 Agent 接口 |
+| 6 | **Copilot（知识 Agent）** | 双形态 Agent（首页「我的Copilot」普通对话 + 跨 Tab 小窗）：LangGraph 工具调用（检索/读/写/联网/记忆）+ 四型记忆（约束/事实/偏好/情节）+ checkpoint/事件日志 + LangFuse 可观测 + LLM 网关（统一门禁/记账/调用级快照/json_repair，详见 `docs/module-6-copilot.md`） |
 
 ### 模块 5 RAG 细节（Advanced RAG）
 
@@ -128,26 +125,36 @@ kima/
 
 ---
 
-## 6. 数据模型（草图，单用户无 users 表）
+## 6. 数据模型（单用户无 users 表）
 
 | 表 | 字段要点 |
 |---|---|
 | `knowledge_bases` | id、名称、描述、图标/颜色、created_at、updated_at |
-| `documents` | id、kb_id、标题、来源类型(pdf/url/word)、source_url、file_path、状态(pending/processing/done/error)、正文、metadata |
-| `document_chunks` | id、document_id、kb_id、parent_id(自引用，父子切割)、chunk_index、content、metadata、embedding(vector，child 有/parent 无)、tsv(生成列，pg_jieba 全文检索)、token_count |
-| `notes` | id、标题、content_markdown、created_at、updated_at |
-| `note_chunks` | id、note_id、parent_id(自引用，父子切割)、chunk_index、content、metadata、embedding(vector，child 有/parent 无)、tsv(生成列，pg_jieba 全文检索)、token_count |
-| `note_knowledge_bases` | note_id(fk→notes)、knowledge_base_id(fk→knowledge_bases)、created_at；唯一(note_id, knowledge_base_id) |
-| `chat_conversations` | id、kb_id、kind(qa/copilot)、标题、created_at |
-| `chat_messages` | id、conversation_id、role、content、citations(jsonb)、steps(jsonb)、created_at |
-| `copilot_memories` | id、kind(约束/事实/偏好/情节)、content、entity_id、embedding(vector)、ttl_days、trigger_conditions(jsonb)、access_count、last_access、superseded、superseded_at/by、version、tsv(生成列，词法检索)、created_at/updated_at |
-| `copilot_events` | id、seq、run_id、type、payload(jsonb)、created_at（append-only 事件日志） |
+| `documents` | id、kb_id、title、来源类型(pdf/word/url/markdown)、source_url、file_path、状态(pending/processing/done/error/needs_approval)、content_markdown、metadata、retry_count/error_message/next_retry_at、embedding_approved、injection_approved、guard_report |
+| `document_chunks` | id、document_id、kb_id、parent_id(自引用，父子切割)、chunk_index、content、metadata、token_count、embedding(vector，child 有/parent 无)、tsv(生成列，pg_jieba)、quarantined(命中红线隔离) |
+| `notes` | id、title、content_markdown、vectorized_at、content_hash(sha256 唯一，幂等去重)、created_at、updated_at |
+| `note_chunks` | id、note_id、parent_id(自引用，父子切割)、chunk_index、content、metadata、token_count、embedding(vector)、tsv(生成列，pg_jieba) |
+| `note_knowledge_bases` | note_id(fk→notes)、knowledge_base_id(fk→knowledge_bases)、created_at；联合主键、CASCADE 删除 |
+| `chat_conversations` | id、kb_id(可空=全局)、kind(qa/copilot)、title、created_at、updated_at |
+| `chat_messages` | id、conversation_id、role(user/assistant)、content、citations(jsonb)、steps(jsonb，工具轨迹投影)、created_at |
+| `copilot_memories` | id、kind(constraint/fact/preference/episodic)、content、entity_id、embedding(vector)、ttl_days、trigger_conditions(jsonb)、access_count、last_access、superseded/superseded_at/superseded_by、version、tsv(生成列)、created_at/updated_at |
+| `copilot_events` | id、seq(全局序列)、run_id、type(tool_call/tool_result/llm_delta/done/error)、payload(jsonb)、created_at（append-only 思维链审计） |
+| `copilot_stream_events` | id、seq(全局序列)、run_id、assistant_message_id、type(meta/step/delta/review/approval/done/error)、payload(jsonb)、created_at（SSE 前端事件流，终态删除） |
 | `copilot_daily_budget` | day(PK)、cost_cny、tokens（跨 run 全局日预算，重启续读） |
-| `copilot_llm_snapshots` | run_id+call_key(PK)、kind、output(jsonb)、usage(jsonb)、created_at（LLM 调用级快照，宕机恢复不重跑） |
+| `copilot_llm_snapshots` | run_id+call_key(PK)、kind(chat/agent/embedding/rerank)、output(jsonb)、usage(jsonb)、created_at（LLM 调用级快照，宕机恢复不重跑） |
+| `copilot_idempotency` | tool_name+idem_key(PK)、request_hash、status(processing/succeeded/failed_final)、response、error、expires_at（写工具幂等） |
+| `copilot_breakers` | name(PK，工具名或 resource:name)、state(closed/open/half_open)、failures(jsonb)、updated_at（熔断器状态持久化） |
+| `copilot_approvals` | id、run_id、interrupt_id、conversation_id、assistant_message_id、tool、args(jsonb)、summary、level、status(pending/approved/rejected/expired)、decision、decided_at、expires_at（HITL 审批单） |
+| `pricing_policy` | id、vendor、model、valid_from/valid_to、schedule(jsonb 时段单价)、remark、created_by（定价策略） |
+| `pricing_change_log` | id、policy_id、action、changed_by、before/after(jsonb)、remark、created_at（触发器审计流水） |
+| `copilot_llm_cost` | run_id+call_key(PK)、vendor、model、pricing_policy_id、price_snapshot(jsonb)、input/output/cache_read_tokens、cost_cny、created_at（调用级成本明细） |
 
-> **数据库迁移**：数据库迁移为单一基线 `alembic/versions/0001_initial.py`（含 vector + pg_jieba 扩展、8 张表、父子切割自引用 FK、HNSW 部分索引 + tsv GIN）。
+> **数据库迁移**（4 个基线，`alembic/versions/`）：
 >
-> **模块 6 迁移**：`0001_initial` 之后新增单一基线 `0002_copilot`（原 0002~0017 合并：记忆/事件/预算/快照/审批/熔断/幂等/计费全量表 + chat/notes/documents 回改），详见 `docs/module-6-copilot.md` §3。
+> - `0001_initial`：基础 8 表（知识库/文档/笔记/会话 + chunk + 关联）+ vector、pg_jieba 扩展 + HNSW 部分索引 + tsv GIN
+> - `0002_copilot`：Copilot 与计费 10 表（记忆/事件/预算/快照/幂等/熔断/审批 + 定价/变更日志/成本），详见 `docs/module-6-copilot.md` §3
+> - `0003_document_guard_approval`：文档写入闸——`documents` 加 `injection_approved`、`guard_report`，`document_chunks` 加 `quarantined`
+> - `0004_copilot_stream`：`copilot_stream_events`（SSE 前端事件流，刷新回放/续订）
 
 ---
 
@@ -175,14 +182,3 @@ kima/
 19. **URL 统一归入文档（详见 `docs/module-4-documents.md`）**：URL 不再作为网页笔记，统一归入文档（`documents.source_type=pdf/word/url`）；`notes` 为纯 Markdown 空白笔记（无 `type`/`summary`/`source_url` 三列、无 `from-url` 端点）。文档解析按类型分发——PDF→MinerU、Word→mammoth+markdownify、URL→复用 WebFetcher。父子切割 small-to-big——`document_chunks` 自引用 `parent_id`，parent 大块存上下文不向量化、child 小块向量化，检索命中 child 回 parent。内容感知分块基于 markdown-it-py AST + 3 splitter（结构化递归兜底 + 表格 + 代码），标题落地为可检索 child、相邻块重叠 ~50 token。异步 DB 轮询 worker + 自建重试退避。文档阅读器（PDF 内嵌原文件 / Word 与 URL 渲染解析 markdown），支持下载原文件 / 打开原网页。笔记向量化留模块 5。
 
 20. **模块 4 前端交互**：① 文档阅读由「路由面板」改为「浮动窗口」——点文档在页面上层打开可拖拽/调整大小/关闭的浮动窗口，可同时开多个、同文档去重聚焦；纯内存态，去掉 `/knowledge-bases/:id/documents/:documentId` 路由；右侧问答面板常驻并针对整个知识库，浮动窗口仅阅读参考。② 上传入口拆分——本地文档用大拖拽批量窗口、URL 用单一链接输入弹窗，二者分离。③ 知识库「添加内容」菜单去掉「笔记」项（笔记不再从知识库新建，列表已有笔记保留）。
-
----
-
-## 8. 模块进度
-
-- 模块 1（基础设施）✅ 已实现 — 详见 `docs/module-1-infrastructure.md`
-- 模块 2（知识库管理）✅ 已实现 — 详见 `docs/module-2-knowledge-bases.md`
-- 模块 3（笔记/编辑器）✅ 已实现 — 详见 `docs/module-3-notes.md`
-- 模块 4（文档解析与归档）✅ 已实现 — 详见 `docs/module-4-documents.md`：上传 PDF/URL/Word → 解析 → 内容感知父子分块 → 向量化入库；前端交互（浮动阅读窗口 + 上传入口拆分 + 去笔记入口，见决策 #20）已落地
-- 模块 5（AI 智能问答）✅ 已实现 — 详见 `docs/module-5-ai-qa.md`
-- 模块 6（Copilot 知识 Agent）✅ 已实现 — 详见 `docs/module-6-copilot.md`：LangGraph Agentic 工具调用 + 三型记忆 + checkpoint/事件日志 + LangFuse 可观测 + worker 偷懒改造
