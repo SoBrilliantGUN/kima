@@ -29,6 +29,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -41,20 +43,6 @@ jobs:
 
   smoke:
     runs-on: ubuntu-latest
-    services:
-      db:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: kima
-          POSTGRES_PASSWORD: kima
-          POSTGRES_DB: kima
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U kima -d kima"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     defaults:
       run:
         working-directory: backend
@@ -65,4 +53,28 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --group dev
+      # 迁移依赖 pg_jieba 扩展（CREATE EXTENSION pg_jieba + to_tsvector('jiebacfg', ...)），
+      # 原版 pgvector 镜像没有，需用仓库自建的 pgvector+pg_jieba 镜像。
+      - name: Build pgvector+pg_jieba database image
+        run: docker build -t kima-db:pg16-jieba ../docker/pgvector-jieba
+      - name: Start database
+        run: |
+          docker run -d --name db \
+            -e POSTGRES_USER=kima \
+            -e POSTGRES_PASSWORD=kima \
+            -e POSTGRES_DB=kima \
+            -p 5432:5432 \
+            kima-db:pg16-jieba
+      - name: Wait for database
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec db pg_isready -U kima -d kima >/dev/null 2>&1; then
+              echo "database ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "database failed to become ready"
+          docker logs db
+          exit 1
       - run: uv run alembic upgrade head
