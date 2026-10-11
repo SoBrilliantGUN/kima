@@ -4,6 +4,7 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -59,7 +60,7 @@ class _StubRunManager:
     """HTTP 冒烟用桩：不真正跑后台任务，只记录 start / submit_decision 调用。"""
 
     def __init__(self) -> None:
-        self.started: list = []
+        self.started: list[object] = []
 
     def start(self, prepared: object, request: object) -> None:
         self.started.append(prepared)
@@ -67,7 +68,9 @@ class _StubRunManager:
     def get(self, assistant_message_id: uuid.UUID) -> object | None:
         return None
 
-    def submit_decision(self, assistant_message_id: uuid.UUID, decisions: list) -> bool:
+    def submit_decision(
+        self, assistant_message_id: uuid.UUID, decisions: list[dict[str, Any]]
+    ) -> bool:
         return True
 
     def cancel(self, assistant_message_id: uuid.UUID) -> bool:

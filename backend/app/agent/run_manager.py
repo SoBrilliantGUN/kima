@@ -27,7 +27,10 @@ from app.agent.run import PreparedRun, stream_run
 from app.agent.runtime.context import RunState
 from app.core.db import async_session_factory
 from app.models.copilot import CopilotStreamEvent
-from app.repositories.copilot import SqlAlchemyCopilotStreamEventRepository
+from app.repositories.copilot import (
+    CopilotStreamEventRepository,
+    SqlAlchemyCopilotStreamEventRepository,
+)
 from app.schemas.copilot import CopilotRequest
 
 logger = logging.getLogger(__name__)
@@ -138,7 +141,7 @@ class RunManager:
         handle: RunHandle,
         runtime: CopilotRuntime,
         request: CopilotRequest,
-        stream_repo: SqlAlchemyCopilotStreamEventRepository,
+        stream_repo: CopilotStreamEventRepository,
     ) -> None:
         """驱动 run →（挂起）→ resume → … 直到终态；每阶段边流边落库 + notify。"""
         phase = "run"
@@ -200,7 +203,7 @@ class RunManager:
 
     async def _persist(
         self,
-        stream_repo: SqlAlchemyCopilotStreamEventRepository,
+        stream_repo: CopilotStreamEventRepository,
         handle: RunHandle,
         type_: str,
         payload: dict[str, Any],

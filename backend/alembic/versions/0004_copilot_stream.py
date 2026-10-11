@@ -53,7 +53,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_copilot_stream_events_assistant_message_id", table_name="copilot_stream_events")
+    op.drop_index(
+        "ix_copilot_stream_events_assistant_message_id",
+        table_name="copilot_stream_events",
+    )
     op.drop_index("ix_copilot_stream_events_run_id", table_name="copilot_stream_events")
     op.drop_table("copilot_stream_events")
     op.execute("DROP SEQUENCE IF EXISTS copilot_stream_events_seq")

@@ -2,12 +2,14 @@
 
 import asyncio
 import uuid
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from app.agent import run_manager as run_manager_module
+from app.agent.compose import CopilotRuntime
 from app.agent.events import (
     CopilotApprovalEvent,
     CopilotDeltaEvent,
@@ -30,8 +32,10 @@ def _prepared() -> PreparedRun:
     )
 
 
-def _runtime() -> SimpleNamespace:
-    return SimpleNamespace(runtime=SimpleNamespace(approval_timeout_seconds=900.0))
+def _runtime() -> CopilotRuntime:
+    return cast(
+        CopilotRuntime, SimpleNamespace(runtime=SimpleNamespace(approval_timeout_seconds=900.0))
+    )
 
 
 def _handle(prepared: PreparedRun) -> RunHandle:
@@ -49,14 +53,14 @@ def _approval(prep: PreparedRun) -> CopilotApprovalEvent:
 
 
 def _manager() -> RunManager:
-    return RunManager(make_runtime=lambda session: SimpleNamespace())
+    return RunManager(make_runtime=lambda session: _runtime())
 
 
 async def test_drive_phases_simple_run(monkeypatch: pytest.MonkeyPatch) -> None:
     """无审批：meta→delta→done 顺序落库，run 判 completed。"""
     prepared = _prepared()
 
-    async def fake_stream_run(rt: Any, request: Any, prep: PreparedRun):
+    async def fake_stream_run(rt: Any, request: Any, prep: PreparedRun) -> AsyncIterator[Any]:
         yield _meta(prep)
         yield CopilotDeltaEvent("回答")
         yield CopilotDoneEvent(prep.assistant_message_id)
@@ -74,12 +78,14 @@ async def test_suspend_suppresses_done_then_resumes(monkeypatch: pytest.MonkeyPa
     """挂起审批：approval 落库、挂起 done 被抑制；裁决后 resume 续跑，最终 done 落库。"""
     prepared = _prepared()
 
-    async def fake_stream_run(rt: Any, request: Any, prep: PreparedRun):
+    async def fake_stream_run(rt: Any, request: Any, prep: PreparedRun) -> AsyncIterator[Any]:
         yield _meta(prep)
         yield _approval(prep)
         yield CopilotDoneEvent(prep.assistant_message_id)  # 挂起 done，应被抑制
 
-    async def fake_resume(rt: Any, run_id: str, decisions: Any, cid: Any, aid: Any):
+    async def fake_resume(
+        rt: Any, run_id: str, decisions: Any, cid: Any, aid: Any
+    ) -> AsyncIterator[Any]:
         yield CopilotDeltaEvent("已完成")
         yield CopilotDoneEvent(prepared.assistant_message_id)
 
@@ -105,7 +111,7 @@ async def test_drive_phases_error_persists_error_event(monkeypatch: pytest.Monke
     """图执行异常：落 error 事件 + run 判 failed。"""
     prepared = _prepared()
 
-    async def fake_stream_run(rt: Any, request: Any, prep: PreparedRun):
+    async def fake_stream_run(rt: Any, request: Any, prep: PreparedRun) -> AsyncIterator[Any]:
         yield _meta(prep)
         raise RuntimeError("boom")
 
@@ -123,7 +129,7 @@ async def test_drive_phases_decision_timeout_interrupts(monkeypatch: pytest.Monk
     """审批超时未裁决：run 判 interrupted 收尾（不再续跑）。"""
     prepared = _prepared()
 
-    async def fake_stream_run(rt: Any, request: Any, prep: PreparedRun):
+    async def fake_stream_run(rt: Any, request: Any, prep: PreparedRun) -> AsyncIterator[Any]:
         yield _approval(prep)
         yield CopilotDoneEvent(prep.assistant_message_id)
 
